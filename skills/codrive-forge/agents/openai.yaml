@@ -1,0 +1,5 @@
+interface:
+  display_name: "Codrive Forge"
+  short_description: "Turn a product idea into an autonomous Codrive project"
+  brand_color: "#ED5B2A"
+  default_prompt: "Use $codrive-forge to turn this product idea into a confirmed Codrive plan."

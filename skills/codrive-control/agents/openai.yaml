@@ -1,0 +1,5 @@
+interface:
+  display_name: "Codrive Control"
+  short_description: "Inspect and control local Codrive projects and tasks"
+  brand_color: "#17211D"
+  default_prompt: "Use $codrive-control to inspect or control my local Codrive project."

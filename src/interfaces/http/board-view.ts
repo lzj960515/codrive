@@ -1,0 +1,28 @@
+import type { ProjectSnapshot } from "../../domain/types.js";
+
+export function createBoardView(snapshots: ProjectSnapshot[]) {
+  return snapshots.map(({ project, tasks }) => ({
+    project: {
+      id: project.id,
+      name: project.name,
+      status: project.status,
+      scheduling: project.scheduling,
+      requestedAction: project.requestedAction,
+      summary: project.latestReport?.summary ?? null,
+      question: project.latestReport?.question ?? null,
+      updatedAt: project.updatedAt,
+    },
+    tasks: tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      requestedAction: task.requestedAction,
+      summary: task.latestReport?.summary ?? null,
+      question: task.latestReport?.question ?? null,
+      developmentThreadId: task.developmentThreadId ?? null,
+      reviewThreadId: task.reviewAttempts.at(-1)?.threadId ?? null,
+      updatedAt: task.updatedAt,
+    })),
+  }));
+}

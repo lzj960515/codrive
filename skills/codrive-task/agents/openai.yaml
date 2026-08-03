@@ -1,0 +1,5 @@
+interface:
+  display_name: "Codrive Task"
+  short_description: "Execute the current stage of a Codrive board task"
+  brand_color: "#2D5B46"
+  default_prompt: "Use $codrive-task to process the current stage of this Codrive task."
