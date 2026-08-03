@@ -21,6 +21,11 @@
   },
   "type": "module",
   "packageManager": "pnpm@11.5.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
   "bin": {
     "codrive": "dist/interfaces/cli/index.js"
   },
