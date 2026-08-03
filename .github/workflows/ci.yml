@@ -11,17 +11,33 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [20, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - run: mkdir package && npm pack --silent --pack-destination package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codrive-package
+          path: package/*.tgz
+
+  runtime-node-20:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          name: codrive-package
+          path: package
+      - run: npm install --prefix runtime package/*.tgz --ignore-scripts
+      - run: runtime/node_modules/.bin/codrive --help
