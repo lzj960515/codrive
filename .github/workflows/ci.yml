@@ -39,5 +39,5 @@ jobs:
         with:
           name: codrive-package
           path: package
-      - run: npm install --prefix runtime package/*.tgz --ignore-scripts
+      - run: npm install --prefix runtime ./package/*.tgz --ignore-scripts
       - run: runtime/node_modules/.bin/codrive --help
