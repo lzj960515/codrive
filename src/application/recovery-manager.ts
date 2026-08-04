@@ -26,9 +26,9 @@ export class RecoveryManager {
       void this.handleNotification(notification);
     });
     await this.recoverInterruptedExecutions();
-    await this.workflow.reconcile();
-    this.leaseTimer = setInterval(() => {
-      void this.recoverExpiredExecutions();
+    await this.workflow.recoverProjectsWithoutActiveWork();
+    this.leaseTimer = setInterval(async () => {
+      await this.recoverUnattendedWork();
     }, 60_000);
     this.leaseTimer.unref();
   }
@@ -199,6 +199,11 @@ export class RecoveryManager {
         }
       }
     }
+  }
+
+  async recoverUnattendedWork(now = new Date()): Promise<void> {
+    await this.recoverExpiredExecutions(now);
+    await this.workflow.recoverProjectsWithoutActiveWork();
   }
 
   private async readStatus(

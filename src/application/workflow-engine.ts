@@ -32,6 +32,10 @@ export interface WorkflowEngineOptions {
   createId?: (prefix: string) => string;
 }
 
+interface ReconcileOptions {
+  recoverProjectsWithoutActiveWork?: boolean;
+}
+
 const activeExecutionStatuses = new Set(["pending", "running", "awaiting_report"]);
 const reportableExecutionStatuses = new Set([
   ...activeExecutionStatuses,
@@ -99,6 +103,12 @@ export class WorkflowEngine {
 
   reconcile(): Promise<void> {
     return this.enqueue(() => this.reconcileInternal());
+  }
+
+  recoverProjectsWithoutActiveWork(): Promise<void> {
+    return this.enqueue(() =>
+      this.reconcileInternal({ recoverProjectsWithoutActiveWork: true }),
+    );
   }
 
   async availableTaskSlots(): Promise<number> {
@@ -498,7 +508,7 @@ export class WorkflowEngine {
     );
   }
 
-  private async reconcileInternal(): Promise<void> {
+  private async reconcileInternal(options: ReconcileOptions = {}): Promise<void> {
     const snapshots = await this.store.listProjects();
     let activeCount = countActiveTasks(snapshots);
     const integrationLeases = activeIntegrationRepositories(snapshots);
@@ -547,15 +557,23 @@ export class WorkflowEngine {
         ({ status, requestedAction }) =>
           status === "backlog" && requestedAction === "develop",
       );
-      if (!hasBacklog || hasReservedWork || activeCount >= this.options.maxConcurrentTasks) {
+      if (!hasBacklog || hasReservedWork) {
         await this.rememberSelectionState(snapshot);
         continue;
       }
+      if (activeCount >= this.options.maxConcurrentTasks) continue;
 
-      const fingerprint = selectionFingerprint(snapshot.tasks);
+      const fingerprint = selectionFingerprint(
+        snapshot.tasks,
+        this.options.maxConcurrentTasks,
+      );
+      const projectHasOngoingTask = snapshot.tasks.some(hasOngoingTaskExecution);
+      const shouldRecoverProject =
+        options.recoverProjectsWithoutActiveWork && !projectHasOngoingTask;
       if (
         this.projectExecutions &&
-        snapshot.project.lastSelectionFingerprint !== fingerprint
+        (snapshot.project.lastSelectionFingerprint !== fingerprint ||
+          shouldRecoverProject)
       ) {
         await this.projectExecutions.start(
           snapshot.project,
@@ -575,7 +593,8 @@ export class WorkflowEngine {
       project.currentExecution?.action === "select_tasks";
     if (
       !waitingForTaskSelection ||
-      project.lastSelectionFingerprint === selectionFingerprint(tasks)
+      project.lastSelectionFingerprint ===
+        selectionFingerprint(tasks, this.options.maxConcurrentTasks)
     ) {
       return snapshot;
     }
@@ -777,7 +796,10 @@ export class WorkflowEngine {
       status,
       requestedAction: null,
       currentExecution: completedProjectExecution(project, this.now()),
-      lastSelectionFingerprint: selectionFingerprint(tasks),
+      lastSelectionFingerprint: selectionFingerprint(
+        tasks,
+        this.options.maxConcurrentTasks,
+      ),
       updatedAt: this.now(),
     };
     await this.store.saveProject(completed);
@@ -961,7 +983,10 @@ export class WorkflowEngine {
   }
 
   private async rememberSelectionState(snapshot: ProjectSnapshot): Promise<void> {
-    const fingerprint = selectionFingerprint(snapshot.tasks);
+    const fingerprint = selectionFingerprint(
+      snapshot.tasks,
+      this.options.maxConcurrentTasks,
+    );
     if (snapshot.project.lastSelectionFingerprint === fingerprint) return;
     const project = {
       ...snapshot.project,
@@ -1059,11 +1084,12 @@ function activeIntegrationRepositories(snapshots: ProjectSnapshot[]): Set<string
   );
 }
 
-function selectionFingerprint(tasks: Task[]): string {
-  return tasks
+function selectionFingerprint(tasks: Task[], maxConcurrentTasks: number): string {
+  const taskStates = tasks
     .map((task) => `${task.id}:${selectionState(task)}`)
     .sort()
     .join("|");
+  return `maxConcurrentTasks:${maxConcurrentTasks}|${taskStates}`;
 }
 
 function selectionState(task: Task): string {

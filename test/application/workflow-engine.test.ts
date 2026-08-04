@@ -85,6 +85,9 @@ describe("WorkflowEngine", () => {
     });
 
     expect(taskDispatcher.started.map(({ task }) => task.id)).toEqual(selectedIds);
+    expect(new Set(taskDispatcher.started.map(({ threadId }) => threadId)).size).toBe(
+      selectedIds.length,
+    );
     const updated = (await store.getProject(created.project.id))!;
     expect(updated.tasks).toEqual(
       expect.arrayContaining([
@@ -92,6 +95,116 @@ describe("WorkflowEngine", () => {
         expect.objectContaining({ status: "developing", requestedAction: "develop" }),
       ]),
     );
+  });
+
+  it("reevaluates unchanged tasks when the concurrency limit increases", async () => {
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [
+        { title: "Foundation", description: "Build it", acceptanceCriteria: [] },
+        { title: "Gameplay", description: "Build it too", acceptanceCriteria: [] },
+      ],
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "developing",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: "attempt_1",
+        action: "develop",
+        status: "running",
+        startedAt: "2026-08-03T00:00:00.000Z",
+      },
+    });
+
+    const singleTaskWorkflow = new WorkflowEngine(
+      store,
+      new RecordingTaskDispatcher(),
+      { maxConcurrentTasks: 1 },
+      new RecordingProjectExecutor(),
+    );
+    await singleTaskWorkflow.reconcile();
+
+    const expandedExecutor = new RecordingProjectExecutor();
+    const expandedWorkflow = new WorkflowEngine(
+      store,
+      new RecordingTaskDispatcher(),
+      { maxConcurrentTasks: 4 },
+      expandedExecutor,
+    );
+    await expandedWorkflow.reconcile();
+
+    expect(expandedExecutor.started).toHaveLength(1);
+    expect(expandedExecutor.started[0]?.project.requestedAction).toBe(
+      "select_tasks",
+    );
+  });
+
+  it("fills a newly available slot immediately after another project finishes", async () => {
+    const activeProject = await store.createProject({
+      name: "Active Game",
+      repositoryPath: "/workspace/active-game",
+      defaultBranch: "main",
+      productDocument: "# Active Game\n",
+      tasks: [
+        { title: "Foundation", description: "Build it", acceptanceCriteria: [] },
+      ],
+    });
+    await store.saveTask(activeProject.project.id, {
+      ...activeProject.tasks[0]!,
+      status: "developing",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: "attempt_active",
+        action: "develop",
+        status: "running",
+        startedAt: "2026-08-03T00:00:00.000Z",
+      },
+    });
+    const waitingProject = await store.createProject({
+      name: "Waiting Game",
+      repositoryPath: "/workspace/waiting-game",
+      defaultBranch: "main",
+      productDocument: "# Waiting Game\n",
+      tasks: [
+        { title: "Gameplay", description: "Build it", acceptanceCriteria: [] },
+      ],
+    });
+    const singleSlotExecutor = new RecordingProjectExecutor();
+    const singleSlotWorkflow = new WorkflowEngine(
+      store,
+      new RecordingTaskDispatcher(),
+      { maxConcurrentTasks: 1 },
+      singleSlotExecutor,
+    );
+
+    await singleSlotWorkflow.reconcile();
+    expect(singleSlotExecutor.started).toHaveLength(0);
+
+    await store.saveTask(activeProject.project.id, {
+      ...activeProject.tasks[0]!,
+      status: "done",
+      requestedAction: null,
+      currentExecution: {
+        attemptId: "attempt_active",
+        action: "integrate",
+        status: "completed",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        finishedAt: "2026-08-03T01:00:00.000Z",
+      },
+      mergedCommit: "main_1",
+    });
+
+    await singleSlotWorkflow.reconcile();
+
+    const selections = singleSlotExecutor.started.filter(
+      ({ project }) => project.requestedAction === "select_tasks",
+    );
+    expect(selections).toHaveLength(1);
+    expect(selections[0]?.project.id).toBe(waitingProject.project.id);
   });
 
   it("persists a task thread before starting its turn", async () => {

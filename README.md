@@ -57,11 +57,13 @@ Choosing **Later** keeps a small Skills setup button in the lower-left corner of
 
 [Open the editable draw.io source](https://github.com/lzj960515/codrive/blob/main/docs/architecture/codrive-orchestration.drawio)
 
-Codrive owns the deterministic parts: persisted lifecycle state, execution attempts, conversation IDs, concurrency limits, and one integration lease per repository. Codex owns the judgment-heavy parts: selecting work, implementation, review, rework, Git operations, conflict resolution, integration, and product evaluation.
+Codrive owns the deterministic parts: persisted lifecycle state, execution attempts, conversation IDs, the global concurrency limit, and the rule that one repository integrates only one task at a time. Codex owns the judgment-heavy parts: selecting work, implementation, review, rework, Git operations, conflict resolution, integration, and product evaluation.
 
-Task selection is dynamic rather than a fixed dependency graph. Whenever capacity becomes available, a temporary Codex task reads the current product, task, and repository facts and chooses which backlog tasks are useful to start now. Codrive validates those task IDs and creates a separate development conversation for each selected task.
+Task selection is dynamic rather than a fixed dependency graph. Whenever capacity becomes available, a temporary Codex task reads the current product, task, and repository facts and can choose several tasks that are useful to start now. Codrive validates the result and gives every selected task its own top-level development conversation and isolated worktree. The default limit is four active tasks across all projects; integration remains serial within each repository.
 
-Normal task progression does not depend on polling. Project registration, Skill reports, completed Codex turns, and user controls immediately trigger reconciliation. A 60-second background check only examines expired execution leases so interrupted or disconnected turns can recover.
+Project registration, added work, stage reports, completed or failed Codex turns, project controls, and service startup immediately trigger the next workflow decision. The concurrency limit is part of that decision, so changing it invalidates an earlier selection result. When Codrive starts, it upgrades local configurations created with the original one-task default to four.
+
+Once a minute, Codrive also runs a narrow recovery check. It resumes AI work that has gone a long time without a result, and it restarts task selection when an active project still has unstarted tasks but no Codex work at all. It does not repeatedly ask while work is active, task selection or product evaluation is already running, a task is waiting for the user, or Codex has already decided that the remaining tasks should wait for current work.
 
 ## Codex conversations
 

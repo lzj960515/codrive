@@ -3,7 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   type NotificationSource,
@@ -115,6 +115,129 @@ describe("RecoveryManager", () => {
     const after = (await store.findTask(taskId))!.task.currentExecution!;
     expect(after.attemptId).toBe(before.attemptId);
     expect(after.leaseExpiresAt).toBeDefined();
+  });
+
+  it("recovers an idle project once without repeating an earlier wait decision", async () => {
+    const idleStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-idle-recovery-")),
+    );
+    const created = await idleStore.createProject({
+      name: "Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Game\n",
+      tasks: [
+        { title: "Foundation", description: "Build it", acceptanceCriteria: [] },
+        { title: "Gameplay", description: "Build it next", acceptanceCriteria: [] },
+      ],
+    });
+    await idleStore.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "developing",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: "attempt_1",
+        action: "develop",
+        status: "running",
+        startedAt: "2026-08-03T00:00:00.000Z",
+      },
+    });
+    const projectExecutor = new RecordingProjectExecutor();
+    const idleWorkflow = new WorkflowEngine(
+      idleStore,
+      new RecordingTaskDispatcher(),
+      {
+        maxConcurrentTasks: 4,
+        now: () => "2026-08-03T00:00:00.000Z",
+        createId: (prefix) => `${prefix}_idle`,
+      },
+      projectExecutor,
+    );
+    await idleWorkflow.reconcile();
+    const selecting = (await idleStore.getProject(created.project.id))!.project;
+    await idleWorkflow.submitProjectReport({
+      projectId: created.project.id,
+      attemptId: selecting.currentExecution!.attemptId,
+      outcome: "wait_for_active_tasks",
+      summary: "Gameplay should wait for the foundation",
+    });
+    await idleWorkflow.completeProjectTurn(
+      created.project.id,
+      selecting.currentExecution!.attemptId,
+      selecting.currentExecution!.turnId!,
+    );
+    const idleRecovery = new RecoveryManager(
+      idleStore,
+      idleWorkflow,
+      new StubNotifications(),
+    );
+
+    await idleRecovery.recoverUnattendedWork();
+    expect(projectExecutor.started).toHaveLength(1);
+
+    const foundation = (await idleStore.findTask(created.tasks[0]!.id))!.task;
+    await idleStore.saveTask(created.project.id, {
+      ...foundation,
+      requestedAction: null,
+      currentExecution: {
+        ...foundation.currentExecution!,
+        status: "completed",
+        finishedAt: "2026-08-03T01:00:00.000Z",
+      },
+    });
+
+    const beforeExpiry = new Date("2026-08-03T01:00:00.000Z");
+    await idleRecovery.recoverUnattendedWork(beforeExpiry);
+    await idleRecovery.recoverUnattendedWork(beforeExpiry);
+
+    expect(projectExecutor.started).toHaveLength(2);
+    expect(projectExecutor.started[1]?.project.requestedAction).toBe(
+      "select_tasks",
+    );
+  });
+
+  it("checks every minute for a running project with no active Codex work", async () => {
+    const timedStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-timed-recovery-")),
+    );
+    const projectExecutor = new RecordingProjectExecutor();
+    const timedWorkflow = new WorkflowEngine(
+      timedStore,
+      new RecordingTaskDispatcher(),
+      { maxConcurrentTasks: 4 },
+      projectExecutor,
+    );
+    const timedRecovery = new RecoveryManager(
+      timedStore,
+      timedWorkflow,
+      new StubNotifications(),
+    );
+    const periodicCheck = vi.spyOn(timedRecovery, "recoverUnattendedWork");
+    vi.useFakeTimers();
+    try {
+      await timedRecovery.start();
+      await timedStore.createProject({
+        name: "Game",
+        repositoryPath: "/workspace/game",
+        defaultBranch: "main",
+        productDocument: "# Game\n",
+        tasks: [
+          { title: "Loop", description: "Build loop", acceptanceCriteria: [] },
+        ],
+      });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(periodicCheck).toHaveBeenCalledTimes(1);
+      await periodicCheck.mock.results[0]!.value;
+
+      expect(projectExecutor.started).toHaveLength(1);
+      expect(projectExecutor.started[0]?.project.requestedAction).toBe(
+        "select_tasks",
+      );
+    } finally {
+      timedRecovery.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("advances a saved task report when thread/read says the turn completed", async () => {
