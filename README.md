@@ -73,6 +73,8 @@ Normal task progression does not depend on polling. Project registration, Skill 
 | Review | Starts a fresh independent conversation for every round |
 | Task selection and product evaluation | Uses temporary conversations that do not crowd the recent-task list |
 
+Persistent task conversations stay attached to the product repository in Codex App. Codex reads the task's recorded worktree from `$codrive-task` and performs implementation, review, rework, and integration there, so App visibility and isolated code execution remain separate concerns.
+
 The board links directly to development and review conversations. If Codex needs a product decision, the board shows the question and sends you back to the relevant Codex task; Codrive does not create a second chat interface.
 
 ## Built-in Skills

@@ -97,7 +97,7 @@ describe("CodexTaskDispatcher", () => {
     ]);
   });
 
-  it("creates every review in a fresh thread and resumes development for rework", async () => {
+  it("keeps review, rework, and integration conversations attached to the project", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
     const workspacePath = "/workspace/game/.worktrees/task_1";
@@ -125,29 +125,47 @@ describe("CodexTaskDispatcher", () => {
         startedAt: timestamp,
       },
     });
+    const integrating = task({
+      status: "integrating",
+      requestedAction: "integrate",
+      developmentThreadId: "development_thread",
+      workspacePath,
+      currentExecution: {
+        attemptId: "integrate_1",
+        action: "integrate",
+        status: "pending",
+        startedAt: timestamp,
+      },
+    });
 
     await dispatcher.openThread({ project, task: reviewing });
     await dispatcher.openThread({ project, task: reworking });
+    await dispatcher.openThread({ project, task: integrating });
 
     expect(gateway.calls).toEqual([
       {
         method: "startThread",
         args: [
-          workspacePath,
+          project.repositoryPath,
           "[Codrive Review #1] Tiny Game · Playable loop",
         ],
       },
       {
         method: "resumeThread",
-        args: ["development_thread", workspacePath],
+        args: ["development_thread", project.repositoryPath],
+      },
+      {
+        method: "resumeThread",
+        args: ["development_thread", project.repositoryPath],
       },
     ]);
   });
 
-  it("resumes an execution whose thread ID was already persisted", async () => {
+  it("resumes a persisted execution under the project even when it has a worktree", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
     const persisted = task({
+      workspacePath: "/workspace/game/.worktrees/task_1",
       currentExecution: {
         attemptId: "attempt_1",
         action: "develop",
@@ -163,6 +181,37 @@ describe("CodexTaskDispatcher", () => {
       {
         method: "resumeThread",
         args: ["persisted_thread", "/workspace/game"],
+      },
+    ]);
+  });
+
+  it("starts task and report turns under the project while preserving the task worktree", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = new CodexTaskDispatcher(gateway);
+    const request = {
+      project,
+      task: task({ workspacePath: "/workspace/game/.worktrees/task_1" }),
+    };
+
+    await dispatcher.startTurn(request, "thread_1");
+    await dispatcher.requestReport(request, "thread_1");
+
+    expect(gateway.calls).toEqual([
+      {
+        method: "startTurn",
+        args: [
+          "thread_1",
+          project.repositoryPath,
+          "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+        ],
+      },
+      {
+        method: "startTurn",
+        args: [
+          "thread_1",
+          project.repositoryPath,
+          "请使用 $codrive-task 汇报任务 task_1 的当前处理结果。",
+        ],
       },
     ]);
   });

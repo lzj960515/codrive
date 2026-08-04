@@ -6,7 +6,7 @@ export class CodexTaskDispatcher implements TaskDispatcher {
   constructor(private readonly codex: CodexGateway) {}
 
   async openThread(request: DispatchRequest): Promise<string> {
-    const cwd = workspaceFor(request);
+    const cwd = conversationDirectory(request);
     const existingThreadId = request.task.currentExecution?.threadId;
     if (existingThreadId) {
       await this.codex.resumeThread(existingThreadId, cwd);
@@ -26,7 +26,7 @@ export class CodexTaskDispatcher implements TaskDispatcher {
   startTurn(request: DispatchRequest, threadId: string): Promise<string> {
     return this.codex.startTurn(
       threadId,
-      workspaceFor(request),
+      conversationDirectory(request),
       `请使用 $codrive-task 处理任务 ${request.task.id} 的当前阶段。`,
     );
   }
@@ -34,7 +34,7 @@ export class CodexTaskDispatcher implements TaskDispatcher {
   requestReport(request: DispatchRequest, threadId: string): Promise<string> {
     return this.codex.startTurn(
       threadId,
-      workspaceFor(request),
+      conversationDirectory(request),
       `请使用 $codrive-task 汇报任务 ${request.task.id} 的当前处理结果。`,
     );
   }
@@ -47,8 +47,8 @@ export class CodexTaskDispatcher implements TaskDispatcher {
   }
 }
 
-function workspaceFor({ project, task }: DispatchRequest): string {
-  return task.workspacePath ?? project.repositoryPath;
+function conversationDirectory({ project }: DispatchRequest): string {
+  return project.repositoryPath;
 }
 
 function threadTitle(project: Project, task: Task): string {

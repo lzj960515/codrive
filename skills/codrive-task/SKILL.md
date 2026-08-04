@@ -34,9 +34,9 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 ## 连续任务工作区
 
-每个任务的开发对话长期拥有自己的 Codrive 工作树。中断、恢复、返工和合入都继续使用这个工作区。
+Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查对话始终显示在 Codex App 的同一个项目下。对话目录表示产品归属，`context.workspacePath` 表示实际代码工作区。开发、审查、返工和合入的文件、Git 与测试操作都在任务工作树中完成。
 
-- `context` 返回 `workspacePath` 时直接使用该工作树。
+- `context` 返回 `workspacePath` 时，先进入该工作树，再执行当前阶段。
 - 首次开发尚未记录 `workspacePath` 时，先检查规范路径 `<repository>/.worktrees/codrive/<project-id>/<task-id>`；已有工作树就继续使用，没有时再创建。
 - 进入工作树后检查 `git status`、提交历史和差异，把已有改动作为当前任务的连续执行现场。结合任务目标、验收标准和版本历史，自主决定保留、修改、整合或清理，然后继续当前阶段。
 - 主仓库中的用户改动保持原样；开发工作放在任务工作树，合入时基于最新主分支安全整合。
