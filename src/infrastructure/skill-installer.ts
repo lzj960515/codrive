@@ -13,6 +13,8 @@ import { homedir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { readPackageVersion } from "./package-metadata.js";
+
 const managedSkills = [
   "codrive-forge",
   "codrive-task",
@@ -123,10 +125,7 @@ export class SkillInstaller {
 
   private async getBundledVersion(): Promise<string> {
     if (this.version) return this.version;
-    const packageJson = JSON.parse(
-      await readFile(new URL("../../package.json", import.meta.url), "utf8"),
-    ) as { version: string };
-    return packageJson.version;
+    return readPackageVersion();
   }
 }
 

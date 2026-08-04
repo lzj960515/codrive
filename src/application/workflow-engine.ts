@@ -181,7 +181,10 @@ export class WorkflowEngine {
           : {}),
         updatedAt: this.now(),
       };
-      if (refreshesActiveWork) delete project.lastSelectionFingerprint;
+      if (refreshesActiveWork) {
+        delete project.latestReport;
+        delete project.lastSelectionFingerprint;
+      }
       await this.store.saveProject(project);
       await this.recordEvent({ type: "project.decision_recorded", projectId });
       if (refreshesActiveWork) await this.reconcileInternal();
@@ -502,6 +505,7 @@ export class WorkflowEngine {
 
     for (const initialSnapshot of snapshots) {
       let snapshot = (await this.store.getProject(initialSnapshot.project.id))!;
+      snapshot = await this.resumeAfterTaskSelectionChanges(snapshot);
       if (
         snapshot.project.status !== "active" ||
         snapshot.project.scheduling !== "running"
@@ -560,6 +564,37 @@ export class WorkflowEngine {
         );
       }
     }
+  }
+
+  private async resumeAfterTaskSelectionChanges(
+    snapshot: ProjectSnapshot,
+  ): Promise<ProjectSnapshot> {
+    const { project, tasks } = snapshot;
+    const waitingForTaskSelection =
+      project.status === "waiting_for_input" &&
+      project.currentExecution?.action === "select_tasks";
+    if (
+      !waitingForTaskSelection ||
+      project.lastSelectionFingerprint === selectionFingerprint(tasks)
+    ) {
+      return snapshot;
+    }
+
+    const resumed: Project = {
+      ...project,
+      status: "active",
+      requestedAction: null,
+      updatedAt: this.now(),
+    };
+    delete resumed.latestReport;
+    delete resumed.lastSelectionFingerprint;
+    await this.store.saveProject(resumed);
+    await this.recordEvent({
+      type: "project.selection_invalidated",
+      projectId: project.id,
+      attemptId: project.currentExecution!.attemptId,
+    });
+    return { project: resumed, tasks };
   }
 
   private async dispatchTask(project: Project, task: Task): Promise<boolean> {
@@ -723,9 +758,9 @@ export class WorkflowEngine {
         });
       }
     } else if (report.outcome === "wait_for_active_tasks") {
-      if (!snapshot.tasks.some(hasActiveTaskExecution)) {
+      if (!snapshot.tasks.some(hasOngoingTaskExecution)) {
         throw new WorkflowConflictError(
-          "wait_for_active_tasks requires at least one active task",
+          "wait_for_active_tasks requires at least one ongoing task",
         );
       }
     }
@@ -989,6 +1024,12 @@ function canDispatchTask(task: Task): boolean {
 function hasActiveTaskExecution(task: Task): boolean {
   return task.currentExecution
     ? activeExecutionStatuses.has(task.currentExecution.status)
+    : false;
+}
+
+function hasOngoingTaskExecution(task: Task): boolean {
+  return task.currentExecution
+    ? reportableExecutionStatuses.has(task.currentExecution.status)
     : false;
 }
 

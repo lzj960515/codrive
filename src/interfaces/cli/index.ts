@@ -44,6 +44,7 @@ async function startServer(): Promise<void> {
   const started = await server.start();
   process.stdout.write(`Codrive is running at ${started.url}\n`);
   process.stdout.write(`State: ${started.config.stateDirectory}\n`);
+  process.stdout.write(`Logs: ${started.logPath}\n`);
   process.stdout.write(
     "Codex tasks run non-interactively with full local access to complete Git workflows.\n",
   );

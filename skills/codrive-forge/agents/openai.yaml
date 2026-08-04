@@ -1,5 +1,5 @@
 interface:
   display_name: "Codrive Forge"
-  short_description: "Turn a product idea into an autonomous Codrive project"
+  short_description: "Plan and start the product in the current project folder"
   brand_color: "#ED5B2A"
-  default_prompt: "Use $codrive-forge to turn this product idea into a confirmed Codrive plan."
+  default_prompt: "帮我把当前目录里的产品想法整理成 Codrive 计划，确认后开始自动开发。"

@@ -39,37 +39,29 @@ Codrive 不是另一个大模型，也没有重新实现编码智能体。它只
 npx codrive
 ```
 
-Codrive 会输出本地看板地址。用浏览器打开后，按照首次运行提示完成初始化：
+Codrive 会输出本地看板地址和日志文件位置。用浏览器打开后，按照首次运行提示完成初始化：
 
-1. 点击 **Install Skills**，把四个 Codrive Skills 安装到本机智能体技能目录。
-2. 回到 Codex App，并进入你想开发的代码仓库。
-3. 用类似下面的消息开始：
+1. 点击 **安装 Skills**，把四个 Codrive Skills 安装到本机智能体技能目录。
+2. 通常可以先创建产品目录，再用 Codex App 打开这个目录。
+3. 直接用自然语言描述产品，例如：
 
 ```text
-使用 $codrive-forge 把这个产品想法整理成计划，我确认后注册并启动。
+用 Codrive 的方式帮我把这个贪吃蛇游戏整理成计划，我确认后开始开发。
 ```
 
 选择 **Later** 后，看板左下角会保留一个 Skills 初始化按钮。未来版本内置的 Skills 发生变化时，看板也会再次提示更新。
 
 ## 工作方式
 
-```mermaid
-flowchart LR
-    Idea["在 Codex App 提出产品想法"] --> Forge["$codrive-forge"]
-    Forge --> Board["Codrive 本地看板"]
-    Board --> Select["Codex 选择当前有价值的工作"]
-    Select --> Dev["独立开发任务"]
-    Dev --> Review["独立审查任务"]
-    Review -->|要求修改| Dev
-    Review -->|审查通过| Integrate["Codex 合入结果"]
-    Integrate --> Evaluate["产品级验收"]
-    Evaluate -->|仍有工作| Select
-    Evaluate -->|目标完成| Done["产品完成"]
-```
+![Codrive 产品轮转与调度架构](https://raw.githubusercontent.com/lzj960515/codrive/main/docs/architecture/codrive-orchestration.png)
+
+[查看可编辑的 draw.io 源图](https://github.com/lzj960515/codrive/blob/main/docs/architecture/codrive-orchestration.drawio)
 
 Codrive 负责确定性的部分：持久化生命周期状态、执行尝试、Codex 任务 ID、并发限制，以及每个仓库同一时间只允许一个合入任务。Codex 负责需要判断的部分：选择任务、实现、审查、返工、Git 操作、冲突解决、合入和产品验收。
 
 任务选择不是预先固定的依赖图。每次出现空闲并发容量时，一个临时 Codex 任务都会读取最新的产品、任务和仓库事实，判断此刻适合启动哪些待办任务。Codrive 只验证返回的任务 ID 和并发容量，然后为每个选中任务建立独立开发任务。
+
+正常任务推进不依赖定时轮询。项目注册、Skill 报告、Codex 回合完成和用户控制都会立即触发下一次协调。后台每 60 秒只检查执行租约是否过期，用于恢复中断或失联的回合。
 
 ## Codex 任务关系
 
@@ -102,6 +94,8 @@ npx codrive status   检查本地服务是否正在运行
 npx codrive doctor   检查 Node.js、Codex 和登录状态
 npx codrive setup    不经过 Web 提示，直接安装 Skills
 ```
+
+运行日志写入 `~/.codrive/codrive.log`。终端和日志文件使用同一份本机时区时间，包含 Codrive 生命周期、HTTP 错误和 Codex App Server 的标准错误输出。
 
 ## 安全模型
 

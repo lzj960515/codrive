@@ -17,6 +17,7 @@ export interface HttpServerDependencies {
   workflow: WorkflowEngine;
   skillInstaller: SkillInstaller;
   accessToken: string;
+  onError?: (message: string) => void;
 }
 
 const taskInputSchema = z.object({
@@ -130,7 +131,7 @@ export function createHttpServer(
     }
   });
 
-  server.setErrorHandler((error, _request, reply) => {
+  server.setErrorHandler((error, request, reply) => {
     const statusCode =
       error instanceof z.ZodError
         ? 400
@@ -140,6 +141,8 @@ export function createHttpServer(
             ? 422
             : 500;
     const message = error instanceof Error ? error.message : String(error);
+    const path = new URL(request.url, "http://localhost").pathname;
+    dependencies.onError?.(`${request.method} ${path} ${statusCode}: ${message}`);
     void reply.code(statusCode).send({ error: message });
   });
 

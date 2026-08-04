@@ -39,37 +39,29 @@ You need Node.js 20 or newer, Git, and a Codex login available in `~/.codex`.
 npx codrive
 ```
 
-Codrive prints the local board URL. Open it in your browser and follow the first-run prompt:
+Codrive prints the local board URL and log file location. Open it in your browser and follow the first-run prompt:
 
 1. Click **Install Skills** to add the four bundled Codrive Skills to your local agent library.
-2. Return to Codex App in the repository you want to build.
-3. Start with a request such as:
+2. For the usual local workflow, create the product folder and open it in Codex App.
+3. Describe the product naturally, for example:
 
 ```text
-Use $codrive-forge to turn this product idea into a plan. Register and start it after I confirm.
+Help me plan this snake game with Codrive, then start development after I confirm.
 ```
 
 Choosing **Later** keeps a small Skills setup button in the lower-left corner of the board. When a future Codrive release changes its bundled Skills, the board offers the update again.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    Idea["Product idea in Codex App"] --> Forge["$codrive-forge"]
-    Forge --> Board["Local Codrive board"]
-    Board --> Select["Codex selects useful work"]
-    Select --> Dev["Dedicated development task"]
-    Dev --> Review["Independent review task"]
-    Review -->|Changes requested| Dev
-    Review -->|Approved| Integrate["Codex integrates the result"]
-    Integrate --> Evaluate["Product evaluation"]
-    Evaluate -->|More work| Select
-    Evaluate -->|Goal met| Done["Product complete"]
-```
+![Codrive product loop and scheduling architecture](https://raw.githubusercontent.com/lzj960515/codrive/main/docs/architecture/codrive-orchestration.png)
+
+[Open the editable draw.io source](https://github.com/lzj960515/codrive/blob/main/docs/architecture/codrive-orchestration.drawio)
 
 Codrive owns the deterministic parts: persisted lifecycle state, execution attempts, conversation IDs, concurrency limits, and one integration lease per repository. Codex owns the judgment-heavy parts: selecting work, implementation, review, rework, Git operations, conflict resolution, integration, and product evaluation.
 
 Task selection is dynamic rather than a fixed dependency graph. Whenever capacity becomes available, a temporary Codex task reads the current product, task, and repository facts and chooses which backlog tasks are useful to start now. Codrive validates those task IDs and creates a separate development conversation for each selected task.
+
+Normal task progression does not depend on polling. Project registration, Skill reports, completed Codex turns, and user controls immediately trigger reconciliation. A 60-second background check only examines expired execution leases so interrupted or disconnected turns can recover.
 
 ## Codex conversations
 
@@ -102,6 +94,8 @@ npx codrive status   Check whether the local service is running
 npx codrive doctor   Check Node.js, Codex, and login readiness
 npx codrive setup    Install Skills without using the Web prompt
 ```
+
+Runtime logs are written to `~/.codrive/codrive.log`. The terminal and log file use the same local-time timestamps and include Codrive lifecycle messages, HTTP errors, and Codex App Server stderr.
 
 ## Security
 

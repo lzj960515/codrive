@@ -32,22 +32,33 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 根据返回的 `requestedAction` 执行任务选择或产品验收，并读取 `PROJECT.md`、全部任务文件、仓库规则和实际代码。
 
+## 连续任务工作区
+
+每个任务的开发对话长期拥有自己的 Codrive 工作树。中断、恢复、返工和合入都继续使用这个工作区。
+
+- `context` 返回 `workspacePath` 时直接使用该工作树。
+- 首次开发尚未记录 `workspacePath` 时，先检查规范路径 `<repository>/.worktrees/codrive/<project-id>/<task-id>`；已有工作树就继续使用，没有时再创建。
+- 进入工作树后检查 `git status`、提交历史和差异，把已有改动作为当前任务的连续执行现场。结合任务目标、验收标准和版本历史，自主决定保留、修改、整合或清理，然后继续当前阶段。
+- 主仓库中的用户改动保持原样；开发工作放在任务工作树，合入时基于最新主分支安全整合。
+
+把 `needs_input` 用于真正需要用户决定的产品语义、外部凭据或权限。工作树恢复、现有改动归属、Git 冲突和代码取舍由当前 Codex 根据可见事实完成。
+
 ## 任务选择 `select_tasks`
 
 查看全部 `backlog`、活动任务、已完成结果和当前仓库。根据工作之间的真实关系、当前代码状态和可用并发数，选择现在适合独立开始的任务。每次选择都基于最新事实重新判断任务关系。
 
 - 有适合开始的工作时汇报 `selected` 和唯一的 `taskIds`。
-- 当前候选应等待正在执行的任务时汇报 `wait_for_active_tasks`。
-- 缺少产品决策时汇报 `needs_input` 和明确的 `question`。
+- 当前候选应等待正在执行或等待继续的任务时汇报 `wait_for_active_tasks`，让原任务对话负责其实现现场。
+- 缺少项目级产品决策时汇报 `needs_input` 和明确的 `question`。
 - 存在确定障碍时汇报 `blocked`。
 
 通过 `project-report` 提交选择结果。Codrive 验证任务状态和并发数，并为选中任务分别创建独立开发对话。
 
 ## 开发 `develop`
 
-1. 检查仓库和用户已有改动。
-2. 遵循仓库工作树约定；没有约定时使用 `<repository>/.worktrees/codrive/<project-id>/<task-id>`。
-3. 让 `.worktrees/` 进入仓库自己的 `.git/info/exclude`。
+1. 按“连续任务工作区”定位或创建当前任务的隔离工作树。
+2. 让 `.worktrees/` 进入仓库自己的 `.git/info/exclude`。
+3. 理解并整理工作树中的现有实现，让最终差异完整服务当前任务。
 4. 实现任务、运行相关测试、修复发现的问题并提交代码。
 5. 汇报 `completed`，包括 `workspacePath`、`baseCommit`、`candidateCommit` 和测试摘要。
 
@@ -69,7 +80,7 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 - 审查后主分支没有影响候选时，合入主分支，删除任务工作树和临时任务分支，再用 `git worktree list` 与 `git branch --list` 确认清理结果，汇报 `completed` 和 `mergedCommit`。
 - 同步或冲突解决改变候选实现时，提交新候选但先不合入，汇报 `needs_review`。
-- 无法安全判断人工改动或产品语义时汇报 `needs_input`，保留所有现有内容。
+- 需要新的产品决策、外部凭据或权限时汇报 `needs_input`，保留所有现有内容。
 
 ## 汇报契约
 

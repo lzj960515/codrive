@@ -19,6 +19,7 @@ describe("HTTP API", () => {
   let engine: WorkflowEngine;
   let server: ReturnType<typeof createHttpServer>;
   let skillInstaller: SkillInstaller;
+  let errors: string[];
 
   beforeEach(async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-http-"));
@@ -34,11 +35,13 @@ describe("HTTP API", () => {
       join(stateDirectory, "installed-skills"),
       "0.2.0",
     );
+    errors = [];
     server = createHttpServer({
       store,
       workflow: engine,
       skillInstaller,
       accessToken: "secret",
+      onError: (message) => errors.push(message),
     });
     await server.ready();
   });
@@ -222,6 +225,10 @@ describe("HTTP API", () => {
     expect(paused.json()).toMatchObject({ scheduling: "paused" });
     expect(invalid.statusCode).toBe(400);
     expect(staleReport.statusCode).toBe(409);
+    expect(errors).toEqual([
+      expect.stringMatching(/^POST \/api\/commands 400:/),
+      expect.stringMatching(/^POST \/api\/commands 409:/),
+    ]);
   });
 
   it("makes recorded product decisions available to task and project Skills", async () => {

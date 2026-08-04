@@ -162,6 +162,43 @@ describe("WorkflowEngine", () => {
     expect(projectExecutor.started).toHaveLength(1);
   });
 
+  it("clears a resolved project question when its decision is recorded", async () => {
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [{ title: "Task", description: "Build it", acceptanceCriteria: [] }],
+    });
+    const report = {
+      projectId: created.project.id,
+      attemptId: "selection_1",
+      outcome: "needs_input" as const,
+      summary: "Need a product decision",
+      question: "Keyboard or controller?",
+    };
+    await store.saveProject({
+      ...created.project,
+      status: "waiting_for_input",
+      latestReport: report,
+      currentExecution: {
+        attemptId: report.attemptId,
+        action: "select_tasks",
+        status: "completed",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        report,
+      },
+    });
+
+    const project = await workflow.recordProjectDecision(
+      created.project.id,
+      "Use both keyboard and controller.",
+    );
+
+    expect(project.status).not.toBe("waiting_for_input");
+    expect(project.latestReport).toBeUndefined();
+  });
+
   it("restarts temporary project selection when new work changes its facts", async () => {
     const created = await registerProject(1);
     const firstExecution = created.project.currentExecution!;
@@ -250,6 +287,95 @@ describe("WorkflowEngine", () => {
     });
     expect(reviewing.currentExecution?.action).toBe("review");
     expect(reviewing.reviewAttempts).toHaveLength(1);
+  });
+
+  it("invalidates a waiting task-selection result when task facts change", async () => {
+    const created = await registerProject(2);
+    const taskId = created.tasks[0]!.id;
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the first task",
+      taskIds: [taskId],
+    });
+    const developing = (await store.findTask(taskId))!.task;
+    const execution = developing.currentExecution!;
+
+    await workflow.submitReport({
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "needs_input",
+      summary: "Need a decision",
+      question: "Keep the existing files?",
+    });
+    await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "needs_input",
+      summary: "No other task should start yet",
+      question: "Wait for the first task?",
+    });
+
+    expect((await store.getProject(created.project.id))!.project.status).toBe(
+      "waiting_for_input",
+    );
+
+    await workflow.submitReport({
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "completed",
+      summary: "Implemented after resolving the question",
+      workspacePath: "/workspace/game/.worktrees/task_1",
+      candidateCommit: "candidate_1",
+    });
+
+    const snapshot = (await store.getProject(created.project.id))!;
+    expect(snapshot.project.status).not.toBe("waiting_for_input");
+    expect(snapshot.project.latestReport?.question).not.toBe(
+      "Wait for the first task?",
+    );
+    expect(snapshot.tasks.find(({ id }) => id === taskId)).toMatchObject({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: { action: "review", status: "running" },
+    });
+  });
+
+  it("lets task selection wait for a task whose Codex conversation needs input", async () => {
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [
+        { title: "Foundation", description: "Build it", acceptanceCriteria: [] },
+        { title: "Gameplay", description: "Build it next", acceptanceCriteria: [] },
+      ],
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "waiting_for_input",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: "attempt_1",
+        action: "develop",
+        status: "waiting_for_input",
+        startedAt: "2026-08-03T00:00:00.000Z",
+      },
+    });
+
+    await workflow.reconcile();
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "wait_for_active_tasks",
+      summary: "The next task should wait for the foundation",
+    });
+
+    expect((await store.getProject(created.project.id))!.project).toMatchObject({
+      status: "active",
+      requestedAction: null,
+      latestReport: { outcome: "wait_for_active_tasks" },
+    });
   });
 
   it("keeps a reported blocker visible until an explicit retry", async () => {
