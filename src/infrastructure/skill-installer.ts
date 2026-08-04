@@ -101,14 +101,12 @@ export class SkillInstaller {
 
     const bundledFingerprint = await fingerprintBundle(this.sourceDirectory);
     const installedFingerprint = await fingerprintBundle(this.targetDirectory);
-    const markersMatch = targetStates.every(
-      ({ marker }) =>
-        marker?.version === bundledVersion &&
-        marker.fingerprint === bundledFingerprint,
+    const markerFingerprintsMatch = targetStates.every(
+      ({ marker }) => marker?.fingerprint === bundledFingerprint,
     );
     return {
       state:
-        markersMatch && installedFingerprint === bundledFingerprint
+        markerFingerprintsMatch && installedFingerprint === bundledFingerprint
           ? "current"
           : "outdated",
       bundledVersion,

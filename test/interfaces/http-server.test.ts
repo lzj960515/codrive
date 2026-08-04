@@ -258,7 +258,11 @@ describe("HTTP API", () => {
       repositoryPath: "/workspace/game",
       defaultBranch: "main",
       productDocument: "# Game\n",
-      tasks: [{ title: "Loop", description: "Build loop", acceptanceCriteria: [] }],
+      tasks: [{
+        title: "Loop",
+        description: "Build the playable flight loop",
+        acceptanceCriteria: ["Arrow keys move the ship", "Restart keeps score"],
+      }],
     });
     await store.saveTask(created.project.id, {
       ...created.tasks[0]!,
@@ -271,6 +275,8 @@ describe("HTTP API", () => {
         outcome: "needs_input",
         summary: "A decision is needed",
         question: "Arrows or WASD?",
+        tests: "Unit tests passed",
+        findings: ["Keyboard choice is still unresolved"],
       },
       currentExecution: {
         attemptId: "attempt_1",
@@ -290,8 +296,20 @@ describe("HTTP API", () => {
     expect(board.json()[0].tasks[0]).toMatchObject({
       question: "Arrows or WASD?",
       developmentThreadId: "development_thread",
+      acceptanceCriteria: ["Arrow keys move the ship", "Restart keeps score"],
+      report: {
+        outcome: "needs_input",
+        tests: "Unit tests passed",
+        findings: ["Keyboard choice is still unresolved"],
+      },
     });
     expect(page.body).toContain("Reply in the linked Codex task");
+    expect(page.body).toContain('id="project-sidebar"');
+    expect(page.body).toContain('id="task-detail"');
+    expect(page.body).toContain('id="mobile-projects"');
+    expect(page.body).toContain("Acceptance criteria");
+    expect(page.body).toContain("selectedTaskId");
+    expect(page.body).toContain("data-task");
     expect(page.body).toContain('id="setup-dialog"');
     expect(page.body).toContain('id="setup-later"');
     expect(page.body).toContain('id="setup-trigger"');
@@ -299,6 +317,7 @@ describe("HTTP API", () => {
     expect(page.body).toContain('system.install_skills');
     expect(page.body).toContain('codrive:skills-dismissed');
     expect(page.body).toContain('Bundled Skills have changed and are ready to update.');
+    expect(page.body).not.toContain("project-strip");
     expect(page.body).not.toContain("data-context");
     expect(page.body).not.toContain("<textarea");
   });

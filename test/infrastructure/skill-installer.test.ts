@@ -63,6 +63,21 @@ describe("SkillInstaller", () => {
     expect(marker.version).toBe("0.2.0");
     expect(marker.fingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it("keeps unchanged Skills current across package releases", async () => {
+    const source = await mkdtemp(join(tmpdir(), "codrive-skill-source-"));
+    const target = await mkdtemp(join(tmpdir(), "codrive-skill-target-"));
+    await createSkillBundle(source, "unchanged Skills");
+    await new SkillInstaller(source, target, "0.2.0").install();
+
+    await expect(
+      new SkillInstaller(source, target, "0.2.1").getStatus(),
+    ).resolves.toMatchObject({
+      state: "current",
+      bundledVersion: "0.2.1",
+      installedVersion: "0.2.0",
+    });
+  });
 });
 
 async function createSkillBundle(root: string, content: string): Promise<void> {
