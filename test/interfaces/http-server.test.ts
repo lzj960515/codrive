@@ -303,11 +303,17 @@ describe("HTTP API", () => {
         findings: ["Keyboard choice is still unresolved"],
       },
     });
-    expect(page.body).toContain("Reply in the linked Codex task");
+    expect(page.body).toContain('lang="zh-CN"');
+    expect(page.body).toContain("产品工作台");
+    expect(page.body).toContain("告诉 Codex 你的想法");
+    expect(page.body).toContain("用 Codrive 的方式帮我做一个经营太空货运公司的游戏");
+    expect(page.body).toContain("连接 Codex");
+    expect(page.body).toContain("数据保存在本机");
+    expect(page.body).toContain("请在对应的 Codex 对话中回复");
     expect(page.body).toContain('id="project-sidebar"');
     expect(page.body).toContain('id="task-detail"');
     expect(page.body).toContain('id="mobile-projects"');
-    expect(page.body).toContain("Acceptance criteria");
+    expect(page.body).toContain("验收标准");
     expect(page.body).toContain("selectedTaskId");
     expect(page.body).toContain("data-task");
     expect(page.body).toContain('id="setup-dialog"');
@@ -316,8 +322,13 @@ describe("HTTP API", () => {
     expect(page.body).toContain('/api/system');
     expect(page.body).toContain('system.install_skills');
     expect(page.body).toContain('codrive:skills-dismissed');
-    expect(page.body).toContain('Bundled Skills have changed and are ready to update.');
+    expect(page.body).toContain("Codrive 设置有更新，可以立即升级。");
+    expect(page.body).toContain("完成一次设置即可使用");
     expect(page.body).not.toContain("project-strip");
+    expect(page.body).not.toContain("$codrive-forge");
+    expect(page.body).not.toContain("No projects yet");
+    expect(page.body).not.toContain("State stays on this Mac");
+    expect(page.body).not.toContain("Product workbench");
     expect(page.body).not.toContain("data-context");
     expect(page.body).not.toContain("<textarea");
   });

@@ -3,19 +3,22 @@ export function renderBoardClient(accessToken: string): string {
   return `<script>
     const TOKEN = ${token};
     const columns = [
-      ["backlog", "Backlog"],
-      ["developing", "Building"],
-      ["reviewing", "Review"],
-      ["integrating", "Integrating"],
-      ["waiting", "Waiting"],
-      ["done", "Done"]
+      ["backlog", "待安排"],
+      ["developing", "开发中"],
+      ["reviewing", "审查中"],
+      ["integrating", "合入中"],
+      ["waiting", "等待中"],
+      ["done", "已完成"]
     ];
     const statusLabels = {
-      active: "Active", selecting_tasks: "Selecting work", evaluating: "Evaluating",
-      waiting_for_input: "Waiting for input", stalled: "Stalled", completed: "Completed",
-      blocked: "Blocked", cancelled: "Cancelled", backlog: "Backlog", developing: "Building",
-      reviewing: "In review", changes_requested: "Changes requested", integrating: "Integrating",
-      done: "Done"
+      active: "进行中", selecting_tasks: "安排任务中", evaluating: "产品验收中",
+      waiting_for_input: "等待决定", stalled: "暂无进展", completed: "已完成",
+      blocked: "已阻塞", cancelled: "已取消", backlog: "待安排", developing: "开发中",
+      reviewing: "审查中", changes_requested: "返工中", integrating: "合入中", done: "已完成",
+      running: "自动推进", paused: "已暂停", develop: "开发", rework: "返工", review: "审查",
+      integrate: "合入", pending: "待开始", awaiting_report: "等待汇报", failed: "执行失败",
+      interrupted: "已中断", approved: "审查通过", needs_review: "等待审查",
+      needs_input: "等待决定", queued: "待安排"
     };
     let snapshots = [];
     let selectedProjectId = null;
@@ -30,8 +33,8 @@ export function renderBoardClient(accessToken: string): string {
       return status;
     };
     const label = status => statusLabels[status] || String(status || "").replaceAll("_", " ");
-    const formatTime = value => value ? new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
-    const initials = value => String(value || "C").split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
+    const formatTime = value => value ? new Date(value).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+    const initials = value => String(value || "C").trim().split(/\\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
 
     async function api(path, options = {}) {
       const response = await fetch(path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
@@ -59,14 +62,23 @@ export function renderBoardClient(accessToken: string): string {
         return;
       }
       const copy = {
-        missing: "Skills are not installed on this Mac yet.",
-        outdated: "Bundled Skills have changed and are ready to update.",
-        conflict: "Existing unmanaged Skills use Codrive names. Move them before installing."
+        missing: {
+          dialog: "完成一次本机设置后，就可以在 Codex 中使用 Codrive。",
+          trigger: "完成一次设置即可使用"
+        },
+        outdated: {
+          dialog: "Codrive 设置有更新，可以立即升级。",
+          trigger: "有新版本可以升级"
+        },
+        conflict: {
+          dialog: "检测到同名的本地扩展，请先处理后再继续。",
+          trigger: "同名扩展需要处理"
+        }
       }[skillStatus.state];
-      document.getElementById("setup-copy").textContent = copy;
-      document.getElementById("setup-trigger-copy").textContent = copy;
+      document.getElementById("setup-copy").textContent = copy.dialog;
+      document.getElementById("setup-trigger-copy").textContent = copy.trigger;
       const install = document.getElementById("setup-install");
-      install.textContent = skillStatus.state === "missing" ? "Install Skills" : "Update Skills";
+      install.textContent = skillStatus.state === "missing" ? "立即设置" : "立即升级";
       install.disabled = skillStatus.state === "conflict";
       trigger.hidden = false;
       const dismissedVersion = localStorage.getItem("codrive:skills-dismissed");
@@ -77,12 +89,12 @@ export function renderBoardClient(accessToken: string): string {
       const button = document.getElementById("setup-install");
       const status = document.getElementById("setup-status");
       button.disabled = true;
-      status.textContent = "Installing local Skills…";
+      status.textContent = "正在完成设置...";
       try {
         const result = await command("system.install_skills", {});
         skillStatus = result.skills;
         localStorage.removeItem("codrive:skills-dismissed");
-        status.textContent = "Skills installed. Codex is ready to drive.";
+        status.textContent = "设置完成，可以在 Codex 中开始了。";
         renderSetup();
       } catch (error) {
         status.textContent = error.message;
@@ -126,7 +138,7 @@ export function renderBoardClient(accessToken: string): string {
               '<span class="project-total">'+tasks.length+'</span>'+
             '</button>'
           ).join("")
-        : '<div class="project-list-empty">No projects yet.<br>Start one with <code>$codrive-forge</code>.</div>';
+        : '';
       host.querySelectorAll("[data-project]").forEach(button => {
         button.onclick = () => {
           selectedProjectId = button.dataset.project;
@@ -141,7 +153,7 @@ export function renderBoardClient(accessToken: string): string {
       const snapshot = currentSnapshot();
       const host = document.getElementById("project");
       if (!snapshot) {
-        host.innerHTML = '<div class="empty-workspace"><section class="empty-card"><div class="empty-number">NO. 00 / READY</div><h1>Put a product in motion.</h1><p>Codrive turns a confirmed product plan into visible development and review tasks. Start in Codex App; this workbench will come alive as soon as the project is registered.</p><div class="starter-command">Use $codrive-forge to plan and register this product.</div></section></div>';
+        host.innerHTML = '<div class="empty-workspace"><section class="empty-card"><div class="empty-kicker">从这里开始</div><h1>告诉 Codex 你的想法</h1><p>直接用自然语言描述，确认计划后，Codrive 会自动推进任务。</p><div class="starter-example">“用 Codrive 的方式帮我做一个经营太空货运公司的游戏。”</div></section></div>';
         return;
       }
       const { project, tasks } = snapshot;
@@ -150,33 +162,34 @@ export function renderBoardClient(accessToken: string): string {
       const done = tasks.filter(task => task.status === "done").length;
       const terminal = ["completed", "cancelled"].includes(project.status);
       const actions = terminal ? [] : [project.scheduling === "paused"
-        ? '<button class="action-button" data-project-action="resume">Resume</button>'
-        : '<button class="action-button" data-project-action="pause">Pause</button>'];
-      if (project.status !== "cancelled") actions.push('<button class="action-button danger" data-project-action="cancel">Cancel</button>');
-      const projectCopy = project.question || project.summary || project.repositoryPath;
+        ? '<button class="action-button" data-project-action="resume">继续</button>'
+        : '<button class="action-button" data-project-action="pause">暂停</button>'];
+      if (project.status !== "cancelled") actions.push('<button class="action-button danger" data-project-action="cancel">取消</button>');
+      const projectCopy = project.question || project.summary;
+      const projectDescription = projectCopy ? '<p>'+escapeHtml(projectCopy)+'</p>' : '';
       host.innerHTML =
         '<header class="workspace-header">'+
           '<div class="workspace-topline">'+
             '<div class="project-identity">'+
-              '<button id="mobile-projects" class="mobile-projects" type="button" aria-label="Open projects">☰</button>'+
+              '<button id="mobile-projects" class="mobile-projects" type="button" aria-label="打开项目列表">☰</button>'+
               '<span class="project-status-dot"></span>'+
-              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.status))+'</span><span>'+escapeHtml(project.scheduling)+'</span></div><h1>'+escapeHtml(project.name)+'</h1><p>'+escapeHtml(projectCopy)+'</p></div>'+
+              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.status))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>'+escapeHtml(project.name)+'</h1>'+projectDescription+'</div>'+
             '</div>'+
             '<div class="project-actions">'+actions.join("")+'</div>'+
           '</div>'+
-          '<div class="project-stats"><span><b>'+tasks.length+'</b>Total</span><span><b>'+active+'</b>In motion</span><span><b>'+waiting+'</b>Waiting</span><span><b>'+done+'</b>Done</span></div>'+
+          '<div class="project-stats"><span><b>'+tasks.length+'</b>总任务</span><span><b>'+active+'</b>进行中</span><span><b>'+waiting+'</b>等待</span><span><b>'+done+'</b>已完成</span></div>'+
         '</header>'+
         '<div class="board-wrap"><div class="board">'+columns.map(([key, columnLabel]) => {
           const cards = tasks.filter(task => bucket(task.status) === key);
           return '<section class="column" data-column="'+key+'"><div class="column-head"><span><i></i>'+columnLabel+'</span><b>'+cards.length+'</b></div><div class="column-body">'+
-            (cards.length ? cards.map(taskCard).join("") : '<div class="column-empty">Nothing here</div>')+
+            (cards.length ? cards.map(taskCard).join("") : '<div class="column-empty">暂无任务</div>')+
           '</div></section>';
         }).join("")+'</div></div>';
 
       document.getElementById("mobile-projects").onclick = () => document.body.classList.add("nav-open");
       host.querySelectorAll("[data-project-action]").forEach(button => {
         button.onclick = async () => {
-          if (button.dataset.projectAction === "cancel" && !window.confirm("Cancel this project?")) return;
+          if (button.dataset.projectAction === "cancel" && !window.confirm("确定取消这个项目吗？")) return;
           await command("project.control", { projectId: project.id, action: button.dataset.projectAction });
           await refresh();
         };
@@ -194,9 +207,9 @@ export function renderBoardClient(accessToken: string): string {
       const copy = task.question || task.summary || task.description;
       const alert = ["waiting_for_input", "blocked", "changes_requested"].includes(task.status) ? "task-alert" : "";
       return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
-        '<span class="task-card-top"><span class="task-index">TASK '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(task.status))+'</span></span>'+
+        '<span class="task-card-top"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(task.status))+'</span></span>'+
         '<h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(copy)+'</p>'+
-        '<span class="task-card-footer"><span class="task-action">'+escapeHtml(task.requestedAction || task.report?.outcome || "queued")+'</span><span>'+escapeHtml(formatTime(task.updatedAt))+'</span></span>'+
+        '<span class="task-card-footer"><span class="task-action">'+escapeHtml(label(task.requestedAction || task.report?.outcome || "queued"))+'</span><span>'+escapeHtml(formatTime(task.updatedAt))+'</span></span>'+
       '</button>';
     }
 
@@ -215,32 +228,32 @@ export function renderBoardClient(accessToken: string): string {
       const report = task.report;
       const criteria = task.acceptanceCriteria.length
         ? '<ul class="criteria-list '+(task.status === "done" ? "complete" : "")+'">'+task.acceptanceCriteria.map(item => '<li><i>'+(task.status === "done" ? "✓" : "")+'</i><span>'+escapeHtml(item)+'</span></li>').join("")+'</ul>'
-        : '<div class="report-card">No explicit acceptance criteria were recorded.</div>';
+        : '<div class="report-card">未设置验收标准。</div>';
       const question = task.question
-        ? '<div class="question-card"><b>Decision needed</b><p>'+escapeHtml(task.question)+'</p><small>Reply in the linked Codex task.</small></div>'
+        ? '<div class="question-card"><b>需要你决定</b><p>'+escapeHtml(task.question)+'</p><small>请在对应的 Codex 对话中回复。</small></div>'
         : '';
       const reportSection = report
-        ? '<section class="detail-section"><h3>Latest report <span>'+escapeHtml(label(report.outcome))+'</span></h3><div class="report-card">'+escapeHtml(report.summary)+'</div>'+
+        ? '<section class="detail-section"><h3>最新进展 <span>'+escapeHtml(label(report.outcome))+'</span></h3><div class="report-card">'+escapeHtml(report.summary)+'</div>'+
           (report.tests ? '<div class="tests-card">'+escapeHtml(report.tests)+'</div>' : '')+
           (report.findings.length ? '<ul class="finding-list">'+report.findings.map(finding => '<li>'+escapeHtml(finding)+'</li>').join("")+'</ul>' : '')+'</section>'
         : '';
       const links = [
-        task.developmentThreadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(task.developmentThreadId)+'"><span>Development task</span><span>Open ↗</span></a>' : '',
-        task.reviewThreadId ? '<a class="detail-link" href="codex://threads/'+escapeHtml(task.reviewThreadId)+'"><span>Latest review</span><span>Open ↗</span></a>' : ''
+        task.developmentThreadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(task.developmentThreadId)+'"><span>开发对话</span><span>打开 ↗</span></a>' : '',
+        task.reviewThreadId ? '<a class="detail-link" href="codex://threads/'+escapeHtml(task.reviewThreadId)+'"><span>最新审查</span><span>打开 ↗</span></a>' : ''
       ].filter(Boolean).join("");
       const controls = [
-        task.status === "blocked" ? '<button class="action-button" data-retry>Retry task</button>' : '',
-        !["done", "cancelled"].includes(task.status) ? '<button class="action-button danger" data-cancel-task>Cancel</button>' : ''
+        task.status === "blocked" ? '<button class="action-button" data-retry>重试</button>' : '',
+        !["done", "cancelled"].includes(task.status) ? '<button class="action-button danger" data-cancel-task>取消</button>' : ''
       ].filter(Boolean).join("");
       host.innerHTML =
-        '<header class="detail-head"><strong>Task details</strong><button id="close-detail" class="icon-button" type="button" aria-label="Close task details">×</button></header>'+
+        '<header class="detail-head"><strong>任务详情</strong><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
         '<div class="detail-body">'+
           '<div class="detail-status"><span></span>'+escapeHtml(label(task.status))+'</div><h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
           (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+question+
-          '<section class="detail-section"><h3>Acceptance criteria <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
+          '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           reportSection+
-          (links ? '<section class="detail-section"><h3>Codex tasks</h3><div class="conversation-list">'+links+'</div></section>' : '')+
-          '<section class="detail-section"><h3>Activity</h3><dl class="detail-meta"><dt>Current action</dt><dd>'+escapeHtml(task.requestedAction || "None")+'</dd><dt>Execution</dt><dd>'+escapeHtml(task.executionStatus || "Not started")+'</dd><dt>Review rounds</dt><dd>'+task.reviewCount+'</dd><dt>Created</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>Updated</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd><dt>Task ID</dt><dd>'+escapeHtml(task.id)+'</dd></dl></section>'+
+          (links ? '<section class="detail-section"><h3>Codex 对话</h3><div class="conversation-list">'+links+'</div></section>' : '')+
+          '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.requestedAction || task.status))+'</dd><dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
         '</div>';
       document.getElementById("close-detail").onclick = closeDetail;
       host.querySelector("[data-retry]")?.addEventListener("click", async () => {
@@ -248,7 +261,7 @@ export function renderBoardClient(accessToken: string): string {
         await refresh();
       });
       host.querySelector("[data-cancel-task]")?.addEventListener("click", async () => {
-        if (!window.confirm("Cancel this task?")) return;
+        if (!window.confirm("确定取消这个任务吗？")) return;
         await command("task.control", { taskId: task.id, action: "cancel" });
         closeDetail();
         await refresh();

@@ -5,7 +5,6 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
     project: {
       id: project.id,
       name: project.name,
-      repositoryPath: project.repositoryPath,
       status: project.status,
       scheduling: project.scheduling,
       requestedAction: project.requestedAction,
@@ -32,7 +31,6 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
             question: task.latestReport.question ?? null,
           }
         : null,
-      executionStatus: task.currentExecution?.status ?? null,
       developmentThreadId: task.developmentThreadId ?? null,
       reviewThreadId: task.reviewAttempts.at(-1)?.threadId ?? null,
       reviewCount: task.reviewAttempts.length,

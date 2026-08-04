@@ -16,9 +16,9 @@ export const boardStyles = `
     --amber: #eabf63;
     --rose: #e88d99;
     --shadow: 0 18px 50px rgba(18, 31, 26, .12);
-    --ui: "Avenir Next", "Century Gothic", "Trebuchet MS", sans-serif;
-    --condensed: "Avenir Next Condensed", "DIN Condensed", "Franklin Gothic Condensed", sans-serif;
-    --display: "Iowan Old Style", "Baskerville", "Times New Roman", serif;
+    --ui: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --condensed: "Avenir Next Condensed", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --display: "Songti SC", "STSong", "Iowan Old Style", serif;
   }
 
   * { box-sizing: border-box; }
@@ -113,8 +113,6 @@ export const boardStyles = `
   .project-label b { display: block; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
   .project-label small { display: block; margin-top: 3px; color: rgba(255,255,255,.44); font: 700 10px/1 var(--condensed); text-transform: capitalize; }
   .project-total { display: grid; min-width: 24px; height: 22px; place-items: center; padding: 0 6px; color: rgba(255,255,255,.6); background: rgba(0,0,0,.18); border-radius: 8px; font-size: 10px; }
-  .project-list-empty { padding: 12px 9px; color: rgba(255,255,255,.48); font-size: 12px; line-height: 1.5; }
-  .project-list-empty code { color: var(--mint); }
   .sidebar-footer { display: grid; gap: 9px; margin-top: auto; }
   .setup-trigger {
     display: grid;
@@ -134,9 +132,7 @@ export const boardStyles = `
   .setup-trigger > span:last-child { font-size: 12px; font-weight: 700; }
   .setup-trigger small { display: block; margin-top: 2px; color: rgba(255,255,255,.57); font-size: 9px; font-weight: 500; }
   .setup-icon { display: grid; width: 27px; height: 27px; place-items: center; background: var(--signal); border-radius: 8px; }
-  .local-note { display: flex; justify-content: space-between; align-items: center; padding: 9px 10px 0; border-top: 1px solid rgba(255,255,255,.1); }
-  .local-note span { color: var(--mint); font: 900 9px/1 var(--condensed); letter-spacing: .14em; }
-  .local-note small { color: rgba(255,255,255,.38); font-size: 9px; }
+  .local-note { padding: 10px 8px 1px; color: rgba(255,255,255,.42); border-top: 1px solid rgba(255,255,255,.1); font-size: 10px; }
 
   .workspace {
     min-width: 0;
@@ -239,11 +235,11 @@ export const boardStyles = `
   .column-empty { padding: 19px 12px; color: #9aa29e; border: 1px dashed #ccd1cc; border-radius: 11px; font-size: 10px; text-align: center; }
 
   .empty-workspace { display: grid; height: 100%; place-items: center; padding: 30px; }
-  .empty-card { width: min(620px, 100%); padding: 48px; background: rgba(255,255,255,.78); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); }
-  .empty-number { color: var(--signal); font: 900 11px/1 var(--condensed); letter-spacing: .16em; }
-  .empty-card h1 { margin: 13px 0 12px; font: 600 clamp(34px, 6vw, 60px)/.98 var(--display); letter-spacing: -.045em; }
-  .empty-card p { max-width: 480px; color: var(--muted); font-size: 14px; line-height: 1.65; }
-  .starter-command { margin-top: 24px; padding: 14px 16px; color: #d8efe5; background: var(--sidebar); border-radius: 11px; font: 600 12px/1.5 ui-monospace, "SFMono-Regular", monospace; }
+  .empty-card { width: min(560px, 100%); padding: 44px; background: rgba(255,255,255,.82); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); }
+  .empty-kicker { color: var(--signal); font: 800 11px/1 var(--ui); }
+  .empty-card h1 { margin: 15px 0 13px; font: 600 clamp(34px, 6vw, 54px)/1.06 var(--display); letter-spacing: -.035em; }
+  .empty-card p { max-width: 450px; color: var(--muted); font-size: 14px; line-height: 1.7; }
+  .starter-example { margin-top: 24px; padding: 15px 17px; color: #71402e; background: var(--signal-soft); border: 1px solid #f2c8b7; border-radius: 11px; font: 600 13px/1.55 var(--ui); }
 
   .task-detail {
     position: relative;
@@ -270,7 +266,7 @@ export const boardStyles = `
   .detail-description { margin: 13px 0 0; color: #56615b; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
   .detail-actions { display: flex; gap: 8px; margin-top: 19px; }
   .detail-section { margin-top: 27px; padding-top: 22px; border-top: 1px solid var(--line); }
-  .detail-section h3 { display: flex; justify-content: space-between; margin: 0 0 13px; font: 900 10px/1 var(--condensed); letter-spacing: .12em; text-transform: uppercase; }
+  .detail-section h3 { display: flex; justify-content: space-between; margin: 0 0 13px; font: 900 10px/1 var(--condensed); letter-spacing: .12em; }
   .detail-section h3 span { color: #9aa19d; }
   .criteria-list, .finding-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
   .criteria-list li { display: grid; grid-template-columns: 18px 1fr; gap: 9px; color: #46514b; font-size: 12px; line-height: 1.5; }
@@ -288,7 +284,7 @@ export const boardStyles = `
   .conversation-list { display: grid; gap: 8px; }
   .detail-link { justify-content: space-between; color: #24483d; background: #edf4f0; border: 1px solid #cbdcd3; }
   .detail-link:hover { background: #e1f0e8; }
-  .detail-meta { display: grid; grid-template-columns: 108px 1fr; gap: 10px 12px; margin: 0; font-size: 11px; }
+  .detail-meta { display: grid; grid-template-columns: 72px 1fr; gap: 10px 12px; margin: 0; font-size: 11px; }
   .detail-meta dt { color: #919995; }
   .detail-meta dd { margin: 0; overflow-wrap: anywhere; color: #46504b; }
 
@@ -325,9 +321,10 @@ export const boardStyles = `
     .workspace-header { height: 148px; padding: 18px 16px 15px; }
     .mobile-projects { display: grid; flex: 0 0 auto; place-items: center; }
     .project-status-dot { display: none; }
+    .project-title { max-width: calc(100vw - 190px); }
     .project-title h1 { font-size: 25px; }
-    .project-title p { max-width: calc(100vw - 88px); }
-    .project-actions { position: absolute; top: 92px; right: 16px; }
+    .project-title p { display: none; }
+    .project-actions { position: absolute; top: 18px; right: 16px; }
     .project-stats { gap: 14px; margin: 18px 0 0 49px; }
     .board-wrap { height: calc(100dvh - 148px); }
     .board { grid-template-columns: repeat(6, minmax(82vw, 1fr)); min-width: 492vw; padding: 14px 14px 30px; scroll-snap-type: x proximity; }
