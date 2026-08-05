@@ -1,5 +1,6 @@
 import type { WorkflowEngine } from "./workflow-engine.js";
 import type { CodexTurnStatus } from "./codex-gateway.js";
+import type { TaskExecution } from "../domain/types.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
 import type { JsonRpcNotification } from "../infrastructure/json-rpc-connection.js";
 
@@ -43,6 +44,16 @@ export class RecoveryManager {
   async handleNotification(notification: JsonRpcNotification): Promise<void> {
     if (notification.method === "transport/disconnected") {
       await this.recoverInterruptedExecutions();
+      return;
+    }
+    if (notification.method === "thread/status/changed") {
+      const params = notification.params as {
+        threadId?: string;
+        status?: { type?: string };
+      };
+      if (params.threadId && params.status?.type === "idle") {
+        await this.recoverDeferredTaskTurns(params.threadId);
+      }
       return;
     }
     if (notification.method !== "turn/completed") {
@@ -122,26 +133,32 @@ export class RecoveryManager {
         }
       }
       for (const task of snapshot.tasks) {
+        const execution = task.currentExecution;
         if (
-          task.currentExecution &&
-          activeStatuses.has(task.currentExecution.status) &&
-          task.requestedAction
+          !execution ||
+          !activeStatuses.has(execution.status) ||
+          !task.requestedAction
         ) {
-          const { threadId, turnId, attemptId } = task.currentExecution;
-          if (threadId && turnId) {
-            let turnStatus: CodexTurnStatus | null = null;
-            try {
-              turnStatus = await this.notifications.readTurnStatus(threadId, turnId);
-            } catch {
-              turnStatus = null;
-            }
-            if (turnStatus === "completed") {
-              await this.workflow.completeTurn(task.id, attemptId, turnId);
-              continue;
-            }
-          }
-          await this.workflow.recoverTask(task.id);
+          continue;
         }
+        if (isDeferredTaskTurn(execution)) {
+          await this.workflow.recoverTask(task.id);
+          continue;
+        }
+        const { threadId, turnId, attemptId } = execution;
+        if (threadId && turnId) {
+          let turnStatus: CodexTurnStatus | null = null;
+          try {
+            turnStatus = await this.notifications.readTurnStatus(threadId, turnId);
+          } catch {
+            turnStatus = null;
+          }
+          if (turnStatus === "completed") {
+            await this.workflow.completeTurn(task.id, attemptId, turnId);
+            continue;
+          }
+        }
+        await this.workflow.recoverTask(task.id);
       }
     }
   }
@@ -181,6 +198,7 @@ export class RecoveryManager {
         if (
           !execution ||
           !activeStatuses.has(execution.status) ||
+          isDeferredTaskTurn(execution) ||
           !isExpired(execution.leaseExpiresAt, now)
         ) {
           continue;
@@ -202,8 +220,27 @@ export class RecoveryManager {
   }
 
   async recoverUnattendedWork(now = new Date()): Promise<void> {
+    await this.recoverDeferredTaskTurns();
     await this.recoverExpiredExecutions(now);
     await this.workflow.recoverProjectsWithoutActiveWork();
+  }
+
+  async recoverDeferredTaskTurns(threadId?: string): Promise<void> {
+    for (const snapshot of await this.store.listProjects()) {
+      if (snapshot.project.status === "cancelled") continue;
+      for (const task of snapshot.tasks) {
+        const execution = task.currentExecution;
+        if (
+          !task.requestedAction ||
+          !execution ||
+          !isDeferredTaskTurn(execution) ||
+          (threadId && execution.threadId !== threadId)
+        ) {
+          continue;
+        }
+        await this.workflow.recoverTask(task.id);
+      }
+    }
   }
 
   private async readStatus(
@@ -221,4 +258,12 @@ export class RecoveryManager {
 
 function isExpired(expiresAt: string | undefined, now: Date): boolean {
   return expiresAt !== undefined && Date.parse(expiresAt) <= now.getTime();
+}
+
+function isDeferredTaskTurn(execution: TaskExecution): boolean {
+  return (
+    execution.status === "pending" ||
+    (execution.status === "awaiting_report" &&
+      execution.turnCompletedAt !== undefined)
+  );
 }

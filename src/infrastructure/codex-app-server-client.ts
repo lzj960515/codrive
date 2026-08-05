@@ -141,6 +141,15 @@ export class CodexAppServerClient implements CodexGateway {
     await this.requireConnection().request("turn/interrupt", { threadId, turnId });
   }
 
+  async isThreadActive(threadId: string): Promise<boolean> {
+    await this.start();
+    const response = await this.requireConnection().request<ThreadReadResponse>(
+      "thread/read",
+      { threadId },
+    );
+    return response.thread.status.type === "active";
+  }
+
   async readTurnStatus(
     threadId: string,
     turnId: string,

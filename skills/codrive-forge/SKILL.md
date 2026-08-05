@@ -16,6 +16,7 @@ compatibility: Requires Node.js 20+ and a running local Codrive service.
 4. 向用户展示完整产品摘要和任务计划，等待明确确认。
 5. 用户确认后，确保当前目录具备可供 Codrive 创建工作树的本地 Git 基线；需要时在当前目录初始化仓库、默认分支和初始提交。
 6. 使用当前项目根目录生成注册 JSON，并通过脚本写入 Codrive。
+7. 根据脚本返回结果向用户完成交接，然后结束当前回合。
 
 ## 注册格式
 
@@ -45,4 +46,8 @@ compatibility: Requires Node.js 20+ and a running local Codrive service.
 node <skill-directory>/scripts/codrive-forge.mjs register
 ```
 
-脚本成功后报告项目 ID、看板状态和第一个被调度的任务。服务不可用时保留生成的 JSON，并告诉用户运行 `npx codrive`。
+服务不可用时保留生成的 JSON，并告诉用户运行 `npx codrive`。
+
+## 结果交接
+
+注册成功后，报告项目 ID、看板状态、第一个被调度的任务，以及已经创建的开发对话入口。明确说明后续开发、审查、返工和合入已交给 Codrive，将由 Codrive 创建和调度的独立 Codex 对话继续执行。完成报告后结束当前回合。

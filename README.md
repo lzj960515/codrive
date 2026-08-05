@@ -13,6 +13,10 @@
   <p><strong>English</strong> · <a href="./README.zh-CN.md">简体中文</a></p>
 </div>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/lzj960515/codrive/main/docs/images/codrive-board.jpg" alt="Codrive local product board with sample projects and task details">
+</p>
+
 ## What is Codrive?
 
 Codrive is a lightweight local service that connects Codex App conversations, a task board, filesystem-backed product state, and reusable Skills.
@@ -63,7 +67,7 @@ Task selection is dynamic rather than a fixed dependency graph. Whenever capacit
 
 Project registration, added work, stage reports, completed or failed Codex turns, project controls, and service startup immediately trigger the next workflow decision. The concurrency limit is part of that decision, so changing it invalidates an earlier selection result. When Codrive starts, it upgrades local configurations created with the original one-task default to four.
 
-Once a minute, Codrive also runs a narrow recovery check. It resumes AI work that has gone a long time without a result, and it restarts task selection when an active project still has unstarted tasks but no Codex work at all. It does not repeatedly ask while work is active, task selection or product evaluation is already running, a task is waiting for the user, or Codex has already decided that the remaining tasks should wait for current work.
+Once a minute, Codrive also runs a narrow recovery check. It sends task messages that were waiting for their conversation to become idle, resumes AI work that has gone a long time without a result, and restarts task selection when an active project still has unstarted tasks but no Codex work at all. It does not repeatedly ask while work is active, task selection or product evaluation is already running, a task is waiting for the user, or Codex has already decided that the remaining tasks should wait for current work.
 
 ## Codex conversations
 
@@ -76,6 +80,8 @@ Once a minute, Codrive also runs a narrow recovery check. It resumes AI work tha
 | Task selection and product evaluation | Uses temporary conversations that do not crowd the recent-task list |
 
 Persistent task conversations stay attached to the product repository in Codex App. Codex reads the task's recorded worktree from `$codrive-task` and performs implementation, review, rework, and integration there, so App visibility and isolated code execution remain separate concerns.
+
+Each task conversation runs one Codex turn at a time. Before development, rework, integration, recovery, or a report reminder continues an existing conversation, Codrive waits until that conversation is idle; an idle event resumes it immediately, with the minute recovery check as a fallback.
 
 The board links directly to development and review conversations. If Codex needs a product decision, the board shows the question and sends you back to the relevant Codex task; Codrive does not create a second chat interface.
 

@@ -309,28 +309,7 @@ export class WorkflowEngine {
         updatedAt: now,
       };
       await this.store.saveTask(found.project.id, awaitingReport);
-      const reminderTurnId = await this.dispatcher.requestReport(
-        { project: found.project, task: awaitingReport },
-        execution.threadId!,
-      );
-      const reminded: Task = {
-        ...awaitingReport,
-        currentExecution: {
-          ...awaitingReport.currentExecution!,
-          turnId: reminderTurnId,
-          leaseExpiresAt: this.leaseExpiration(),
-        },
-      };
-      delete reminded.currentExecution?.turnCompletedAt;
-      await this.store.saveTask(found.project.id, reminded);
-      await this.recordEvent({
-        type: "turn.started",
-        projectId: found.project.id,
-        taskId,
-        attemptId,
-        data: { threadId: execution.threadId, turnId: reminderTurnId },
-      });
-      return reminded;
+      return this.continueTaskReportRequest(found.project, awaitingReport);
     });
   }
 
@@ -381,6 +360,12 @@ export class WorkflowEngine {
       if (!found.task.requestedAction) return found.task;
       if (found.task.currentExecution?.status === "pending") {
         return this.continueTaskDispatch(found.project, found.task);
+      }
+      if (
+        found.task.currentExecution?.status === "awaiting_report" &&
+        found.task.currentExecution.turnCompletedAt
+      ) {
+        return this.continueTaskReportRequest(found.project, found.task);
       }
       return this.restartTaskExecution(found.project, found.task);
     });
@@ -629,7 +614,7 @@ export class WorkflowEngine {
       data: { action: pending.currentExecution?.action },
     });
     const result = await this.continueTaskDispatch(project, pending);
-    return result.currentExecution?.status === "running";
+    return hasActiveTaskExecution(result);
   }
 
   private async continueTaskDispatch(project: Project, task: Task): Promise<Task> {
@@ -669,10 +654,13 @@ export class WorkflowEngine {
         }
       }
 
-      const turnId = await this.dispatcher.startTurn(
+      const dispatch = await this.dispatcher.startTurn(
         { project, task: withThread },
         threadId,
       );
+      if (dispatch.status === "conversation_active") return withThread;
+
+      const turnId = dispatch.turnId;
       const running: Task = {
         ...withThread,
         currentExecution: {
@@ -714,6 +702,38 @@ export class WorkflowEngine {
       });
       return failed;
     }
+  }
+
+  private async continueTaskReportRequest(
+    project: Project,
+    task: Task,
+  ): Promise<Task> {
+    const execution = task.currentExecution!;
+    const dispatch = await this.dispatcher.requestReport(
+      { project, task },
+      execution.threadId!,
+    );
+    if (dispatch.status === "conversation_active") return task;
+
+    const reminded: Task = {
+      ...task,
+      currentExecution: {
+        ...execution,
+        turnId: dispatch.turnId,
+        leaseExpiresAt: this.leaseExpiration(),
+      },
+      updatedAt: this.now(),
+    };
+    delete reminded.currentExecution?.turnCompletedAt;
+    await this.store.saveTask(project.id, reminded);
+    await this.recordEvent({
+      type: "turn.started",
+      projectId: project.id,
+      taskId: task.id,
+      attemptId: execution.attemptId,
+      data: { threadId: execution.threadId, turnId: dispatch.turnId },
+    });
+    return reminded;
   }
 
   private async finalizeTaskReport(

@@ -32,6 +32,34 @@ class StubNotifications implements NotificationSource {
   }
 }
 
+async function createTaskConversationFixture(conversationActive = false) {
+  const store = new ProjectStore(
+    await mkdtemp(join(tmpdir(), "codrive-task-conversation-")),
+  );
+  const created = await store.createProject({
+    name: "Game",
+    repositoryPath: "/workspace/game",
+    defaultBranch: "main",
+    productDocument: "# Game\n",
+    tasks: [{ title: "Loop", description: "Build loop", acceptanceCriteria: [] }],
+  });
+  const taskId = created.tasks[0]!.id;
+  await store.saveTask(created.project.id, {
+    ...created.tasks[0]!,
+    requestedAction: "develop",
+  });
+  const dispatcher = new RecordingTaskDispatcher();
+  dispatcher.conversationActive = conversationActive;
+  let sequence = 0;
+  const workflow = new WorkflowEngine(store, dispatcher, {
+    maxConcurrentTasks: 1,
+    now: () => "2026-08-03T00:00:00.000Z",
+    createId: (prefix) => `${prefix}_${++sequence}`,
+  });
+  await workflow.reconcile();
+  return { store, workflow, dispatcher, taskId };
+}
+
 describe("RecoveryManager", () => {
   let store: ProjectStore;
   let workflow: WorkflowEngine;
@@ -93,6 +121,97 @@ describe("RecoveryManager", () => {
       status: "awaiting_report",
       reportReminderCount: 1,
       turnId: "task_reminder_1",
+    });
+  });
+
+  it("waits for an active task conversation before sending the report reminder", async () => {
+    const { store, workflow, dispatcher, taskId } =
+      await createTaskConversationFixture();
+    const running = (await store.findTask(taskId))!.task;
+    dispatcher.conversationActive = true;
+
+    await workflow.completeTurn(
+      running.id,
+      running.currentExecution!.attemptId,
+      running.currentExecution!.turnId!,
+    );
+
+    const waiting = (await store.findTask(running.id))!.task;
+    expect(waiting.currentExecution).toMatchObject({
+      status: "awaiting_report",
+      turnId: running.currentExecution!.turnId,
+      turnCompletedAt: "2026-08-03T00:00:00.000Z",
+    });
+    expect(dispatcher.reminders).toHaveLength(0);
+
+    dispatcher.conversationActive = false;
+    const deferredRecovery = new RecoveryManager(
+      store,
+      workflow,
+      new StubNotifications(),
+    );
+    await deferredRecovery.recoverUnattendedWork(
+      new Date("2026-08-03T00:01:00.000Z"),
+    );
+
+    const reminded = (await store.findTask(running.id))!.task;
+    expect(reminded.currentExecution).toMatchObject({
+      status: "awaiting_report",
+      turnId: "task_reminder_1",
+    });
+    expect(reminded.currentExecution?.turnCompletedAt).toBeUndefined();
+    expect(dispatcher.reminders).toHaveLength(1);
+  });
+
+  it("retries a deferred task turn during the minute recovery check", async () => {
+    const { store, workflow, dispatcher, taskId } =
+      await createTaskConversationFixture(true);
+
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "developing",
+      currentExecution: { status: "pending" },
+    });
+    expect(dispatcher.started).toHaveLength(0);
+
+    dispatcher.conversationActive = false;
+    const deferredRecovery = new RecoveryManager(
+      store,
+      workflow,
+      new StubNotifications(),
+    );
+    await deferredRecovery.recoverUnattendedWork(
+      new Date("2026-08-03T00:01:00.000Z"),
+    );
+
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "developing",
+      currentExecution: { status: "running", turnId: "task_turn_1" },
+    });
+    expect(dispatcher.started).toHaveLength(1);
+  });
+
+  it("starts a deferred task as soon as its conversation becomes idle", async () => {
+    const { store, workflow, dispatcher, taskId } =
+      await createTaskConversationFixture(true);
+    const pending = (await store.findTask(taskId))!.task;
+    dispatcher.conversationActive = false;
+    const deferredRecovery = new RecoveryManager(
+      store,
+      workflow,
+      new StubNotifications(),
+    );
+
+    await deferredRecovery.handleNotification({
+      method: "thread/status/changed",
+      params: {
+        threadId: pending.currentExecution!.threadId,
+        status: { type: "idle" },
+      },
+    });
+
+    expect((await store.findTask(pending.id))!.task.currentExecution).toMatchObject({
+      status: "running",
+      turnId: "task_turn_1",
     });
   });
 

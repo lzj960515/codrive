@@ -43,4 +43,6 @@ node <skill-directory>/scripts/codrive-control.mjs record-decision <project-id>
 
 任务级问题直接在原开发或审查对话中回答。Codex 使用当前对话继续同一个执行阶段，并在完成后通过 `$codrive-task` 汇报，不把原始聊天内容复制到 Codrive。
 
-完成控制后报告新的业务状态，并在存在开发或审查对话 ID 时提供对应 `codex://threads/<id>` 链接。
+## 结果交接
+
+查询或控制完成后，报告新的业务状态，并在存在开发或审查对话 ID 时提供对应 `codex://threads/<id>` 链接。操作触发后续工作时，明确说明执行权已经交给 Codrive，后续开发、审查、返工和合入将由 Codrive 创建和调度的独立 Codex 对话继续执行。完成报告后结束当前回合。

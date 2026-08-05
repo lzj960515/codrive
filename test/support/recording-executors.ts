@@ -2,6 +2,7 @@ import type { ProjectExecutor } from "../../src/application/project-executor.js"
 import type {
   DispatchRequest,
   TaskDispatcher,
+  TurnDispatchResult,
 } from "../../src/application/task-dispatcher.js";
 import type { Project } from "../../src/domain/types.js";
 
@@ -11,24 +12,33 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
   readonly reminders: Array<DispatchRequest & { threadId: string }> = [];
   readonly interrupted: DispatchRequest[] = [];
   beforeStartTurn?: (request: DispatchRequest, threadId: string) => Promise<void>;
+  conversationActive = false;
 
   async openThread(request: DispatchRequest): Promise<string> {
     this.opened.push(request);
     return `task_thread_${this.opened.length}`;
   }
 
-  async startTurn(request: DispatchRequest, threadId: string): Promise<string> {
+  async startTurn(
+    request: DispatchRequest,
+    threadId: string,
+  ): Promise<TurnDispatchResult> {
+    if (this.conversationActive) return { status: "conversation_active" };
     await this.beforeStartTurn?.(request, threadId);
     this.started.push({ ...request, threadId });
-    return `task_turn_${this.started.length}`;
+    return { status: "started", turnId: `task_turn_${this.started.length}` };
   }
 
   async requestReport(
     request: DispatchRequest,
     threadId: string,
-  ): Promise<string> {
+  ): Promise<TurnDispatchResult> {
+    if (this.conversationActive) return { status: "conversation_active" };
     this.reminders.push({ ...request, threadId });
-    return `task_reminder_${this.reminders.length}`;
+    return {
+      status: "started",
+      turnId: `task_reminder_${this.reminders.length}`,
+    };
   }
 
   async interrupt(request: DispatchRequest): Promise<void> {

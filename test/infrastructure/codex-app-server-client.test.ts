@@ -49,6 +49,7 @@ describe("CodexAppServerClient", () => {
         "/workspace/game/.worktrees/task",
         "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
       );
+      await expect(client.isThreadActive(threadId)).resolves.toBe(true);
       await expect(client.readTurnStatus(threadId, turnId)).resolves.toBe(
         "inProgress",
       );
@@ -66,7 +67,7 @@ describe("CodexAppServerClient", () => {
     const resumeThread = requests.find(({ method }) => method === "thread/resume");
     const startTurn = requests.find(({ method }) => method === "turn/start");
     const interruptTurn = requests.find(({ method }) => method === "turn/interrupt");
-    const readThread = requests.find(({ method }) => method === "thread/read");
+    const readThreads = requests.filter(({ method }) => method === "thread/read");
 
     expect(startThread?.params).toMatchObject({
       approvalPolicy: "never",
@@ -86,7 +87,10 @@ describe("CodexAppServerClient", () => {
       threadId: "thread_1",
       turnId: "turn_1",
     });
-    expect(readThread?.params).toEqual({ threadId: "thread_1", includeTurns: true });
+    expect(readThreads.map(({ params }) => params)).toEqual([
+      { threadId: "thread_1" },
+      { threadId: "thread_1", includeTurns: true },
+    ]);
   });
 });
 
@@ -106,7 +110,7 @@ lines.on("line", (line) => {
   if (request.method === "thread/start") result = { thread: { id: "thread_1" } };
   if (request.method === "thread/resume") result = { thread: { id: request.params.threadId } };
   if (request.method === "turn/start") result = { turn: { id: "turn_1" } };
-  if (request.method === "thread/read") result = { thread: { turns: [{ id: "turn_1", status: "inProgress" }] } };
+  if (request.method === "thread/read") result = { thread: { status: { type: "active", activeFlags: [] }, turns: [{ id: "turn_1", status: "inProgress" }] } };
   process.stdout.write(JSON.stringify({ id: request.id, result }) + "\\n");
 });
 `;

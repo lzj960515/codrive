@@ -8,6 +8,7 @@ class RecordingGateway implements CodexGateway {
   calls: Array<{ method: string; args: unknown[] }> = [];
   thread = 0;
   turn = 0;
+  threadActive = false;
 
   async startThread(cwd: string, title: string): Promise<string> {
     this.calls.push({ method: "startThread", args: [cwd, title] });
@@ -29,6 +30,10 @@ class RecordingGateway implements CodexGateway {
 
   async readTurnStatus(): Promise<null> {
     return null;
+  }
+
+  async isThreadActive(): Promise<boolean> {
+    return this.threadActive;
   }
 }
 
@@ -75,11 +80,11 @@ describe("CodexTaskDispatcher", () => {
     const request = { project, task: task() };
 
     const threadId = await dispatcher.openThread(request);
-    const turnId = await dispatcher.startTurn(request, threadId);
+    const turn = await dispatcher.startTurn(request, threadId);
 
-    expect({ threadId, turnId }).toEqual({
+    expect({ threadId, turn }).toEqual({
       threadId: "thread_1",
-      turnId: "turn_1",
+      turn: { status: "started", turnId: "turn_1" },
     });
     expect(gateway.calls).toEqual([
       {
@@ -214,6 +219,32 @@ describe("CodexTaskDispatcher", () => {
         ],
       },
     ]);
+  });
+
+  it("leaves task and report messages pending while the conversation is active", async () => {
+    const gateway = new RecordingGateway();
+    gateway.threadActive = true;
+    const dispatcher = new CodexTaskDispatcher(gateway);
+    const request = {
+      project,
+      task: task({
+        developmentThreadId: "thread_1",
+        currentExecution: {
+          attemptId: "attempt_2",
+          action: "rework",
+          status: "pending",
+          startedAt: timestamp,
+          threadId: "thread_1",
+        },
+      }),
+    };
+
+    const taskTurn = await dispatcher.startTurn(request, "thread_1");
+    const reportTurn = await dispatcher.requestReport(request, "thread_1");
+
+    expect(taskTurn).toEqual({ status: "conversation_active" });
+    expect(reportTurn).toEqual({ status: "conversation_active" });
+    expect(gateway.calls).toEqual([]);
   });
 
   it("interrupts the active App Server turn when a task is cancelled", async () => {

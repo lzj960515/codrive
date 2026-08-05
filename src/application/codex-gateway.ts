@@ -13,5 +13,6 @@ export interface CodexGateway {
   resumeThread(threadId: string, cwd: string): Promise<void>;
   startTurn(threadId: string, cwd: string, prompt: string): Promise<string>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
+  isThreadActive(threadId: string): Promise<boolean>;
   readTurnStatus(threadId: string, turnId: string): Promise<CodexTurnStatus | null>;
 }

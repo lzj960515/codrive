@@ -16,12 +16,15 @@ compatibility: Requires Node.js 20+ and a running local Codrive service.
 4. 结合现有任务避免复制已经完成的工作，并保持每个新增任务可以独立理解。
 5. 向用户展示产品文档变化和新增任务，等待明确确认。
 6. 通过脚本添加任务；已完成项目重新进入活动状态，暂停项目继续保持暂停。
+7. 根据脚本返回结果向用户完成交接，然后结束当前回合。
 
-查询项目：
+## 查询项目
 
 ```text
 node <skill-directory>/scripts/codrive-work.mjs show <project-id>
 ```
+
+## 添加任务
 
 将以下 JSON 通过标准输入传给添加命令：
 
@@ -41,3 +44,7 @@ node <skill-directory>/scripts/codrive-work.mjs show <project-id>
 ```text
 node <skill-directory>/scripts/codrive-work.mjs add <project-id>
 ```
+
+## 结果交接
+
+添加成功后，报告新增任务 ID、当前看板状态，以及已经创建的开发对话入口。明确说明后续开发、审查、返工和合入已交给 Codrive，将由 Codrive 创建和调度的独立 Codex 对话继续执行。完成报告后结束当前回合。

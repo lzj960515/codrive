@@ -26,6 +26,9 @@ class RecordingGateway implements CodexGateway {
   }
 
   async interruptTurn(): Promise<void> {}
+  async isThreadActive(): Promise<boolean> {
+    return false;
+  }
   async readTurnStatus(): Promise<null> {
     return null;
   }
