@@ -251,7 +251,11 @@ export class WorkflowEngine {
 
   submitProjectReport(report: ProjectReport): Promise<Project> {
     return this.enqueue(async () => {
-      const reported = await this.requireProjectExecutions().submitReport(report);
+      const reported = await this.requireProjectExecutions().submitReport(
+        report,
+        (project, currentReport) =>
+          this.validateProjectReportBeforeSave(project, currentReport),
+      );
       if (reported.currentExecution?.turnCompletedAt) {
         const completed = await this.finalizeProjectReport(reported, report);
         await this.reconcileInternal();
@@ -767,40 +771,14 @@ export class WorkflowEngine {
     project: Project,
     report: ProjectReport,
   ): Promise<Project> {
-    const snapshot = await this.requireSnapshot(project.id);
+    const selected = await this.validateTaskSelectionReport(project.id, report);
     if (report.outcome === "selected") {
-      const taskIds = report.taskIds!;
-      if (new Set(taskIds).size !== taskIds.length) {
-        throw new WorkflowConflictError("Selected task IDs must be unique");
-      }
-      const selected = taskIds.map((taskId) => {
-        const task = snapshot.tasks.find(({ id }) => id === taskId);
-        if (!task || task.status !== "backlog" || task.requestedAction) {
-          throw new WorkflowConflictError(`Task ${taskId} is not available for selection`);
-        }
-        return task;
-      });
-      const availableSlots = Math.max(
-        0,
-        this.options.maxConcurrentTasks - countActiveTasks(await this.store.listProjects()),
-      );
-      if (selected.length > availableSlots) {
-        throw new WorkflowConflictError(
-          `Selected ${selected.length} tasks but only ${availableSlots} slots are available`,
-        );
-      }
       for (const task of selected) {
         await this.store.saveTask(project.id, {
           ...task,
           requestedAction: "develop",
           updatedAt: this.now(),
         });
-      }
-    } else if (report.outcome === "wait_for_active_tasks") {
-      if (!snapshot.tasks.some(hasOngoingTaskExecution)) {
-        throw new WorkflowConflictError(
-          "wait_for_active_tasks requires at least one ongoing task",
-        );
       }
     }
 
@@ -830,6 +808,63 @@ export class WorkflowEngine {
       data: { taskIds: report.taskIds ?? [] },
     });
     return completed;
+  }
+
+  private async validateProjectReportBeforeSave(
+    project: Project,
+    report: ProjectReport,
+  ): Promise<void> {
+    if (project.currentExecution?.action !== "select_tasks") return;
+    await this.validateTaskSelectionReport(project.id, report);
+  }
+
+  private async validateTaskSelectionReport(
+    projectId: string,
+    report: ProjectReport,
+  ): Promise<Task[]> {
+    const snapshot = await this.requireSnapshot(projectId);
+    if (report.outcome === "selected") {
+      const taskIds = report.taskIds!;
+      if (new Set(taskIds).size !== taskIds.length) {
+        throw new WorkflowConflictError("Selected task IDs must be unique");
+      }
+
+      const availableTasks = snapshot.tasks.filter(
+        ({ status, requestedAction }) => status === "backlog" && !requestedAction,
+      );
+      const availableTasksById = new Map(availableTasks.map((task) => [task.id, task]));
+      const unavailableTaskIds = taskIds.filter(
+        (taskId) => !availableTasksById.has(taskId),
+      );
+      if (unavailableTaskIds.length > 0) {
+        const availableTaskIds = availableTasks.map(({ id }) => id).join(", ");
+        throw new WorkflowConflictError(
+          `Task IDs ${unavailableTaskIds.join(", ")} are not available for selection. ` +
+            `Available task IDs: ${availableTaskIds || "none"}`,
+        );
+      }
+
+      const availableSlots = Math.max(
+        0,
+        this.options.maxConcurrentTasks - countActiveTasks(await this.store.listProjects()),
+      );
+      if (taskIds.length > availableSlots) {
+        throw new WorkflowConflictError(
+          `Selected ${taskIds.length} tasks but only ${availableSlots} slots are available`,
+        );
+      }
+      return taskIds.map((taskId) => availableTasksById.get(taskId)!);
+    }
+
+    if (
+      report.outcome === "wait_for_active_tasks" &&
+      !snapshot.tasks.some(hasOngoingTaskExecution)
+    ) {
+      throw new WorkflowConflictError(
+        "wait_for_active_tasks requires at least one ongoing task",
+      );
+    }
+    return [];
   }
 
   private async finalizeProductEvaluation(

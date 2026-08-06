@@ -60,7 +60,10 @@ export class ProjectExecutionCoordinator {
     return this.dispatch(pending);
   }
 
-  async submitReport(report: ProjectReport): Promise<Project> {
+  async submitReport(
+    report: ProjectReport,
+    validateBeforeSave: (project: Project, report: ProjectReport) => Promise<void>,
+  ): Promise<Project> {
     const project = await this.requireProject(report.projectId);
     if (project.latestReport?.attemptId === report.attemptId) {
       if (isDeepStrictEqual(project.latestReport, report)) return project;
@@ -80,6 +83,7 @@ export class ProjectExecutionCoordinator {
       );
     }
     validateProjectReport(execution.action, report);
+    await validateBeforeSave(project, report);
 
     const reported: Project = {
       ...project,

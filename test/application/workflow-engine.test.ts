@@ -225,27 +225,86 @@ describe("WorkflowEngine", () => {
     expect(taskDispatcher.started).toHaveLength(1);
   });
 
-  it("validates selected IDs and available capacity without deciding dependencies", async () => {
-    const created = await registerProject();
+  it("lets the same project turn correct invalid task selection reports", async () => {
+    const created = await registerProject(3);
     const project = (await store.getProject(created.project.id))!.project;
     const execution = project.currentExecution!;
+
+    const expectRejectedWithoutEndingTurn = async (
+      report: Pick<ProjectReport, "outcome" | "summary" | "taskIds">,
+      expectedError: RegExp,
+    ) => {
+      await expect(
+        workflow.submitProjectReport({
+          projectId: created.project.id,
+          attemptId: execution.attemptId,
+          ...report,
+        }),
+      ).rejects.toThrow(expectedError);
+
+      const rejected = (await store.getProject(project.id))!.project;
+      expect(rejected.latestReport).toBeUndefined();
+      expect(rejected.currentExecution).toMatchObject({
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+        turnId: execution.turnId,
+        status: "running",
+      });
+      expect(rejected.currentExecution?.report).toBeUndefined();
+    };
+
+    await expectRejectedWithoutEndingTurn(
+      {
+        outcome: "selected",
+        summary: "Duplicate selection",
+        taskIds: [created.tasks[0]!.id, created.tasks[0]!.id],
+      },
+      /unique/i,
+    );
+    await expectRejectedWithoutEndingTurn(
+      {
+        outcome: "selected",
+        summary: "Unknown task",
+        taskIds: ["task_does_not_exist"],
+      },
+      new RegExp(`not available.*Available task IDs:.*${created.tasks[0]!.id}`, "i"),
+    );
+    await expectRejectedWithoutEndingTurn(
+      {
+        outcome: "selected",
+        summary: "Too many tasks",
+        taskIds: created.tasks.map(({ id }) => id),
+      },
+      /only 2 slots are available/i,
+    );
+    await expectRejectedWithoutEndingTurn(
+      {
+        outcome: "wait_for_active_tasks",
+        summary: "Wait without ongoing work",
+      },
+      /requires at least one ongoing task/i,
+    );
+    expect(projectExecutor.opened).toHaveLength(1);
+    expect(projectExecutor.started).toHaveLength(1);
 
     await workflow.submitProjectReport({
       projectId: created.project.id,
       attemptId: execution.attemptId,
       outcome: "selected",
-      summary: "Invalid selection",
-      taskIds: [created.tasks[0]!.id, created.tasks[0]!.id],
+      summary: "Corrected selection",
+      taskIds: created.tasks.slice(0, 2).map(({ id }) => id),
     });
+    await workflow.completeProjectTurn(
+      project.id,
+      execution.attemptId,
+      execution.turnId!,
+    );
 
-    await expect(
-      workflow.completeProjectTurn(
-        project.id,
-        execution.attemptId,
-        execution.turnId!,
-      ),
-    ).rejects.toThrow(/unique/i);
-    expect(taskDispatcher.started).toHaveLength(0);
+    expect(projectExecutor.opened).toHaveLength(1);
+    expect(projectExecutor.started).toHaveLength(1);
+    expect(taskDispatcher.started.map(({ task }) => task.id)).toEqual(
+      created.tasks.slice(0, 2).map(({ id }) => id),
+    );
   });
 
   it("keeps project lifecycle and scheduling control independent", async () => {
