@@ -221,9 +221,15 @@ export class ProjectStore {
     await this.atomicWriteJson(this.taskPath(projectId, task.id), task);
   }
 
-  async appendEvent(event: CodriveEvent): Promise<void> {
+  async appendEvent(
+    event: CodriveEvent,
+    options: { captureState?: boolean } = {},
+  ): Promise<void> {
     await mkdir(this.projectDirectory(event.projectId), { recursive: true });
-    const storedEvent = await this.withRecoveryState(event);
+    const storedEvent =
+      options.captureState === false
+        ? event
+        : await this.withRecoveryState(event);
     await appendFile(
       this.eventsPath(event.projectId),
       `${JSON.stringify(storedEvent)}\n`,

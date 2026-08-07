@@ -164,6 +164,7 @@ export function renderBoardClient(accessToken: string): string {
       const actions = terminal ? [] : [project.scheduling === "paused"
         ? '<button class="action-button" data-project-action="resume">继续</button>'
         : '<button class="action-button" data-project-action="pause">暂停</button>'];
+      if (project.status === "blocked" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
       if (project.status !== "cancelled") actions.push('<button class="action-button danger" data-project-action="cancel">取消</button>');
       const projectCopy = project.question || project.summary;
       const projectDescription = projectCopy ? '<p>'+escapeHtml(projectCopy)+'</p>' : '';
@@ -189,7 +190,7 @@ export function renderBoardClient(accessToken: string): string {
       document.getElementById("mobile-projects").onclick = () => document.body.classList.add("nav-open");
       host.querySelectorAll("[data-project-action]").forEach(button => {
         button.onclick = async () => {
-          if (button.dataset.projectAction === "cancel" && !window.confirm("确定取消这个项目吗？")) return;
+          if (button.dataset.projectAction === "cancel" && !window.confirm("取消会永久终止这个项目。确定继续吗？")) return;
           await command("project.control", { projectId: project.id, action: button.dataset.projectAction });
           await refresh();
         };
@@ -261,7 +262,7 @@ export function renderBoardClient(accessToken: string): string {
         await refresh();
       });
       host.querySelector("[data-cancel-task]")?.addEventListener("click", async () => {
-        if (!window.confirm("确定取消这个任务吗？")) return;
+        if (!window.confirm("取消会永久终止这个任务，之后不能重试。确定继续吗？")) return;
         await command("task.control", { taskId: task.id, action: "cancel" });
         closeDetail();
         await refresh();

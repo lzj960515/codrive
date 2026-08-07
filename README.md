@@ -67,7 +67,7 @@ Task selection is dynamic rather than a fixed dependency graph. Whenever capacit
 
 Project registration, added work, stage reports, completed or failed Codex turns, project controls, and service startup immediately trigger the next workflow decision. The concurrency limit is part of that decision, so changing it invalidates an earlier selection result. When Codrive starts, it upgrades local configurations created with the original one-task default to four.
 
-Once a minute, Codrive also runs a narrow recovery check. It sends task messages that were waiting for their conversation to become idle, resumes AI work that has gone a long time without a result, and restarts task selection when an active project still has unstarted tasks but no Codex work at all. It does not repeatedly ask while work is active, task selection or product evaluation is already running, a task is waiting for the user, or Codex has already decided that the remaining tasks should wait for current work.
+Once a minute, Codrive also runs a narrow recovery check. It sends task messages that were waiting for their conversation to become idle, resumes AI work that has gone a long time without a result, and restarts task selection when an active project still has unstarted tasks but no Codex work at all. A turn that App Server still reports as `inProgress` keeps its current attempt and receives a renewed lease. Only a confirmed missing or terminal turn is replaced. Startup recovery completes before the command API becomes ready, so user retries cannot race with it.
 
 ## Codex conversations
 
@@ -96,6 +96,8 @@ The board links directly to development and review conversations. If Codex needs
 
 Skills read the current project and task context from Codrive, so automated task messages stay short and do not repeat the full product specification.
 
+Retry and cancel have different lifecycle meanings. Retry creates a new attempt for a failed task or project execution that still has a requested action. A task waiting for input continues the same attempt in its original conversation. Cancel permanently ends the task or project.
+
 ## Commands
 
 ```text
@@ -105,7 +107,7 @@ npx codrive doctor   Check Node.js, Codex, and login readiness
 npx codrive setup    Install Skills without using the Web prompt
 ```
 
-Runtime logs are written to `~/.codrive/codrive.log`. The terminal and log file use the same local-time timestamps and include Codrive lifecycle messages, HTTP errors, and Codex App Server stderr.
+Runtime logs are written to `~/.codrive/codrive.log`. The terminal and log file use the same local-time timestamps and include structured lifecycle events alongside HTTP errors and Codex App Server stderr. Lifecycle events record command and correlation IDs, source, task/project IDs, attempt/thread/turn IDs, recovery observations and decisions, concise state transitions, outcomes, and durations. They omit prompts, chat messages, and report bodies. Each project's append-only `events.ndjson` remains the durable audit history.
 
 ## Security
 

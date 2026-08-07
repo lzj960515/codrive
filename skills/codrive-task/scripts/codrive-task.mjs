@@ -35,7 +35,7 @@ async function request(path, options = {}) {
   const config = await loadConfig();
   const response = await fetch(`http://${config.host}:${config.port}${path}`, {
     ...options,
-    headers: { "content-type": "application/json", "x-codrive-token": config.accessToken },
+    headers: { "content-type": "application/json", "x-codrive-token": config.accessToken, "x-codrive-source": "skill" },
   });
   if (!response.ok) fail(`Codrive ${response.status}: ${await response.text()}`);
   return response.json();

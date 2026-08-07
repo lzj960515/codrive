@@ -83,4 +83,37 @@ describe("CodriveLog", () => {
     expect(terminal).toBe(expected);
     expect(terminal).not.toContain("2026-08-04T03:05:37.362881Z");
   });
+
+  it("writes lifecycle events without persisted report or conversation content", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-log-"));
+    const logPath = join(directory, "codrive.log");
+    const log = new CodriveLog(logPath, { writeToTerminal: () => undefined });
+
+    log.event({
+      schemaVersion: 1,
+      eventId: "event_1",
+      type: "task.transitioned",
+      component: "workflow",
+      source: "http",
+      projectId: "project_1",
+      taskId: "task_1",
+      attemptId: "attempt_1",
+      occurredAt: "2026-08-04T03:05:37.362Z",
+      before: { status: "blocked", executionStatus: "failed" },
+      after: { status: "developing", executionStatus: "pending" },
+      state: {
+        task: {
+          latestReport: { summary: "PRIVATE_REPORT_BODY_MUST_NOT_APPEAR" },
+        },
+      },
+    } as never);
+    log.close();
+
+    const contents = await readFile(logPath, "utf8");
+    expect(contents).toContain('[lifecycle] EVENT {"schemaVersion":1');
+    expect(contents).toContain('"type":"task.transitioned"');
+    expect(contents).toContain('"before":{"status":"blocked"');
+    expect(contents).not.toContain("state");
+    expect(contents).not.toContain("PRIVATE_REPORT_BODY_MUST_NOT_APPEAR");
+  });
 });

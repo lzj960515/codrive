@@ -11,6 +11,32 @@ export type ProjectStatus =
 export type SchedulingStatus = "running" | "paused";
 export type ProjectAction = "select_tasks" | "evaluate_product";
 
+export type LifecycleEventSource =
+  | "http"
+  | "skill"
+  | "scheduler"
+  | "recovery"
+  | "app_server"
+  | "system";
+
+export type LifecycleEventComponent =
+  | "http"
+  | "workflow"
+  | "recovery"
+  | "app_server"
+  | "store";
+
+export interface LifecycleState {
+  status: string;
+  scheduling?: SchedulingStatus;
+  requestedAction?: ProjectAction | TaskAction | null;
+  attemptId?: string;
+  action?: ProjectAction | TaskAction;
+  executionStatus?: ExecutionStatus;
+  threadId?: string;
+  turnId?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -152,14 +178,32 @@ export interface Task {
   updatedAt: string;
 }
 
-export interface CodriveEvent {
+export interface LifecycleEvent {
+  schemaVersion?: 1;
   eventId: string;
   type: string;
-  projectId: string;
+  component?: LifecycleEventComponent;
+  source?: LifecycleEventSource;
+  projectId?: string;
   taskId?: string;
   attemptId?: string;
+  threadId?: string;
+  turnId?: string;
+  commandId?: string;
+  correlationId?: string;
+  causationId?: string;
   occurredAt: string;
+  before?: LifecycleState;
+  after?: LifecycleState;
+  decision?: string;
+  result?: string;
+  reason?: string;
+  durationMs?: number;
   data?: Record<string, unknown>;
+}
+
+export interface CodriveEvent extends LifecycleEvent {
+  projectId: string;
   state?: {
     project?: Project;
     task?: Task;
@@ -198,7 +242,10 @@ export type CodriveCommand =
     }
   | {
       type: "project.control";
-      payload: { projectId: string; action: "pause" | "resume" | "cancel" };
+      payload: {
+        projectId: string;
+        action: "pause" | "resume" | "retry" | "cancel";
+      };
     }
   | {
       type: "project.record_decision";

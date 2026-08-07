@@ -7,6 +7,8 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 
+import type { LifecycleEvent } from "../domain/types.js";
+
 interface CodriveLogOptions {
   now?: () => Date;
   writeToTerminal?: (text: string) => void;
@@ -45,6 +47,18 @@ export class CodriveLog {
 
   error(source: string, message: string): void {
     this.writeLine(source, "ERROR", message, this.now());
+  }
+
+  event(event: LifecycleEvent): void {
+    const { state: _state, ...details } = event as LifecycleEvent & {
+      state?: unknown;
+    };
+    this.writeLine(
+      "lifecycle",
+      "EVENT",
+      JSON.stringify(details),
+      new Date(event.occurredAt),
+    );
   }
 
   close(): void {

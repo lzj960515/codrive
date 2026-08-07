@@ -1,8 +1,13 @@
 import type { WorkflowEngine } from "./workflow-engine.js";
 import type { CodexTurnStatus } from "./codex-gateway.js";
-import type { TaskExecution } from "../domain/types.js";
+import type { ProjectExecution, TaskExecution } from "../domain/types.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
 import type { JsonRpcNotification } from "../infrastructure/json-rpc-connection.js";
+
+interface TurnObservation {
+  status: CodexTurnStatus | null;
+  error?: string;
+}
 
 export interface NotificationSource {
   onNotification(listener: (notification: JsonRpcNotification) => void): () => void;
@@ -27,7 +32,14 @@ export class RecoveryManager {
       void this.handleNotification(notification);
     });
     await this.recoverInterruptedExecutions();
-    await this.workflow.recoverProjectsWithoutActiveWork();
+    await this.workflow.lifecycle.run(
+      {
+        source: "recovery",
+        component: "recovery",
+        correlationId: this.workflow.lifecycle.id("recovery_scan"),
+      },
+      () => this.workflow.recoverProjectsWithoutActiveWork(),
+    );
     this.leaseTimer = setInterval(async () => {
       await this.recoverUnattendedWork();
     }, 60_000);
@@ -42,216 +54,412 @@ export class RecoveryManager {
   }
 
   async handleNotification(notification: JsonRpcNotification): Promise<void> {
-    if (notification.method === "transport/disconnected") {
-      await this.recoverInterruptedExecutions();
-      return;
-    }
-    if (notification.method === "thread/status/changed") {
-      const params = notification.params as {
-        threadId?: string;
-        status?: { type?: string };
-      };
-      if (params.threadId && params.status?.type === "idle") {
-        await this.recoverDeferredTaskTurns(params.threadId);
-      }
-      return;
-    }
-    if (notification.method !== "turn/completed") {
-      return;
-    }
+    const correlationId = this.workflow.lifecycle.id("notification");
+    await this.workflow.lifecycle.run(
+      { source: "app_server", component: "app_server", correlationId },
+      async () => {
+        const received = await this.workflow.lifecycle.record({
+          type: "app_server.notification_received",
+          result: notification.method,
+        });
+        await this.workflow.lifecycle.run(
+          {
+            source: "app_server",
+            component: "app_server",
+            causationId: received.eventId,
+          },
+          async () => {
+            if (notification.method === "transport/disconnected") {
+              await this.recoverInterruptedExecutions();
+              return;
+            }
+            if (notification.method === "thread/status/changed") {
+              const params = notification.params as {
+                threadId?: string;
+                status?: { type?: string };
+              };
+              if (params.threadId && params.status?.type === "idle") {
+                await this.recoverDeferredTaskTurns(params.threadId);
+              }
+              return;
+            }
+            if (notification.method !== "turn/completed") return;
+            await this.handleCompletedTurn(notification);
+          }
+        );
+      },
+    );
+  }
+
+  async recoverInterruptedExecutions(): Promise<void> {
+    const correlationId = this.workflow.lifecycle.id("recovery_scan");
+    await this.workflow.lifecycle.run(
+      { source: "recovery", component: "recovery", correlationId },
+      async () => {
+        await this.workflow.lifecycle.record({
+          type: "recovery.scan_started",
+          result: "startup_or_reconnect",
+        });
+        const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
+        for (const snapshot of await this.store.listProjects()) {
+          if (snapshot.project.status === "cancelled") continue;
+          const projectExecution = snapshot.project.currentExecution;
+          if (projectExecution && activeStatuses.has(projectExecution.status)) {
+            await this.recoverInterruptedProject(
+              snapshot.project.id,
+              projectExecution,
+            );
+          }
+          for (const task of snapshot.tasks) {
+            const execution = task.currentExecution;
+            if (
+              !execution ||
+              !activeStatuses.has(execution.status) ||
+              !task.requestedAction
+            ) {
+              continue;
+            }
+            await this.recoverInterruptedTask(snapshot.project.id, task.id, execution);
+          }
+        }
+        await this.workflow.lifecycle.record({
+          type: "recovery.scan_completed",
+          result: "completed",
+        });
+      },
+    );
+  }
+
+  async recoverExpiredExecutions(now = new Date()): Promise<void> {
+    const correlationId = this.workflow.lifecycle.id("recovery_scan");
+    await this.workflow.lifecycle.run(
+      { source: "recovery", component: "recovery", correlationId },
+      async () => {
+        const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
+        for (const snapshot of await this.store.listProjects()) {
+          const projectExecution = snapshot.project.currentExecution;
+          if (
+            projectExecution &&
+            activeStatuses.has(projectExecution.status) &&
+            isExpired(projectExecution.leaseExpiresAt, now)
+          ) {
+            await this.recoverInterruptedProject(
+              snapshot.project.id,
+              projectExecution,
+            );
+          }
+
+          if (snapshot.project.status === "cancelled") continue;
+          for (const task of snapshot.tasks) {
+            const execution = task.currentExecution;
+            if (
+              !execution ||
+              !activeStatuses.has(execution.status) ||
+              isDeferredTaskTurn(execution) ||
+              !isExpired(execution.leaseExpiresAt, now)
+            ) {
+              continue;
+            }
+            await this.recoverInterruptedTask(
+              snapshot.project.id,
+              task.id,
+              execution,
+            );
+          }
+        }
+      },
+    );
+  }
+
+  async recoverUnattendedWork(now = new Date()): Promise<void> {
+    await this.recoverDeferredTaskTurns();
+    await this.recoverExpiredExecutions(now);
+    await this.workflow.lifecycle.run(
+      {
+        source: "recovery",
+        component: "recovery",
+        correlationId: this.workflow.lifecycle.id("recovery_scan"),
+      },
+      () => this.workflow.recoverProjectsWithoutActiveWork(),
+    );
+  }
+
+  async recoverDeferredTaskTurns(threadId?: string): Promise<void> {
+    const correlationId = this.workflow.lifecycle.id("recovery_scan");
+    await this.workflow.lifecycle.run(
+      { source: "recovery", component: "recovery", correlationId },
+      async () => {
+        for (const snapshot of await this.store.listProjects()) {
+          if (snapshot.project.status === "cancelled") continue;
+          for (const task of snapshot.tasks) {
+            const execution = task.currentExecution;
+            if (
+              !task.requestedAction ||
+              !execution ||
+              !isDeferredTaskTurn(execution) ||
+              (threadId && execution.threadId !== threadId)
+            ) {
+              continue;
+            }
+            const observed = await this.recordExecutionObservation({
+              projectId: snapshot.project.id,
+              taskId: task.id,
+              execution,
+              decision: "resume_deferred",
+              result: execution.status,
+            });
+            await this.workflow.lifecycle.run(
+              {
+                source: "recovery",
+                component: "recovery",
+                causationId: observed.eventId,
+              },
+              () => this.workflow.recoverTask(task.id, execution.attemptId),
+            );
+          }
+        }
+      },
+    );
+  }
+
+  private async handleCompletedTurn(
+    notification: JsonRpcNotification,
+  ): Promise<void> {
     const params = notification.params as {
       turn?: { id?: string; status?: string; error?: { message?: string } | null };
     };
     const turnId = params.turn?.id;
     if (!turnId) {
+      await this.workflow.lifecycle.record({
+        type: "app_server.notification_ignored",
+        decision: "ignore",
+        reason: "missing_turn_id",
+      });
       return;
     }
     const found = await this.store.findTaskByTurnId(turnId);
     const taskExecution = found?.task.currentExecution;
     if (found && taskExecution) {
-      if (params.turn?.status === "completed") {
-        await this.workflow.completeTurn(
-          found.task.id,
-          taskExecution.attemptId,
-          turnId,
-        );
-        return;
-      }
-      await this.workflow.failTurn(
-        found.task.id,
-        taskExecution.attemptId,
-        params.turn?.error?.message ?? `Turn ${params.turn?.status ?? "failed"}`,
+      const matched = await this.workflow.lifecycle.record({
+        type: "app_server.notification_matched",
+        projectId: found.project.id,
+        taskId: found.task.id,
+        attemptId: taskExecution.attemptId,
+        ...(taskExecution.threadId ? { threadId: taskExecution.threadId } : {}),
+        turnId,
+        result: params.turn?.status ?? "unknown",
+      });
+      await this.workflow.lifecycle.run(
+        {
+          source: "app_server",
+          component: "workflow",
+          causationId: matched.eventId,
+        },
+        () =>
+          params.turn?.status === "completed"
+            ? this.workflow.completeTurn(
+                found.task.id,
+                taskExecution.attemptId,
+                turnId,
+              )
+            : this.workflow.failTurn(
+                found.task.id,
+                taskExecution.attemptId,
+                params.turn?.error?.message ??
+                  `Turn ${params.turn?.status ?? "failed"}`,
+              ),
       );
       return;
     }
 
     const project = await this.store.findProjectByTurnId(turnId);
     const projectExecution = project?.currentExecution;
-    if (!project || !projectExecution) return;
-    if (params.turn?.status === "completed") {
-      await this.workflow.completeProjectTurn(
-        project.id,
-        projectExecution.attemptId,
+    if (project && projectExecution) {
+      const matched = await this.workflow.lifecycle.record({
+        type: "app_server.notification_matched",
+        projectId: project.id,
+        attemptId: projectExecution.attemptId,
+        ...(projectExecution.threadId
+          ? { threadId: projectExecution.threadId }
+          : {}),
         turnId,
+        result: params.turn?.status ?? "unknown",
+        data: { scope: "project" },
+      });
+      await this.workflow.lifecycle.run(
+        {
+          source: "app_server",
+          component: "workflow",
+          causationId: matched.eventId,
+        },
+        () =>
+          params.turn?.status === "completed"
+            ? this.workflow.completeProjectTurn(
+                project.id,
+                projectExecution.attemptId,
+                turnId,
+              )
+            : this.workflow.failProjectTurn(
+                project.id,
+                projectExecution.attemptId,
+                params.turn?.error?.message ??
+                  `Turn ${params.turn?.status ?? "failed"}`,
+              ),
       );
       return;
     }
-    await this.workflow.failProjectTurn(
-      project.id,
-      projectExecution.attemptId,
-      params.turn?.error?.message ?? `Turn ${params.turn?.status ?? "failed"}`,
+
+    await this.workflow.lifecycle.record({
+      type: "app_server.notification_ignored",
+      turnId,
+      decision: "ignore",
+      reason: "no_current_execution",
+      result: params.turn?.status ?? "unknown",
+    });
+  }
+
+  private async recoverInterruptedProject(
+    projectId: string,
+    execution: ProjectExecution,
+  ): Promise<void> {
+    if (execution.status === "pending" || !execution.threadId || !execution.turnId) {
+      const observed = await this.recordExecutionObservation({
+        projectId,
+        execution,
+        decision: "resume_pending",
+        result: execution.status,
+      });
+      await this.workflow.lifecycle.run(
+        { source: "recovery", component: "recovery", causationId: observed.eventId },
+        () => this.workflow.recoverProjectExecution(projectId, execution.attemptId),
+      );
+      return;
+    }
+
+    const observation = await this.readStatus(execution.threadId, execution.turnId);
+    const decision = recoveryDecision(observation);
+    const observed = await this.recordExecutionObservation({
+      projectId,
+      execution,
+      decision,
+      result: observation.status ?? (observation.error ? "read_failed" : "missing"),
+      ...(observation.error ? { reason: observation.error } : {}),
+    });
+    await this.workflow.lifecycle.run(
+      { source: "recovery", component: "recovery", causationId: observed.eventId },
+      async () => {
+        if (decision === "complete") {
+          await this.workflow.completeProjectTurn(
+            projectId,
+            execution.attemptId,
+            execution.turnId!,
+          );
+        } else if (decision === "keep_running" || decision === "defer") {
+          await this.workflow.renewProjectLease(projectId, execution.attemptId);
+        } else {
+          await this.workflow.restartProjectAfterInterruption(
+            projectId,
+            execution.attemptId,
+          );
+        }
+      },
     );
   }
 
-  async recoverInterruptedExecutions(): Promise<void> {
-    const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
-    for (const snapshot of await this.store.listProjects()) {
-      if (snapshot.project.status === "cancelled") continue;
-      const projectExecution = snapshot.project.currentExecution;
-      if (projectExecution && activeStatuses.has(projectExecution.status)) {
-        if (projectExecution.threadId && projectExecution.turnId) {
-          let turnStatus: CodexTurnStatus | null = null;
-          try {
-            turnStatus = await this.notifications.readTurnStatus(
-              projectExecution.threadId,
-              projectExecution.turnId,
-            );
-          } catch {
-            turnStatus = null;
-          }
-          if (turnStatus === "completed") {
-            await this.workflow.completeProjectTurn(
-              snapshot.project.id,
-              projectExecution.attemptId,
-              projectExecution.turnId,
-            );
-          } else {
-            await this.workflow.recoverProjectExecution(snapshot.project.id);
-          }
-        } else {
-          await this.workflow.recoverProjectExecution(snapshot.project.id);
-        }
-      }
-      for (const task of snapshot.tasks) {
-        const execution = task.currentExecution;
-        if (
-          !execution ||
-          !activeStatuses.has(execution.status) ||
-          !task.requestedAction
-        ) {
-          continue;
-        }
-        if (isDeferredTaskTurn(execution)) {
-          await this.workflow.recoverTask(task.id);
-          continue;
-        }
-        const { threadId, turnId, attemptId } = execution;
-        if (threadId && turnId) {
-          let turnStatus: CodexTurnStatus | null = null;
-          try {
-            turnStatus = await this.notifications.readTurnStatus(threadId, turnId);
-          } catch {
-            turnStatus = null;
-          }
-          if (turnStatus === "completed") {
-            await this.workflow.completeTurn(task.id, attemptId, turnId);
-            continue;
-          }
-        }
-        await this.workflow.recoverTask(task.id);
-      }
+  private async recoverInterruptedTask(
+    projectId: string,
+    taskId: string,
+    execution: TaskExecution,
+  ): Promise<void> {
+    if (isDeferredTaskTurn(execution)) {
+      const observed = await this.recordExecutionObservation({
+        projectId,
+        taskId,
+        execution,
+        decision: "resume_deferred",
+        result: execution.status,
+      });
+      await this.workflow.lifecycle.run(
+        { source: "recovery", component: "recovery", causationId: observed.eventId },
+        () => this.workflow.recoverTask(taskId, execution.attemptId),
+      );
+      return;
     }
-  }
 
-  async recoverExpiredExecutions(now = new Date()): Promise<void> {
-    const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
-    for (const snapshot of await this.store.listProjects()) {
-      const projectExecution = snapshot.project.currentExecution;
-      if (
-        projectExecution &&
-        activeStatuses.has(projectExecution.status) &&
-        isExpired(projectExecution.leaseExpiresAt, now)
-      ) {
-        const status = await this.readStatus(
-          projectExecution.threadId,
-          projectExecution.turnId,
-        );
-        if (status === "completed" && projectExecution.turnId) {
-          await this.workflow.completeProjectTurn(
-            snapshot.project.id,
-            projectExecution.attemptId,
-            projectExecution.turnId,
-          );
-        } else if (status === "inProgress") {
-          await this.workflow.renewProjectLease(
-            snapshot.project.id,
-            projectExecution.attemptId,
-          );
-        } else {
-          await this.workflow.recoverProjectExecution(snapshot.project.id);
-        }
-      }
-
-      if (snapshot.project.status === "cancelled") continue;
-      for (const task of snapshot.tasks) {
-        const execution = task.currentExecution;
-        if (
-          !execution ||
-          !activeStatuses.has(execution.status) ||
-          isDeferredTaskTurn(execution) ||
-          !isExpired(execution.leaseExpiresAt, now)
-        ) {
-          continue;
-        }
-        const status = await this.readStatus(execution.threadId, execution.turnId);
-        if (status === "completed" && execution.turnId) {
+    const observation = await this.readStatus(execution.threadId, execution.turnId);
+    const decision = recoveryDecision(observation);
+    const observed = await this.recordExecutionObservation({
+      projectId,
+      taskId,
+      execution,
+      decision,
+      result: observation.status ?? (observation.error ? "read_failed" : "missing"),
+      ...(observation.error ? { reason: observation.error } : {}),
+    });
+    await this.workflow.lifecycle.run(
+      { source: "recovery", component: "recovery", causationId: observed.eventId },
+      async () => {
+        if (decision === "complete") {
           await this.workflow.completeTurn(
-            task.id,
+            taskId,
             execution.attemptId,
-            execution.turnId,
+            execution.turnId!,
           );
-        } else if (status === "inProgress") {
-          await this.workflow.renewTaskLease(task.id, execution.attemptId);
+        } else if (decision === "keep_running" || decision === "defer") {
+          await this.workflow.renewTaskLease(taskId, execution.attemptId);
         } else {
-          await this.workflow.recoverTask(task.id);
+          await this.workflow.restartTaskAfterInterruption(
+            taskId,
+            execution.attemptId,
+          );
         }
-      }
-    }
+      },
+    );
   }
 
-  async recoverUnattendedWork(now = new Date()): Promise<void> {
-    await this.recoverDeferredTaskTurns();
-    await this.recoverExpiredExecutions(now);
-    await this.workflow.recoverProjectsWithoutActiveWork();
-  }
-
-  async recoverDeferredTaskTurns(threadId?: string): Promise<void> {
-    for (const snapshot of await this.store.listProjects()) {
-      if (snapshot.project.status === "cancelled") continue;
-      for (const task of snapshot.tasks) {
-        const execution = task.currentExecution;
-        if (
-          !task.requestedAction ||
-          !execution ||
-          !isDeferredTaskTurn(execution) ||
-          (threadId && execution.threadId !== threadId)
-        ) {
-          continue;
-        }
-        await this.workflow.recoverTask(task.id);
-      }
-    }
+  private recordExecutionObservation({
+    projectId,
+    taskId,
+    execution,
+    decision,
+    result,
+    reason,
+  }: {
+    projectId: string;
+    taskId?: string;
+    execution: ProjectExecution | TaskExecution;
+    decision: string;
+    result: string;
+    reason?: string;
+  }) {
+    return this.workflow.lifecycle.record({
+      type: "recovery.execution_observed",
+      projectId,
+      ...(taskId ? { taskId } : {}),
+      attemptId: execution.attemptId,
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      ...(execution.turnId ? { turnId: execution.turnId } : {}),
+      decision,
+      result,
+      ...(reason ? { reason } : {}),
+      data: { action: execution.action, executionStatus: execution.status },
+    });
   }
 
   private async readStatus(
     threadId?: string,
     turnId?: string,
-  ): Promise<CodexTurnStatus | null> {
-    if (!threadId || !turnId) return null;
+  ): Promise<TurnObservation> {
+    if (!threadId || !turnId) return { status: null };
     try {
-      return await this.notifications.readTurnStatus(threadId, turnId);
-    } catch {
-      return null;
+      return {
+        status: await this.notifications.readTurnStatus(threadId, turnId),
+      };
+    } catch (error) {
+      return {
+        status: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 }
@@ -266,4 +474,13 @@ function isDeferredTaskTurn(execution: TaskExecution): boolean {
     (execution.status === "awaiting_report" &&
       execution.turnCompletedAt !== undefined)
   );
+}
+
+function recoveryDecision(
+  observation: TurnObservation,
+): "complete" | "keep_running" | "defer" | "restart" {
+  if (observation.status === "completed") return "complete";
+  if (observation.status === "inProgress") return "keep_running";
+  if (observation.error) return "defer";
+  return "restart";
 }

@@ -441,6 +441,9 @@ describe("WorkflowEngine", () => {
       attemptId: execution.attemptId,
       status: "waiting_for_input",
     });
+    await expect(workflow.retryTask(developing.id)).rejects.toThrow(
+      /still active and cannot be retried/,
+    );
 
     await workflow.submitReport({
       taskId: developing.id,
@@ -587,6 +590,105 @@ describe("WorkflowEngine", () => {
       currentExecution: { status: "running" },
     });
     expect(taskDispatcher.started).toHaveLength(2);
+  });
+
+  it("retries failed project execution independently from scheduling resume", async () => {
+    const created = await registerProject(1);
+    const firstExecution = created.project.currentExecution!;
+
+    await workflow.failProjectTurn(
+      created.project.id,
+      firstExecution.attemptId,
+      "Selected model is at capacity",
+    );
+    const resumed = await workflow.controlProject(created.project.id, "resume");
+
+    expect(resumed).toMatchObject({
+      status: "blocked",
+      scheduling: "running",
+      requestedAction: "select_tasks",
+      currentExecution: { status: "failed" },
+    });
+    expect(projectExecutor.started).toHaveLength(1);
+
+    const retried = await workflow.retryProject(created.project.id);
+    expect(retried).toMatchObject({
+      status: "selecting_tasks",
+      requestedAction: "select_tasks",
+      currentExecution: { status: "running" },
+    });
+    expect(retried.currentExecution?.attemptId).not.toBe(firstExecution.attemptId);
+    expect(projectExecutor.started).toHaveLength(2);
+  });
+
+  it("suppresses a stale recovery after the same task attempt has started", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const running = (await store.findTask(created.tasks[0]!.id))!.task;
+    const events: Array<Record<string, unknown>> = [];
+    store.subscribe((event) => events.push(event as unknown as Record<string, unknown>));
+
+    await workflow.recoverTask(running.id, running.currentExecution!.attemptId);
+
+    const current = (await store.findTask(running.id))!.task;
+    expect(current.currentExecution?.attemptId).toBe(
+      running.currentExecution!.attemptId,
+    );
+    expect(current.currentExecution?.turnId).toBe(running.currentExecution!.turnId);
+    expect(taskDispatcher.started).toHaveLength(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "recovery.execution_suppressed",
+        taskId: running.id,
+        decision: "keep_current",
+        reason: "execution_already_progressed",
+      }),
+    );
+  });
+
+  it("suppresses a stale recovery after the same project attempt has started", async () => {
+    const created = await registerProject(1);
+    const running = created.project.currentExecution!;
+
+    await workflow.recoverProjectExecution(created.project.id, running.attemptId);
+
+    const current = (await store.getProject(created.project.id))!.project;
+    expect(current.currentExecution?.attemptId).toBe(running.attemptId);
+    expect(current.currentExecution?.turnId).toBe(running.turnId);
+    expect(projectExecutor.started).toHaveLength(1);
+  });
+
+  it("records concise state transitions around workflow events", async () => {
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [{ title: "Task", description: "Build it", acceptanceCriteria: [] }],
+    });
+    const events: Array<Record<string, unknown>> = [];
+    store.subscribe((event) => events.push(event as unknown as Record<string, unknown>));
+
+    await workflow.controlProject(created.project.id, "pause");
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "project.paused",
+        before: expect.objectContaining({
+          status: "active",
+          scheduling: "running",
+        }),
+        after: expect.objectContaining({
+          status: "active",
+          scheduling: "paused",
+        }),
+      }),
+    );
   });
 
   it("uses one integration lease per repository", async () => {

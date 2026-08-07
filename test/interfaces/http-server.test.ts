@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -229,6 +229,144 @@ describe("HTTP API", () => {
       expect.stringMatching(/^POST \/api\/commands 400:/),
       expect.stringMatching(/^POST \/api\/commands 409:/),
     ]);
+  });
+
+  it("exposes project execution retry separately from scheduling resume", async () => {
+    const created = await registerProject();
+    const failedAttempt = created.project.currentExecution!;
+    await engine.failProjectTurn(
+      created.project.id,
+      failedAttempt.attemptId,
+      "Selected model is at capacity",
+    );
+
+    const resumed = await command({
+      type: "project.control",
+      payload: { projectId: created.project.id, action: "resume" },
+    });
+    const retried = await command({
+      type: "project.control",
+      payload: { projectId: created.project.id, action: "retry" },
+    });
+
+    expect(resumed.json()).toMatchObject({
+      status: "blocked",
+      currentExecution: { attemptId: failedAttempt.attemptId, status: "failed" },
+    });
+    expect(retried.json()).toMatchObject({
+      status: "selecting_tasks",
+      currentExecution: { status: "running" },
+    });
+    expect(retried.json().currentExecution.attemptId).not.toBe(
+      failedAttempt.attemptId,
+    );
+  });
+
+  it("rejects control commands until startup recovery has completed", async () => {
+    const startingServer = createHttpServer({
+      store,
+      workflow: engine,
+      skillInstaller,
+      accessToken: "secret",
+      isReady: () => false,
+    } as Parameters<typeof createHttpServer>[0]);
+    await startingServer.ready();
+    try {
+      const health = await startingServer.inject({
+        method: "GET",
+        url: "/api/health",
+      });
+      const response = await startingServer.inject({
+        method: "POST",
+        url: "/api/commands",
+        headers: {
+          "content-type": "application/json",
+          "x-codrive-token": "secret",
+        },
+        payload: JSON.stringify({
+          type: "project.control",
+          payload: { projectId: "project_1", action: "resume" },
+        }),
+      });
+
+      expect(health.json()).toEqual({ status: "starting" });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({
+        error: "Codrive is still recovering persisted executions",
+      });
+    } finally {
+      await startingServer.close();
+    }
+  });
+
+  it("records command causality and rejected outcomes without request bodies", async () => {
+    const created = await registerProject();
+    const events: Array<Record<string, unknown>> = [];
+    store.subscribe((event) => events.push(event as unknown as Record<string, unknown>));
+
+    const paused = await command({
+      type: "project.control",
+      payload: { projectId: created.project.id, action: "pause" },
+    });
+    const rejected = await command({
+      type: "task.report",
+      payload: {
+        taskId: created.tasks[0]!.id,
+        attemptId: "stale_attempt",
+        outcome: "blocked",
+        summary: "PRIVATE_REPORT_BODY_MUST_NOT_APPEAR",
+      },
+    });
+
+    expect(paused.statusCode).toBe(200);
+    expect(rejected.statusCode).toBe(409);
+    const received = events.find(
+      (event) =>
+        event.type === "command.received" &&
+        (event.data as { commandType?: string })?.commandType === "project.control",
+    );
+    const succeeded = events.find(
+      (event) => event.type === "command.succeeded" && event.commandId === received?.commandId,
+    );
+    const commandRejected = events.find(
+      (event) =>
+        event.type === "command.rejected" &&
+        (event.data as { commandType?: string })?.commandType === "task.report",
+    );
+    expect(received).toMatchObject({
+      source: "http",
+      result: "received",
+      commandId: expect.any(String),
+      correlationId: expect.any(String),
+    });
+    expect(succeeded).toMatchObject({ result: "succeeded" });
+    expect(commandRejected).toMatchObject({
+      result: "rejected",
+      reason: expect.stringMatching(/does not match the current execution/),
+    });
+    expect(JSON.stringify(events)).not.toContain("PRIVATE_REPORT_BODY_MUST_NOT_APPEAR");
+    const persistedEvents = (await readFile(
+      join(
+        store.stateDirectory,
+        "projects",
+        created.project.id,
+        "events.ndjson",
+      ),
+      "utf8",
+    ))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(
+      persistedEvents.find(
+        (event) =>
+          event.type === "command.rejected" &&
+          (event.data as { commandType?: string })?.commandType === "task.report",
+      ),
+    ).not.toHaveProperty("state");
+    expect(JSON.stringify(persistedEvents)).not.toContain(
+      "PRIVATE_REPORT_BODY_MUST_NOT_APPEAR",
+    );
   });
 
   it("makes recorded product decisions available to task and project Skills", async () => {

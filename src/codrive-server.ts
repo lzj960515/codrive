@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { CodexTaskDispatcher } from "./application/codex-task-dispatcher.js";
 import { CodexProjectExecutor } from "./application/codex-project-executor.js";
+import { LifecycleRecorder } from "./application/lifecycle-recorder.js";
 import { RecoveryManager } from "./application/recovery-manager.js";
 import { WorkflowEngine } from "./application/workflow-engine.js";
 import { CodexAppServerClient } from "./infrastructure/codex-app-server-client.js";
@@ -22,6 +23,7 @@ export class CodriveServer {
   private http: ReturnType<typeof createHttpServer> | null = null;
   private config: CodriveConfig | null = null;
   private log: CodriveLog | null = null;
+  private ready = false;
 
   constructor(stateDirectory?: string) {
     this.configStore = new ConfigStore(stateDirectory);
@@ -29,6 +31,7 @@ export class CodriveServer {
   }
 
   async start(): Promise<{ url: string; config: CodriveConfig; logPath: string }> {
+    this.ready = false;
     this.config = await this.configStore.loadOrCreate();
     this.log = new CodriveLog(join(this.config.stateDirectory, "codrive.log"));
     this.log.info("Codrive is starting");
@@ -58,14 +61,22 @@ export class CodriveServer {
       await this.codex.start();
       const dispatcher = new CodexTaskDispatcher(this.codex);
       const projectExecutor = new CodexProjectExecutor(this.codex);
-      const workflow = new WorkflowEngine(store, dispatcher, {
-        maxConcurrentTasks: this.config.maxConcurrentTasks,
-      }, projectExecutor);
+      const lifecycle = new LifecycleRecorder(store, {
+        onEvent: (event) => this.log!.event(event),
+      });
+      const workflow = new WorkflowEngine(
+        store,
+        dispatcher,
+        { maxConcurrentTasks: this.config.maxConcurrentTasks },
+        projectExecutor,
+        lifecycle,
+      );
       this.http = createHttpServer({
         store,
         workflow,
         skillInstaller: new SkillInstaller(),
         accessToken: this.config.accessToken,
+        isReady: () => this.ready,
         onError: (message) => this.log!.error("http", message),
       });
       await this.http.listen({ host: this.config.host, port: this.config.port });
@@ -77,6 +88,7 @@ export class CodriveServer {
 
       this.recovery = new RecoveryManager(store, workflow, this.codex);
       await this.recovery.start();
+      this.ready = true;
       const url = `http://${this.config.host}:${this.config.port}`;
       this.log.info(`Codrive is running at ${url}`);
       return {
@@ -95,6 +107,7 @@ export class CodriveServer {
   }
 
   async stop(): Promise<void> {
+    this.ready = false;
     this.recovery?.stop();
     this.recovery = null;
     await this.http?.close();

@@ -9,6 +9,7 @@ import type {
   Task,
 } from "../domain/types.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
+import { projectLifecycleState } from "./lifecycle-recorder.js";
 import type { ProjectExecutor } from "./project-executor.js";
 
 const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
@@ -33,7 +34,24 @@ export class ProjectExecutionCoordinator {
     project: Project,
     tasks: Task[],
     action: ProjectAction,
+    previous: Project = project,
   ): Promise<Project> {
+    if (
+      project.currentExecution &&
+      activeStatuses.has(project.currentExecution.status)
+    ) {
+      await this.options.recordEvent({
+        type: "workflow.invariant_violated",
+        projectId: project.id,
+        attemptId: project.currentExecution.attemptId,
+        decision: "suppress_dispatch",
+        reason: `Project ${project.id} already has an active execution`,
+        before: projectLifecycleState(previous),
+      });
+      throw new WorkflowConflictError(
+        `Project ${project.id} already has an active execution`,
+      );
+    }
     const now = this.options.now();
     const pending: Project = {
       ...project,
@@ -56,6 +74,8 @@ export class ProjectExecutionCoordinator {
       type: `project.${action}_started`,
       projectId: project.id,
       attemptId: pending.currentExecution!.attemptId,
+      before: projectLifecycleState(previous),
+      after: projectLifecycleState(pending),
     });
     return this.dispatch(pending);
   }
@@ -109,17 +129,31 @@ export class ProjectExecutionCoordinator {
     const project = await this.requireProject(projectId);
     const execution = project.currentExecution;
     if (!execution || execution.attemptId !== attemptId) {
-      throw new Error(`Turn does not match the current project execution for ${projectId}`);
+      await this.options.recordEvent({
+        type: "workflow.event_suppressed",
+        projectId,
+        attemptId,
+        turnId,
+        decision: "ignore",
+        reason: "execution_changed",
+        data: { currentAttemptId: execution?.attemptId ?? null, scope: "project" },
+      });
+      return project;
     }
-    if (execution.turnId !== turnId) return project;
+    if (execution.turnId !== turnId) {
+      await this.options.recordEvent({
+        type: "workflow.event_suppressed",
+        projectId,
+        attemptId,
+        turnId,
+        decision: "ignore",
+        reason: "turn_changed",
+        data: { currentTurnId: execution.turnId ?? null, scope: "project" },
+      });
+      return project;
+    }
 
     const now = this.options.now();
-    await this.options.recordEvent({
-      type: "turn.completed",
-      projectId,
-      attemptId,
-      data: { turnId, scope: "project" },
-    });
     if (execution.report) {
       const completed: Project = {
         ...project,
@@ -127,6 +161,16 @@ export class ProjectExecutionCoordinator {
         updatedAt: now,
       };
       await this.store.saveProject(completed);
+      await this.options.recordEvent({
+        type: "turn.completed",
+        projectId,
+        attemptId,
+        ...(execution.threadId ? { threadId: execution.threadId } : {}),
+        turnId,
+        before: projectLifecycleState(project),
+        after: projectLifecycleState(completed),
+        data: { scope: "project" },
+      });
       return completed;
     }
 
@@ -146,6 +190,16 @@ export class ProjectExecutionCoordinator {
       updatedAt: now,
     };
     await this.store.saveProject(awaitingReport);
+    await this.options.recordEvent({
+      type: "turn.completed",
+      projectId,
+      attemptId,
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      turnId,
+      before: projectLifecycleState(project),
+      after: projectLifecycleState(awaitingReport),
+      data: { scope: "project" },
+    });
     const reminderTurnId = await this.executor.requestReport(
       awaitingReport,
       execution.threadId!,
@@ -164,21 +218,66 @@ export class ProjectExecutionCoordinator {
       type: "turn.started",
       projectId,
       attemptId,
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      turnId: reminderTurnId,
+      before: projectLifecycleState(awaitingReport),
+      after: projectLifecycleState(reminded),
       data: {
-        threadId: execution.threadId,
-        turnId: reminderTurnId,
         scope: "project",
       },
     });
     return reminded;
   }
 
-  async recover(projectId: string, tasks: Task[]): Promise<Project> {
-    const project = await this.requireProject(projectId);
+  async resume(project: Project, expectedAttemptId: string): Promise<Project> {
     const execution = project.currentExecution;
-    if (!execution || !project.requestedAction) return project;
+    if (!execution || execution.attemptId !== expectedAttemptId) {
+      await this.recordRecoverySuppressed(
+        project,
+        expectedAttemptId,
+        "execution_changed",
+      );
+      return project;
+    }
     if (execution.status === "pending") return this.dispatch(project);
-    return this.start(project, tasks, execution.action);
+    await this.recordRecoverySuppressed(
+      project,
+      expectedAttemptId,
+      "execution_already_progressed",
+    );
+    return project;
+  }
+
+  async restart(
+    project: Project,
+    tasks: Task[],
+    expectedAttemptId?: string,
+  ): Promise<Project> {
+    if (
+      expectedAttemptId &&
+      project.currentExecution?.attemptId !== expectedAttemptId
+    ) {
+      await this.recordRecoverySuppressed(
+        project,
+        expectedAttemptId,
+        "execution_changed",
+      );
+      return project;
+    }
+    if (!project.requestedAction) return project;
+    const execution = project.currentExecution;
+    const restartable: Project =
+      execution && activeStatuses.has(execution.status)
+        ? {
+            ...project,
+            currentExecution: {
+              ...execution,
+              status: "interrupted",
+              finishedAt: this.options.now(),
+            },
+          }
+        : project;
+    return this.start(restartable, tasks, project.requestedAction, project);
   }
 
   async renewLease(projectId: string, attemptId: string): Promise<Project> {
@@ -238,7 +337,10 @@ export class ProjectExecutionCoordinator {
           type: "thread.created",
           projectId: project.id,
           attemptId: execution.attemptId,
-          data: { threadId, ephemeral: true },
+          threadId,
+          before: projectLifecycleState(project),
+          after: projectLifecycleState(withThread),
+          data: { ephemeral: true },
         });
       }
 
@@ -258,7 +360,11 @@ export class ProjectExecutionCoordinator {
         type: "turn.started",
         projectId: project.id,
         attemptId: execution.attemptId,
-        data: { threadId, turnId, scope: "project" },
+        threadId,
+        turnId,
+        before: projectLifecycleState(withThread),
+        after: projectLifecycleState(running),
+        data: { scope: "project" },
       });
       return running;
     } catch (error) {
@@ -293,9 +399,36 @@ export class ProjectExecutionCoordinator {
       type: "project.execution_failed",
       projectId: project.id,
       attemptId: execution.attemptId,
-      data: { action: execution.action, reason },
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      ...(execution.turnId ? { turnId: execution.turnId } : {}),
+      reason,
+      before: projectLifecycleState(project),
+      after: projectLifecycleState(blocked),
+      data: { action: execution.action },
     });
     return blocked;
+  }
+
+  private async recordRecoverySuppressed(
+    project: Project,
+    expectedAttemptId: string,
+    reason: string,
+  ): Promise<void> {
+    const execution = project.currentExecution;
+    await this.options.recordEvent({
+      type: "recovery.execution_suppressed",
+      component: "recovery",
+      projectId: project.id,
+      attemptId: expectedAttemptId,
+      ...(execution?.threadId ? { threadId: execution.threadId } : {}),
+      ...(execution?.turnId ? { turnId: execution.turnId } : {}),
+      decision: "keep_current",
+      reason,
+      data: {
+        currentAttemptId: execution?.attemptId ?? null,
+        currentExecutionStatus: execution?.status ?? null,
+      },
+    });
   }
 
   private async requireProject(projectId: string): Promise<Project> {

@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { WorkflowEngine } from "../../application/workflow-engine.js";
 import {
   InvalidTaskReportError,
+  ServiceNotReadyError,
   WorkflowConflictError,
 } from "../../domain/errors.js";
 import type { CodriveCommand, Project, Task } from "../../domain/types.js";
@@ -17,6 +18,7 @@ export interface HttpServerDependencies {
   workflow: WorkflowEngine;
   skillInstaller: SkillInstaller;
   accessToken: string;
+  isReady?: () => boolean;
   onError?: (message: string) => void;
 }
 
@@ -93,7 +95,7 @@ const commandSchema = z.discriminatedUnion("type", [
     type: z.literal("project.control"),
     payload: z.object({
       projectId: z.string().min(1),
-      action: z.enum(["pause", "resume", "cancel"]),
+      action: z.enum(["pause", "resume", "retry", "cancel"]),
     }),
   }),
   z.object({
@@ -139,14 +141,18 @@ export function createHttpServer(
           ? 409
           : error instanceof InvalidTaskReportError
             ? 422
-            : 500;
+            : error instanceof ServiceNotReadyError
+              ? 503
+              : 500;
     const message = error instanceof Error ? error.message : String(error);
     const path = new URL(request.url, "http://localhost").pathname;
     dependencies.onError?.(`${request.method} ${path} ${statusCode}: ${message}`);
     void reply.code(statusCode).send({ error: message });
   });
 
-  server.get("/api/health", async () => ({ status: "ok" }));
+  server.get("/api/health", async () => ({
+    status: dependencies.isReady?.() === false ? "starting" : "ok",
+  }));
   server.get("/", async (_request, reply) =>
     reply.type("text/html; charset=utf-8").send(renderBoardPage(dependencies.accessToken)),
   );
@@ -214,12 +220,20 @@ export function createHttpServer(
   );
 
   server.post("/api/commands", async (request) => {
+    if (dependencies.isReady?.() === false) {
+      throw new ServiceNotReadyError(
+        "Codrive is still recovering persisted executions",
+      );
+    }
     const command = commandSchema.parse(request.body);
     if (command.type === "system.install_skills") {
       await dependencies.skillInstaller.install();
       return { skills: await dependencies.skillInstaller.getStatus() };
     }
-    return dependencies.workflow.execute(command as CodriveCommand);
+    return dependencies.workflow.execute(
+      command as CodriveCommand,
+      request.headers["x-codrive-source"] === "skill" ? "skill" : "http",
+    );
   });
 
   server.get("/api/events", async (request, reply) => {

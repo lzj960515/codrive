@@ -12,8 +12,8 @@ import type {
   ProjectReport,
   ProjectSnapshot,
   Task,
-  TaskExecution,
   TaskReport,
+  LifecycleEventSource,
 } from "../domain/types.js";
 import {
   applyTaskReport,
@@ -21,6 +21,11 @@ import {
   validateTaskReport,
 } from "../domain/workflow.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
+import {
+  LifecycleRecorder,
+  projectLifecycleState,
+  taskLifecycleState,
+} from "./lifecycle-recorder.js";
 import { ProjectExecutionCoordinator } from "./project-execution-coordinator.js";
 import type { ProjectExecutor } from "./project-executor.js";
 import type { DispatchRequest, TaskDispatcher } from "./task-dispatcher.js";
@@ -47,6 +52,7 @@ const integrationLeaseStatuses = new Set([
 ]);
 
 export class WorkflowEngine {
+  readonly lifecycle: LifecycleRecorder;
   private readonly now: () => string;
   private readonly createId: (prefix: string) => string;
   private readonly executionLeaseMs: number;
@@ -58,21 +64,88 @@ export class WorkflowEngine {
     private readonly dispatcher: TaskDispatcher,
     private readonly options: WorkflowEngineOptions,
     projectExecutor?: ProjectExecutor,
+    lifecycle?: LifecycleRecorder,
   ) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.createId = options.createId ?? ((prefix) => `${prefix}_${randomUUID()}`);
     this.executionLeaseMs = options.executionLeaseMs ?? 6 * 60 * 60 * 1000;
+    this.lifecycle =
+      lifecycle ??
+      new LifecycleRecorder(store, {
+        now: this.now,
+        createId: this.createId,
+      });
     this.projectExecutions = projectExecutor
       ? new ProjectExecutionCoordinator(this.store, projectExecutor, {
           now: this.now,
           createId: this.createId,
           leaseExpiration: () => this.leaseExpiration(),
-          recordEvent: (event) => this.recordEvent(event),
+          recordEvent: async (event) => {
+            await this.recordEvent(event);
+          },
         })
       : undefined;
   }
 
-  execute(command: CodriveCommand): Promise<unknown> {
+  execute(
+    command: CodriveCommand,
+    source: LifecycleEventSource = "http",
+  ): Promise<unknown> {
+    const commandId = this.createId("command");
+    const startedAt = Date.now();
+    return this.lifecycle.run(
+      {
+        source,
+        component: "http",
+        commandId,
+        correlationId: commandId,
+      },
+      async () => {
+        let target = await this.commandTarget(command);
+        const received = await this.lifecycle.record({
+          type: "command.received",
+          ...target,
+          result: "received",
+          data: commandSummary(command),
+        });
+        return this.lifecycle.run(
+          {
+            source,
+            component: "workflow",
+            commandId,
+            correlationId: commandId,
+            causationId: received.eventId,
+          },
+          async () => {
+            try {
+              const result = await this.dispatchCommand(command);
+              target = target.projectId ? target : commandResultTarget(result);
+              await this.lifecycle.record({
+                type: "command.succeeded",
+                ...target,
+                result: "succeeded",
+                durationMs: Date.now() - startedAt,
+                data: commandSummary(command),
+              });
+              return result;
+            } catch (error) {
+              await this.lifecycle.record({
+                type: "command.rejected",
+                ...target,
+                result: "rejected",
+                reason: error instanceof Error ? error.message : String(error),
+                durationMs: Date.now() - startedAt,
+                data: commandSummary(command),
+              });
+              throw error;
+            }
+          },
+        );
+      },
+    );
+  }
+
+  private dispatchCommand(command: CodriveCommand): Promise<unknown> {
     switch (command.type) {
       case "project.register":
         return this.registerProject(command.payload);
@@ -83,7 +156,9 @@ export class WorkflowEngine {
           command.payload.productDocument,
         );
       case "project.control":
-        return this.controlProject(command.payload.projectId, command.payload.action);
+        return command.payload.action === "retry"
+          ? this.retryProject(command.payload.projectId)
+          : this.controlProject(command.payload.projectId, command.payload.action);
       case "project.record_decision":
         return this.recordProjectDecision(
           command.payload.projectId,
@@ -152,6 +227,8 @@ export class WorkflowEngine {
       await this.recordEvent({
         type: "project.work_added",
         projectId,
+        before: projectLifecycleState(snapshot.project),
+        after: projectLifecycleState(project),
         data: { taskCount: tasks.length },
       });
       await this.reconcileInternal();
@@ -196,7 +273,12 @@ export class WorkflowEngine {
         delete project.lastSelectionFingerprint;
       }
       await this.store.saveProject(project);
-      await this.recordEvent({ type: "project.decision_recorded", projectId });
+      await this.recordEvent({
+        type: "project.decision_recorded",
+        projectId,
+        before: projectLifecycleState(snapshot.project),
+        after: projectLifecycleState(project),
+      });
       if (refreshesActiveWork) await this.reconcileInternal();
       return (await this.requireSnapshot(projectId)).project;
     });
@@ -270,24 +352,49 @@ export class WorkflowEngine {
       const found = await this.requireTask(taskId);
       const execution = found.task.currentExecution;
       if (!execution || execution.attemptId !== attemptId) {
-        throw new Error(`Turn does not match the current execution for ${taskId}`);
+        await this.recordEvent({
+          type: "workflow.event_suppressed",
+          projectId: found.project.id,
+          taskId,
+          attemptId,
+          turnId,
+          decision: "ignore",
+          reason: "execution_changed",
+          data: { currentAttemptId: execution?.attemptId ?? null },
+        });
+        return found.task;
       }
-      if (execution.turnId !== turnId) return found.task;
+      if (execution.turnId !== turnId) {
+        await this.recordEvent({
+          type: "workflow.event_suppressed",
+          projectId: found.project.id,
+          taskId,
+          attemptId,
+          turnId,
+          decision: "ignore",
+          reason: "turn_changed",
+          data: { currentTurnId: execution.turnId ?? null },
+        });
+        return found.task;
+      }
 
       const now = this.now();
-      await this.recordEvent({
-        type: "turn.completed",
-        projectId: found.project.id,
-        taskId,
-        attemptId,
-        data: { turnId },
-      });
       if (execution.report) {
         const taskWithCompletedTurn: Task = {
           ...found.task,
           currentExecution: { ...execution, turnCompletedAt: now },
           updatedAt: now,
         };
+        await this.recordEvent({
+          type: "turn.completed",
+          projectId: found.project.id,
+          taskId,
+          attemptId,
+          ...(execution.threadId ? { threadId: execution.threadId } : {}),
+          turnId,
+          before: taskLifecycleState(found.task),
+          after: taskLifecycleState(taskWithCompletedTurn),
+        });
         const completed = await this.finalizeTaskReport(
           found.project,
           taskWithCompletedTurn,
@@ -313,6 +420,16 @@ export class WorkflowEngine {
         updatedAt: now,
       };
       await this.store.saveTask(found.project.id, awaitingReport);
+      await this.recordEvent({
+        type: "turn.completed",
+        projectId: found.project.id,
+        taskId,
+        attemptId,
+        ...(execution.threadId ? { threadId: execution.threadId } : {}),
+        turnId,
+        before: taskLifecycleState(found.task),
+        after: taskLifecycleState(awaitingReport),
+      });
       return this.continueTaskReportRequest(found.project, awaitingReport);
     });
   }
@@ -348,37 +465,92 @@ export class WorkflowEngine {
       }
       if (
         found.task.currentExecution &&
-        activeExecutionStatuses.has(found.task.currentExecution.status)
+        reportableExecutionStatuses.has(found.task.currentExecution.status)
       ) {
         throw new WorkflowConflictError(
           `Task ${taskId} is still active and cannot be retried`,
         );
       }
-      return this.restartTaskExecution(found.project, found.task);
+      return this.startReplacementTaskExecution(found.project, found.task);
     });
   }
 
-  recoverTask(taskId: string): Promise<Task> {
+  recoverTask(taskId: string, expectedAttemptId: string): Promise<Task> {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
       if (!found.task.requestedAction) return found.task;
-      if (found.task.currentExecution?.status === "pending") {
+      const execution = found.task.currentExecution;
+      if (!execution || execution.attemptId !== expectedAttemptId) {
+        await this.recordRecoverySuppressed(
+          found.project.id,
+          found.task,
+          expectedAttemptId,
+          "execution_changed",
+        );
+        return found.task;
+      }
+      if (execution.status === "pending") {
         return this.continueTaskDispatch(found.project, found.task);
       }
       if (
-        found.task.currentExecution?.status === "awaiting_report" &&
-        found.task.currentExecution.turnCompletedAt
+        execution.status === "awaiting_report" &&
+        execution.turnCompletedAt
       ) {
         return this.continueTaskReportRequest(found.project, found.task);
       }
-      return this.restartTaskExecution(found.project, found.task);
+      await this.recordRecoverySuppressed(
+        found.project.id,
+        found.task,
+        expectedAttemptId,
+        "execution_already_progressed",
+      );
+      return found.task;
     });
   }
 
-  recoverProjectExecution(projectId: string): Promise<Project> {
+  restartTaskAfterInterruption(
+    taskId: string,
+    expectedAttemptId: string,
+  ): Promise<Task> {
+    return this.enqueue(async () => {
+      const found = await this.requireTask(taskId);
+      if (found.task.currentExecution?.attemptId !== expectedAttemptId) {
+        await this.recordRecoverySuppressed(
+          found.project.id,
+          found.task,
+          expectedAttemptId,
+          "execution_changed",
+        );
+        return found.task;
+      }
+      return this.startReplacementTaskExecution(found.project, found.task);
+    });
+  }
+
+  recoverProjectExecution(
+    projectId: string,
+    expectedAttemptId: string,
+  ): Promise<Project> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
-      return this.requireProjectExecutions().recover(projectId, snapshot.tasks);
+      return this.requireProjectExecutions().resume(
+        snapshot.project,
+        expectedAttemptId,
+      );
+    });
+  }
+
+  restartProjectAfterInterruption(
+    projectId: string,
+    expectedAttemptId: string,
+  ): Promise<Project> {
+    return this.enqueue(async () => {
+      const snapshot = await this.requireSnapshot(projectId);
+      return this.requireProjectExecutions().restart(
+        snapshot.project,
+        snapshot.tasks,
+        expectedAttemptId,
+      );
     });
   }
 
@@ -406,6 +578,33 @@ export class WorkflowEngine {
     );
   }
 
+  retryProject(projectId: string): Promise<Project> {
+    return this.enqueue(async () => {
+      const snapshot = await this.requireSnapshot(projectId);
+      if (snapshot.project.status === "cancelled") {
+        throw new WorkflowConflictError(`Cancelled project ${projectId} is terminal`);
+      }
+      if (!snapshot.project.requestedAction) {
+        throw new WorkflowConflictError(
+          `Project ${projectId} has no action to retry`,
+        );
+      }
+      if (
+        snapshot.project.currentExecution &&
+        activeExecutionStatuses.has(snapshot.project.currentExecution.status)
+      ) {
+        throw new WorkflowConflictError(
+          `Project ${projectId} is still active and cannot be retried`,
+        );
+      }
+      return this.requireProjectExecutions().restart(
+        snapshot.project,
+        snapshot.tasks,
+        snapshot.project.currentExecution?.attemptId,
+      );
+    });
+  }
+
   controlProject(
     projectId: string,
     action: "pause" | "resume" | "cancel",
@@ -427,6 +626,8 @@ export class WorkflowEngine {
         await this.recordEvent({
           type: action === "pause" ? "project.paused" : "project.resumed",
           projectId,
+          before: projectLifecycleState(snapshot.project),
+          after: projectLifecycleState(project),
         });
         if (action === "resume") await this.reconcileInternal();
         return (await this.requireSnapshot(projectId)).project;
@@ -441,7 +642,12 @@ export class WorkflowEngine {
         updatedAt: this.now(),
       };
       await this.store.saveProject(project);
-      await this.recordEvent({ type: "project.cancelled", projectId });
+      await this.recordEvent({
+        type: "project.cancelled",
+        projectId,
+        before: projectLifecycleState(snapshot.project),
+        after: projectLifecycleState(project),
+      });
       for (const task of snapshot.tasks) {
         await this.cancelTaskInternal(project, task);
       }
@@ -480,7 +686,11 @@ export class WorkflowEngine {
         projectId: found.project.id,
         taskId,
         attemptId,
-        data: { message },
+        ...(execution.threadId ? { threadId: execution.threadId } : {}),
+        ...(execution.turnId ? { turnId: execution.turnId } : {}),
+        reason: message,
+        before: taskLifecycleState(found.task),
+        after: taskLifecycleState(failed),
       });
       await this.reconcileInternal();
       return failed;
@@ -601,13 +811,33 @@ export class WorkflowEngine {
       type: "project.selection_invalidated",
       projectId: project.id,
       attemptId: project.currentExecution!.attemptId,
+      before: projectLifecycleState(project),
+      after: projectLifecycleState(resumed),
     });
     return { project: resumed, tasks };
   }
 
-  private async dispatchTask(project: Project, task: Task): Promise<boolean> {
+  private async dispatchTask(
+    project: Project,
+    task: Task,
+    previous: Task = task,
+  ): Promise<boolean> {
     const attemptId = this.createId("attempt");
-    const pending = startTaskExecution(task, attemptId, this.now());
+    let pending: Task;
+    try {
+      pending = startTaskExecution(task, attemptId, this.now());
+    } catch (error) {
+      await this.recordEvent({
+        type: "workflow.invariant_violated",
+        projectId: project.id,
+        taskId: task.id,
+        attemptId,
+        decision: "suppress_dispatch",
+        reason: error instanceof Error ? error.message : String(error),
+        before: taskLifecycleState(previous),
+      });
+      throw error;
+    }
     pending.currentExecution!.leaseExpiresAt = this.leaseExpiration();
     await this.store.saveTask(project.id, pending);
     await this.recordEvent({
@@ -615,7 +845,12 @@ export class WorkflowEngine {
       projectId: project.id,
       taskId: pending.id,
       attemptId,
-      data: { action: pending.currentExecution?.action },
+      before: taskLifecycleState(previous),
+      after: taskLifecycleState(pending),
+      data: {
+        action: pending.currentExecution?.action,
+        previousAttemptId: task.currentExecution?.attemptId ?? null,
+      },
     });
     const result = await this.continueTaskDispatch(project, pending);
     return hasActiveTaskExecution(result);
@@ -653,7 +888,9 @@ export class WorkflowEngine {
             projectId: project.id,
             taskId: task.id,
             attemptId: execution.attemptId,
-            data: { threadId: createdThreadId },
+            threadId: createdThreadId,
+            before: taskLifecycleState(task),
+            after: taskLifecycleState(withThread),
           });
         }
       }
@@ -681,7 +918,10 @@ export class WorkflowEngine {
         projectId: project.id,
         taskId: task.id,
         attemptId: execution.attemptId,
-        data: { threadId, turnId },
+        threadId,
+        turnId,
+        before: taskLifecycleState(withThread),
+        after: taskLifecycleState(running),
       });
       return running;
     } catch (error) {
@@ -702,7 +942,11 @@ export class WorkflowEngine {
         projectId: project.id,
         taskId: task.id,
         attemptId: execution.attemptId,
-        data: { message: error instanceof Error ? error.message : String(error) },
+        ...(execution.threadId ? { threadId: execution.threadId } : {}),
+        ...(execution.turnId ? { turnId: execution.turnId } : {}),
+        reason: error instanceof Error ? error.message : String(error),
+        before: taskLifecycleState(current),
+        after: taskLifecycleState(failed),
       });
       return failed;
     }
@@ -735,7 +979,10 @@ export class WorkflowEngine {
       projectId: project.id,
       taskId: task.id,
       attemptId: execution.attemptId,
-      data: { threadId: execution.threadId, turnId: dispatch.turnId },
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      turnId: dispatch.turnId,
+      before: taskLifecycleState(task),
+      after: taskLifecycleState(reminded),
     });
     return reminded;
   }
@@ -752,6 +999,14 @@ export class WorkflowEngine {
       projectId: project.id,
       taskId: task.id,
       attemptId: report.attemptId,
+      ...(task.currentExecution?.threadId
+        ? { threadId: task.currentExecution.threadId }
+        : {}),
+      ...(task.currentExecution?.turnId
+        ? { turnId: task.currentExecution.turnId }
+        : {}),
+      before: taskLifecycleState(task),
+      after: taskLifecycleState(completed),
     });
     return completed;
   }
@@ -771,6 +1026,7 @@ export class WorkflowEngine {
     project: Project,
     report: ProjectReport,
   ): Promise<Project> {
+    const execution = project.currentExecution!;
     const selected = await this.validateTaskSelectionReport(project.id, report);
     if (report.outcome === "selected") {
       for (const task of selected) {
@@ -805,6 +1061,10 @@ export class WorkflowEngine {
       type: `project.selection_${report.outcome}`,
       projectId: project.id,
       attemptId: report.attemptId,
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      ...(execution.turnId ? { turnId: execution.turnId } : {}),
+      before: projectLifecycleState(project),
+      after: projectLifecycleState(completed),
       data: { taskIds: report.taskIds ?? [] },
     });
     return completed;
@@ -896,6 +1156,10 @@ export class WorkflowEngine {
           type: "project.stalled",
           projectId: project.id,
           attemptId: report.attemptId,
+          ...(execution.threadId ? { threadId: execution.threadId } : {}),
+          ...(execution.turnId ? { turnId: execution.turnId } : {}),
+          before: projectLifecycleState(project),
+          after: projectLifecycleState(stalled),
         });
         return stalled;
       }
@@ -920,6 +1184,10 @@ export class WorkflowEngine {
         type: "project.evaluation_tasks_created",
         projectId: project.id,
         attemptId: report.attemptId,
+        ...(execution.threadId ? { threadId: execution.threadId } : {}),
+        ...(execution.turnId ? { turnId: execution.turnId } : {}),
+        before: projectLifecycleState(project),
+        after: projectLifecycleState(active),
         data: { taskCount: report.tasks!.length },
       });
       return active;
@@ -947,6 +1215,10 @@ export class WorkflowEngine {
       type: `project.${status}`,
       projectId: project.id,
       attemptId: report.attemptId,
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      ...(execution.turnId ? { turnId: execution.turnId } : {}),
+      before: projectLifecycleState(project),
+      after: projectLifecycleState(completed),
     });
     return completed;
   }
@@ -975,21 +1247,36 @@ export class WorkflowEngine {
       projectId: project.id,
       taskId: task.id,
       attemptId: task.currentExecution!.attemptId,
-      data: { reason: "missing_report" },
+      ...(task.currentExecution?.threadId
+        ? { threadId: task.currentExecution.threadId }
+        : {}),
+      ...(task.currentExecution?.turnId
+        ? { turnId: task.currentExecution.turnId }
+        : {}),
+      reason: "missing_report",
+      before: taskLifecycleState(task),
+      after: taskLifecycleState(blocked),
     });
     return blocked;
   }
 
-  private async restartTaskExecution(project: Project, current: Task): Promise<Task> {
-    const { currentExecution: _execution, ...retryableTask } = current;
-    const task: Task = {
-      ...retryableTask,
-      status: statusBeforeExecution(current.requestedAction!),
-      updatedAt: this.now(),
-    };
-    await this.store.saveTask(project.id, task);
-    const dispatched = await this.dispatchTask(project, task);
-    return dispatched ? (await this.requireTask(task.id)).task : task;
+  private async startReplacementTaskExecution(
+    project: Project,
+    current: Task,
+  ): Promise<Task> {
+    const execution = current.currentExecution;
+    const restartable: Task = execution
+      ? {
+          ...current,
+          currentExecution: {
+            ...execution,
+            status: "interrupted",
+            finishedAt: this.now(),
+          },
+        }
+      : current;
+    const dispatched = await this.dispatchTask(project, restartable, current);
+    return dispatched ? (await this.requireTask(current.id)).task : current;
   }
 
   private async cancelTaskInternal(project: Project, task: Task): Promise<Task> {
@@ -1020,6 +1307,10 @@ export class WorkflowEngine {
       projectId: project.id,
       taskId: task.id,
       ...(execution ? { attemptId: execution.attemptId } : {}),
+      ...(execution?.threadId ? { threadId: execution.threadId } : {}),
+      ...(execution?.turnId ? { turnId: execution.turnId } : {}),
+      before: taskLifecycleState(task),
+      after: taskLifecycleState(cancelled),
     });
     if (wasActive && execution?.threadId && execution.turnId) {
       try {
@@ -1063,6 +1354,48 @@ export class WorkflowEngine {
     return snapshot;
   }
 
+  private async commandTarget(
+    command: CodriveCommand,
+  ): Promise<{ projectId?: string; taskId?: string }> {
+    if ("projectId" in command.payload) {
+      return (await this.store.getProject(command.payload.projectId))
+        ? { projectId: command.payload.projectId }
+        : {};
+    }
+    if ("taskId" in command.payload) {
+      const found = await this.store.findTask(command.payload.taskId);
+      return {
+        ...(found ? { projectId: found.project.id } : {}),
+        taskId: command.payload.taskId,
+      };
+    }
+    return {};
+  }
+
+  private async recordRecoverySuppressed(
+    projectId: string,
+    task: Task,
+    expectedAttemptId: string,
+    reason: string,
+  ): Promise<void> {
+    const execution = task.currentExecution;
+    await this.recordEvent({
+      type: "recovery.execution_suppressed",
+      component: "recovery",
+      projectId,
+      taskId: task.id,
+      attemptId: expectedAttemptId,
+      ...(execution?.threadId ? { threadId: execution.threadId } : {}),
+      ...(execution?.turnId ? { turnId: execution.turnId } : {}),
+      decision: "keep_current",
+      reason,
+      data: {
+        currentAttemptId: execution?.attemptId ?? null,
+        currentExecutionStatus: execution?.status ?? null,
+      },
+    });
+  }
+
   private requireProjectExecutions(): ProjectExecutionCoordinator {
     if (!this.projectExecutions) {
       throw new Error("Project execution is not configured");
@@ -1072,12 +1405,8 @@ export class WorkflowEngine {
 
   private recordEvent(
     event: Omit<CodriveEvent, "eventId" | "occurredAt">,
-  ): Promise<void> {
-    return this.store.appendEvent({
-      ...event,
-      eventId: this.createId("event"),
-      occurredAt: this.now(),
-    });
+  ): Promise<unknown> {
+    return this.lifecycle.record(event);
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -1168,19 +1497,6 @@ function completedProjectExecution(
   };
 }
 
-function statusBeforeExecution(action: TaskExecution["action"]): Task["status"] {
-  switch (action) {
-    case "develop":
-      return "backlog";
-    case "rework":
-      return "changes_requested";
-    case "review":
-      return "reviewing";
-    case "integrate":
-      return "integrating";
-  }
-}
-
 function eventForTask(task: Task): string {
   switch (task.status) {
     case "reviewing":
@@ -1196,4 +1512,45 @@ function eventForTask(task: Task): string {
     default:
       return "task.updated";
   }
+}
+
+function commandSummary(command: CodriveCommand): Record<string, unknown> {
+  const summary: Record<string, unknown> = { commandType: command.type };
+  if ("action" in command.payload) summary.action = command.payload.action;
+  if ("outcome" in command.payload) summary.outcome = command.payload.outcome;
+  if ("tasks" in command.payload) {
+    summary.taskCount = command.payload.tasks.length;
+  }
+  if (command.type === "project.record_decision") {
+    summary.updatesProductDocument = Boolean(command.payload.productDocument);
+  }
+  return summary;
+}
+
+function commandResultTarget(result: unknown): {
+  projectId?: string;
+  taskId?: string;
+} {
+  if (!result || typeof result !== "object") return {};
+  if (
+    "project" in result &&
+    result.project &&
+    typeof result.project === "object" &&
+    "id" in result.project &&
+    typeof result.project.id === "string"
+  ) {
+    return { projectId: result.project.id };
+  }
+  if ("projectId" in result && typeof result.projectId === "string") {
+    return {
+      projectId: result.projectId,
+      ...( "id" in result && typeof result.id === "string"
+        ? { taskId: result.id }
+        : {}),
+    };
+  }
+  if ("id" in result && typeof result.id === "string") {
+    return { projectId: result.id };
+  }
+  return {};
 }

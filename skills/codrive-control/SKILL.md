@@ -18,13 +18,13 @@ node <skill-directory>/scripts/codrive-control.mjs task <task-id>
 
 ## 控制项目
 
-动作是 `pause`、`resume` 或 `cancel`：
+动作是 `pause`、`resume`、`retry` 或 `cancel`：
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> <action>
 ```
 
-取消会停止后续调度。暂停保留当前状态；恢复会立即检查可执行任务。
+暂停和恢复只控制后续调度。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 创建新的项目执行 attempt。取消会永久终止项目并进入最终状态。
 
 ## 控制任务
 
@@ -32,6 +32,8 @@ node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> 
 node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> retry
 node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel
 ```
+
+任务级 `retry` 用于 `blocked` 且仍保留 `requestedAction` 的失败阶段。`waiting_for_input` 由用户在原开发对话中回复，随后继续同一个 attempt。任务级 `cancel` 会永久终止任务并进入最终状态。
 
 ## 记录产品决策
 

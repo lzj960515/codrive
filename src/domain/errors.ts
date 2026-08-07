@@ -5,3 +5,7 @@ export class WorkflowConflictError extends Error {
 export class InvalidTaskReportError extends Error {
   override readonly name = "InvalidTaskReportError";
 }
+
+export class ServiceNotReadyError extends Error {
+  override readonly name = "ServiceNotReadyError";
+}

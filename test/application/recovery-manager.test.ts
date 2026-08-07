@@ -21,6 +21,7 @@ import {
 class StubNotifications implements NotificationSource {
   private readonly events = new EventEmitter();
   turnStatus: CodexTurnStatus | null = null;
+  turnError: Error | null = null;
 
   onNotification(listener: (notification: JsonRpcNotification) => void): () => void {
     this.events.on("notification", listener);
@@ -28,6 +29,7 @@ class StubNotifications implements NotificationSource {
   }
 
   async readTurnStatus(): Promise<CodexTurnStatus | null> {
+    if (this.turnError) throw this.turnError;
     return this.turnStatus;
   }
 }
@@ -65,6 +67,7 @@ describe("RecoveryManager", () => {
   let workflow: WorkflowEngine;
   let recovery: RecoveryManager;
   let notifications: StubNotifications;
+  let taskDispatcher: RecordingTaskDispatcher;
   let taskId: string;
   let createId: number;
 
@@ -83,7 +86,8 @@ describe("RecoveryManager", () => {
       requestedAction: "develop",
     });
     createId = 0;
-    workflow = new WorkflowEngine(store, new RecordingTaskDispatcher(), {
+    taskDispatcher = new RecordingTaskDispatcher();
+    workflow = new WorkflowEngine(store, taskDispatcher, {
       maxConcurrentTasks: 1,
       now: () => "2026-08-03T00:00:00.000Z",
       createId: (prefix) => `${prefix}_${++createId}`,
@@ -223,6 +227,54 @@ describe("RecoveryManager", () => {
     const after = (await store.findTask(taskId))!.task.currentExecution!;
     expect(after.status).toBe("running");
     expect(after.attemptId).not.toBe(before.attemptId);
+  });
+
+  it("keeps the current attempt when its App Server turn is still running", async () => {
+    notifications.turnStatus = "inProgress";
+    const before = (await store.findTask(taskId))!.task.currentExecution!;
+    const events: Array<Record<string, unknown>> = [];
+    store.subscribe((event) => events.push(event as unknown as Record<string, unknown>));
+
+    await recovery.recoverInterruptedExecutions();
+
+    const after = (await store.findTask(taskId))!.task.currentExecution!;
+    expect(after.attemptId).toBe(before.attemptId);
+    expect(after.turnId).toBe(before.turnId);
+    expect(taskDispatcher.started).toHaveLength(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "recovery.execution_observed",
+        source: "recovery",
+        taskId,
+        attemptId: before.attemptId,
+        threadId: before.threadId,
+        turnId: before.turnId,
+        decision: "keep_running",
+        result: "inProgress",
+      }),
+    );
+  });
+
+  it("defers recovery when App Server turn status cannot be read", async () => {
+    notifications.turnError = new Error("transport unavailable");
+    const before = (await store.findTask(taskId))!.task.currentExecution!;
+    const events: Array<Record<string, unknown>> = [];
+    store.subscribe((event) => events.push(event as unknown as Record<string, unknown>));
+
+    await recovery.recoverInterruptedExecutions();
+
+    const after = (await store.findTask(taskId))!.task.currentExecution!;
+    expect(after.attemptId).toBe(before.attemptId);
+    expect(after.turnId).toBe(before.turnId);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "recovery.execution_observed",
+        taskId,
+        decision: "defer",
+        result: "read_failed",
+        reason: "transport unavailable",
+      }),
+    );
   });
 
   it("renews an expired lease while the App Server turn is active", async () => {
