@@ -46,8 +46,9 @@ describe("AI task selection", () => {
     expect(projectExecutor.started).toHaveLength(1);
     expect(projectExecutor.started[0]?.project).toMatchObject({
       id: created.project.id,
-      status: "selecting_tasks",
+      status: "active",
       requestedAction: "select_tasks",
+      planning: { revision: 1 },
     });
   });
 });

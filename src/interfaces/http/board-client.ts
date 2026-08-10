@@ -18,7 +18,8 @@ export function renderBoardClient(accessToken: string): string {
       running: "自动推进", paused: "已暂停", develop: "开发", rework: "返工", review: "审查",
       integrate: "合入", pending: "待开始", awaiting_report: "等待汇报", failed: "执行失败",
       interrupted: "已中断", approved: "审查通过", needs_review: "等待审查",
-      needs_input: "等待决定", queued: "待安排"
+      needs_input: "等待决定", queued: "待安排", pending: "等待安排",
+      selected: "已完成本轮安排", waiting_for_task: "等待任务完成"
     };
     let snapshots = [];
     let selectedProjectId = null;
@@ -134,7 +135,7 @@ export function renderBoardClient(accessToken: string): string {
         ? snapshots.map(({ project, tasks }) =>
             '<button class="project-button '+(project.id === selectedProjectId ? 'active' : '')+'" type="button" data-project="'+escapeHtml(project.id)+'" aria-pressed="'+(project.id === selectedProjectId)+'">'+
               '<span class="project-glyph">'+escapeHtml(initials(project.name))+'</span>'+
-              '<span class="project-label"><b>'+escapeHtml(project.name)+'</b><small>'+escapeHtml(label(project.status))+'</small></span>'+
+              '<span class="project-label"><b>'+escapeHtml(project.name)+'</b><small>'+escapeHtml(label(project.displayStatus))+'</small></span>'+
               '<span class="project-total">'+tasks.length+'</span>'+
             '</button>'
           ).join("")
@@ -164,7 +165,8 @@ export function renderBoardClient(accessToken: string): string {
       const actions = terminal ? [] : [project.scheduling === "paused"
         ? '<button class="action-button" data-project-action="resume">继续</button>'
         : '<button class="action-button" data-project-action="pause">暂停</button>'];
-      if (project.status === "blocked" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
+      if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
+      if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
       if (project.status !== "cancelled") actions.push('<button class="action-button danger" data-project-action="cancel">取消</button>');
       const projectCopy = project.question || project.summary;
       const projectDescription = projectCopy ? '<p>'+escapeHtml(projectCopy)+'</p>' : '';
@@ -174,7 +176,7 @@ export function renderBoardClient(accessToken: string): string {
             '<div class="project-identity">'+
               '<button id="mobile-projects" class="mobile-projects" type="button" aria-label="打开项目列表">☰</button>'+
               '<span class="project-status-dot"></span>'+
-              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.status))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>'+escapeHtml(project.name)+'</h1>'+projectDescription+'</div>'+
+              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1>'+escapeHtml(project.name)+'</h1>'+projectDescription+'</div>'+
             '</div>'+
             '<div class="project-actions">'+actions.join("")+'</div>'+
           '</div>'+

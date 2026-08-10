@@ -44,9 +44,15 @@ const project: Project = {
   repositoryPath: "/workspace/game",
   defaultBranch: "main",
   status: "active",
-  scheduling: "running",
-  requestedAction: null,
-  createdAt: timestamp,
+      scheduling: "running",
+      requestedAction: null,
+      planning: {
+        revision: 1,
+        changedAt: timestamp,
+        changeReason: "project_registered",
+        concurrencyLimit: 4,
+      },
+      createdAt: timestamp,
   updatedAt: timestamp,
 };
 

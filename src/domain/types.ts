@@ -1,6 +1,5 @@
 export type ProjectStatus =
   | "active"
-  | "selecting_tasks"
   | "evaluating"
   | "waiting_for_input"
   | "stalled"
@@ -10,6 +9,51 @@ export type ProjectStatus =
 
 export type SchedulingStatus = "running" | "paused";
 export type ProjectAction = "select_tasks" | "evaluate_product";
+
+export type PlanningChangeReason =
+  | "project_registered"
+  | "work_added"
+  | "tasks_created"
+  | "task_completed"
+  | "task_cancelled"
+  | "project_decision_recorded"
+  | "concurrency_changed"
+  | "manual_replan";
+
+export type SelectionDecisionOutcome =
+  | "selected"
+  | "wait_for_active_tasks"
+  | "needs_input"
+  | "blocked";
+
+export type SelectionWakeCondition =
+  | "task_completed"
+  | "project_decision_recorded"
+  | "manual_replan";
+
+export type SelectionNextAction =
+  | "wait_for_task_completion"
+  | "record_project_decision"
+  | "resolve_blocker_and_replan";
+
+export interface SelectionDecision {
+  revision: number;
+  outcome: SelectionDecisionOutcome;
+  summary: string;
+  taskIds: string[];
+  question?: string;
+  wakeCondition: SelectionWakeCondition;
+  nextAction: SelectionNextAction;
+  decidedAt: string;
+}
+
+export interface ProjectPlanningState {
+  revision: number;
+  changedAt: string;
+  changeReason: PlanningChangeReason;
+  concurrencyLimit?: number;
+  lastDecision?: SelectionDecision;
+}
 
 export type LifecycleEventSource =
   | "http"
@@ -45,10 +89,10 @@ export interface Project {
   status: ProjectStatus;
   scheduling: SchedulingStatus;
   requestedAction: ProjectAction | null;
+  planning: ProjectPlanningState;
   currentExecution?: ProjectExecution;
   latestReport?: ProjectReport;
   contextNotes?: string[];
-  lastSelectionFingerprint?: string;
   lastEvaluationFingerprint?: string;
   stagnantEvaluationRounds?: number;
   createdAt: string;
@@ -86,6 +130,8 @@ export interface ProjectExecution {
   report?: ProjectReport;
   reportReminderCount?: number;
   progressFingerprint?: string;
+  planningRevision?: number;
+  selectionCapacity?: number;
   leaseExpiresAt?: string;
 }
 
@@ -244,7 +290,7 @@ export type CodriveCommand =
       type: "project.control";
       payload: {
         projectId: string;
-        action: "pause" | "resume" | "retry" | "cancel";
+        action: "pause" | "resume" | "retry" | "replan" | "cancel";
       };
     }
   | {

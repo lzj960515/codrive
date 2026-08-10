@@ -42,9 +42,15 @@ function project(action: ProjectAction): Project {
     name: "Tiny Game",
     repositoryPath: "/workspace/game",
     defaultBranch: "main",
-    status: action === "select_tasks" ? "selecting_tasks" : "evaluating",
+    status: action === "select_tasks" ? "active" : "evaluating",
     scheduling: "running",
     requestedAction: action,
+    planning: {
+      revision: 1,
+      changedAt: timestamp,
+      changeReason: "project_registered",
+      concurrencyLimit: 4,
+    },
     currentExecution: {
       attemptId: "project_attempt_1",
       action,

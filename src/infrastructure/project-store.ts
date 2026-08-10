@@ -17,6 +17,7 @@ import type {
   Task,
   CreateTaskInput,
 } from "../domain/types.js";
+import { createPlanningState } from "../domain/planning.js";
 
 export class ProjectStore {
   readonly projectsDirectory: string;
@@ -45,6 +46,7 @@ export class ProjectStore {
       status: "active",
       scheduling: "running",
       requestedAction: null,
+      planning: createPlanningState(now),
       createdAt: now,
       updatedAt: now,
     };

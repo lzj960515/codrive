@@ -18,13 +18,13 @@ node <skill-directory>/scripts/codrive-control.mjs task <task-id>
 
 ## 控制项目
 
-动作是 `pause`、`resume`、`retry` 或 `cancel`：
+动作是 `pause`、`resume`、`retry`、`replan` 或 `cancel`：
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> <action>
 ```
 
-暂停和恢复只控制后续调度。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 创建新的项目执行 attempt。取消会永久终止项目并进入最终状态。
+暂停和恢复只控制后续调度。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 在同一规划版本创建新的执行 attempt。确认产品、仓库或外部 Gate 已变化时，使用 `replan` 创建新的规划版本并重新判断 backlog。取消会永久终止项目并进入最终状态。
 
 ## 控制任务
 

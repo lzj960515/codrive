@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
-import type { ProjectReport, Task } from "../../src/domain/types.js";
+import type { ProjectReport, Task, TaskReport } from "../../src/domain/types.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import {
   RecordingProjectExecutor,
@@ -60,6 +60,20 @@ async function finishProjectExecution(report: Omit<ProjectReport, "attemptId">) 
   );
 }
 
+async function finishTaskExecution(
+  taskId: string,
+  report: Omit<TaskReport, "taskId" | "attemptId">,
+) {
+  const task = (await store.findTask(taskId))!.task;
+  const execution = task.currentExecution!;
+  await workflow.submitReport({
+    ...report,
+    taskId,
+    attemptId: execution.attemptId,
+  });
+  return workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+}
+
 describe("WorkflowEngine", () => {
   it("persists a project thread before starting its turn", async () => {
     projectExecutor.beforeStartTurn = async (project, threadId) => {
@@ -95,6 +109,524 @@ describe("WorkflowEngine", () => {
         expect.objectContaining({ status: "developing", requestedAction: "develop" }),
       ]),
     );
+  });
+
+  it("dispatches four tasks selected in one planning attempt", async () => {
+    workflow = new WorkflowEngine(
+      store,
+      taskDispatcher,
+      {
+        maxConcurrentTasks: 4,
+        now: () => "2026-08-03T00:00:00.000Z",
+        createId: (prefix) => `${prefix}_${++id}`,
+      },
+      projectExecutor,
+    );
+    const created = await registerProject(4);
+
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "All four tasks can start independently",
+      taskIds: created.tasks.map(({ id: taskId }) => taskId),
+    });
+
+    expect(taskDispatcher.started.map(({ task }) => task.id)).toEqual(
+      created.tasks.map(({ id: taskId }) => taskId),
+    );
+    expect(projectExecutor.started).toHaveLength(1);
+  });
+
+  it("treats a partial multi-slot selection as complete for the current planning facts", async () => {
+    workflow = new WorkflowEngine(
+      store,
+      taskDispatcher,
+      {
+        maxConcurrentTasks: 4,
+        now: () => "2026-08-03T00:00:00.000Z",
+        createId: (prefix) => `${prefix}_${++id}`,
+      },
+      projectExecutor,
+    );
+    const created = await registerProject(4);
+
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Only two tasks can start independently",
+      taskIds: created.tasks.slice(0, 2).map(({ id: taskId }) => taskId),
+    });
+
+    expect(taskDispatcher.started.map(({ task }) => task.id)).toEqual(
+      created.tasks.slice(0, 2).map(({ id: taskId }) => taskId),
+    );
+    expect(projectExecutor.started).toHaveLength(1);
+  });
+
+  it("continues a task pipeline while backlog planning waits for a project decision", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the foundation",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const developing = (await store.findTask(created.tasks[0]!.id))!.task;
+
+    await workflow.addProjectWork(created.project.id, [
+      {
+        title: "Follow-up",
+        description: "Needs a product decision",
+        acceptanceCriteria: [],
+      },
+    ]);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "needs_input",
+      summary: "The follow-up needs a product decision",
+      question: "Which product rule should the follow-up use?",
+    });
+
+    await workflow.submitReport({
+      taskId: developing.id,
+      attemptId: developing.currentExecution!.attemptId,
+      outcome: "completed",
+      summary: "Foundation implemented",
+      workspacePath: "/workspace/game/.worktrees/foundation",
+      candidateCommit: "candidate_1",
+    });
+    await workflow.completeTurn(
+      developing.id,
+      developing.currentExecution!.attemptId,
+      developing.currentExecution!.turnId!,
+    );
+
+    const snapshot = (await store.getProject(created.project.id))!;
+    expect(snapshot.project.status).toBe("active");
+    expect(snapshot.tasks.find(({ id }) => id === developing.id)).toMatchObject({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: { action: "review", status: "running" },
+    });
+  });
+
+  it.each(["running", "needs_input", "failed"] as const)(
+    "starts review while task selection is %s",
+    async (selectionState) => {
+      const created = await registerProject(2);
+      const taskId = created.tasks[0]!.id;
+      await finishProjectExecution({
+        projectId: created.project.id,
+        outcome: "selected",
+        summary: "Start the foundation",
+        taskIds: [taskId],
+      });
+      const replanned = await workflow.controlProject(created.project.id, "replan");
+
+      if (selectionState === "needs_input") {
+        await finishProjectExecution({
+          projectId: created.project.id,
+          outcome: "needs_input",
+          summary: "A product decision is required",
+          question: "Which direction should the backlog use?",
+        });
+      } else if (selectionState === "failed") {
+        await workflow.failProjectTurn(
+          created.project.id,
+          replanned.currentExecution!.attemptId,
+          "The planning model failed",
+        );
+      }
+
+      await finishTaskExecution(taskId, {
+        outcome: "completed",
+        summary: "Implemented",
+        workspacePath: "/workspace/game/.worktrees/foundation",
+        candidateCommit: "candidate_1",
+      });
+
+      expect((await store.findTask(taskId))!.task).toMatchObject({
+        status: "reviewing",
+        requestedAction: "review",
+        currentExecution: { action: "review", status: "running" },
+      });
+      expect((await store.getProject(created.project.id))!.project.status).toBe(
+        "active",
+      );
+    },
+  );
+
+  it("advances planning only after a task completes its full pipeline", async () => {
+    const created = await registerProject(2);
+    const taskId = created.tasks[0]!.id;
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the foundation",
+      taskIds: [taskId],
+    });
+
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Implemented",
+      workspacePath: "/workspace/game/.worktrees/foundation",
+      candidateCommit: "candidate_1",
+    });
+    expect((await store.getProject(created.project.id))!.project.planning.revision).toBe(1);
+
+    await finishTaskExecution(taskId, {
+      outcome: "approved",
+      summary: "Approved",
+      reviewedMainCommit: "main_1",
+    });
+    expect((await store.getProject(created.project.id))!.project.planning.revision).toBe(1);
+
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Integrated",
+      mergedCommit: "main_2",
+    });
+
+    const snapshot = (await store.getProject(created.project.id))!;
+    expect(snapshot.tasks.find(({ id }) => id === taskId)?.status).toBe("done");
+    expect(snapshot.project.planning).toMatchObject({
+      revision: 2,
+      changeReason: "task_completed",
+    });
+    expect(projectExecutor.started).toHaveLength(2);
+    expect(projectExecutor.started[1]?.project.currentExecution).toMatchObject({
+      action: "select_tasks",
+      planningRevision: 2,
+    });
+  });
+
+  it("supersedes a running selection when integration completes a task", async () => {
+    const created = await registerProject(2);
+    const taskId = created.tasks[0]!.id;
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the foundation",
+      taskIds: [taskId],
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Implemented",
+      workspacePath: "/workspace/game/.worktrees/foundation",
+      candidateCommit: "candidate_1",
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "approved",
+      summary: "Approved",
+      reviewedMainCommit: "main_1",
+    });
+    const replanned = await workflow.controlProject(created.project.id, "replan");
+    const supersededSelection = replanned.currentExecution!;
+
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Integrated",
+      mergedCommit: "main_2",
+    });
+
+    const snapshot = (await store.getProject(created.project.id))!;
+    expect(snapshot.project.planning).toMatchObject({
+      revision: 3,
+      changeReason: "task_completed",
+    });
+    expect(snapshot.project.currentExecution).toMatchObject({
+      action: "select_tasks",
+      planningRevision: 3,
+    });
+    expect(projectExecutor.interrupted).toHaveLength(1);
+    await expect(
+      workflow.submitProjectReport({
+        projectId: created.project.id,
+        attemptId: supersededSelection.attemptId,
+        outcome: "selected",
+        summary: "This result belongs to revision 2",
+        taskIds: [created.tasks[1]!.id],
+      }),
+    ).rejects.toThrow(/does not match the current project execution/i);
+    expect((await store.findTask(created.tasks[1]!.id))!.task.requestedAction).toBe(
+      null,
+    );
+  });
+
+  it("waits for a blocked selected task until cancellation changes planning facts", async () => {
+    const created = await registerProject(2);
+    const taskId = created.tasks[0]!.id;
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the foundation",
+      taskIds: [taskId],
+    });
+
+    await finishTaskExecution(taskId, {
+      outcome: "blocked",
+      summary: "The required tool is unavailable",
+    });
+    await workflow.recoverProjectsWithoutActiveWork();
+    await workflow.recoverProjectsWithoutActiveWork();
+
+    let snapshot = (await store.getProject(created.project.id))!;
+    expect(snapshot.project.planning.revision).toBe(1);
+    expect(projectExecutor.started).toHaveLength(1);
+
+    await workflow.cancelTask(taskId);
+    snapshot = (await store.getProject(created.project.id))!;
+    expect(snapshot.project.planning).toMatchObject({
+      revision: 2,
+      changeReason: "task_cancelled",
+    });
+    expect(projectExecutor.started).toHaveLength(2);
+  });
+
+  it("starts one independent task selection per project", async () => {
+    const first = await registerProject(1);
+    const second = await registerProject(1);
+
+    expect(projectExecutor.started).toHaveLength(2);
+    expect(projectExecutor.started[0]?.project.id).toBe(first.project.id);
+    expect(projectExecutor.started[1]?.project.id).toBe(second.project.id);
+    expect(
+      projectExecutor.started.map(
+        ({ project }) => project.currentExecution?.selectionCapacity,
+      ),
+    ).toEqual([2, 2]);
+  });
+
+  it("dispatches each project's tasks against its own concurrency limit", async () => {
+    const first = await store.createProject({
+      name: "First",
+      repositoryPath: "/workspace/first",
+      defaultBranch: "main",
+      productDocument: "# First\n",
+      tasks: [{ title: "First task", description: "Build", acceptanceCriteria: [] }],
+    });
+    const second = await store.createProject({
+      name: "Second",
+      repositoryPath: "/workspace/second",
+      defaultBranch: "main",
+      productDocument: "# Second\n",
+      tasks: [{ title: "Second task", description: "Build", acceptanceCriteria: [] }],
+    });
+    await store.saveTask(first.project.id, {
+      ...first.tasks[0]!,
+      requestedAction: "develop",
+    });
+    await store.saveTask(second.project.id, {
+      ...second.tasks[0]!,
+      requestedAction: "develop",
+    });
+    const perProjectDispatcher = new RecordingTaskDispatcher();
+    const perProjectWorkflow = new WorkflowEngine(
+      store,
+      perProjectDispatcher,
+      { maxConcurrentTasks: 1 },
+      new RecordingProjectExecutor(),
+    );
+
+    await perProjectWorkflow.reconcile();
+
+    expect(perProjectDispatcher.started.map(({ task }) => task.projectId).sort()).toEqual(
+      [first.project.id, second.project.id].sort(),
+    );
+  });
+
+  it("does not let one project's selection failure block another project", async () => {
+    const first = await store.createProject({
+      name: "First",
+      repositoryPath: "/workspace/first",
+      defaultBranch: "main",
+      productDocument: "# First\n",
+      tasks: [{ title: "First task", description: "Build", acceptanceCriteria: [] }],
+    });
+    const second = await store.createProject({
+      name: "Second",
+      repositoryPath: "/workspace/second",
+      defaultBranch: "main",
+      productDocument: "# Second\n",
+      tasks: [{ title: "Second task", description: "Build", acceptanceCriteria: [] }],
+    });
+    let startCount = 0;
+    projectExecutor.beforeStartTurn = async () => {
+      startCount += 1;
+      if (startCount === 1) throw new Error("Planner failed to start");
+    };
+
+    await workflow.reconcile();
+
+    expect((await store.getProject(first.project.id))!.project).toMatchObject({
+      status: "active",
+      planning: { lastDecision: { outcome: "blocked" } },
+      currentExecution: { action: "select_tasks", status: "failed" },
+    });
+    expect((await store.getProject(second.project.id))!.project.currentExecution).toMatchObject({
+      action: "select_tasks",
+      status: "running",
+    });
+    expect(projectExecutor.started).toHaveLength(1);
+    expect(projectExecutor.started[0]?.project.id).toBe(second.project.id);
+  });
+
+  it("keeps captured capacity when same-project work claims live slots", async () => {
+    const capacityStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-selection-capacity-")),
+    );
+    const capacityDispatcher = new RecordingTaskDispatcher();
+    const capacityExecutor = new RecordingProjectExecutor();
+    const capacityWorkflow = new WorkflowEngine(
+      capacityStore,
+      capacityDispatcher,
+      { maxConcurrentTasks: 2 },
+      capacityExecutor,
+    );
+    const planned = await capacityStore.createProject({
+      name: "Planned",
+      repositoryPath: "/workspace/planned",
+      defaultBranch: "main",
+      productDocument: "# Planned\n",
+      tasks: [
+        { title: "Busy one", description: "Build", acceptanceCriteria: [] },
+        { title: "Busy two", description: "Build", acceptanceCriteria: [] },
+        { title: "Selected one", description: "Build", acceptanceCriteria: [] },
+        { title: "Selected two", description: "Build", acceptanceCriteria: [] },
+      ],
+    });
+    await capacityWorkflow.reconcile();
+    const selection = (await capacityStore.getProject(planned.project.id))!.project
+      .currentExecution!;
+    expect(selection.selectionCapacity).toBe(2);
+
+    for (const [index, task] of planned.tasks.slice(0, 2).entries()) {
+      await capacityStore.saveTask(planned.project.id, {
+        ...task,
+        status: "developing",
+        requestedAction: "develop",
+        currentExecution: {
+          attemptId: `busy_${index}`,
+          action: "develop",
+          status: "running",
+          startedAt: "2026-08-03T00:00:00.000Z",
+        },
+      });
+    }
+    await capacityWorkflow.submitProjectReport({
+      projectId: planned.project.id,
+      attemptId: selection.attemptId,
+      outcome: "selected",
+      summary: "Both planned tasks are independent",
+      taskIds: planned.tasks.slice(2).map(({ id }) => id),
+    });
+    await capacityWorkflow.completeProjectTurn(
+      planned.project.id,
+      selection.attemptId,
+      selection.turnId!,
+    );
+
+    let plannedSnapshot = (await capacityStore.getProject(planned.project.id))!;
+    expect(plannedSnapshot.tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "backlog", requestedAction: "develop" }),
+        expect.objectContaining({ status: "backlog", requestedAction: "develop" }),
+      ]),
+    );
+    expect(capacityDispatcher.started).toHaveLength(0);
+
+    for (const task of planned.tasks.slice(0, 2)) {
+      const current = (await capacityStore.findTask(task.id))!.task;
+      await capacityStore.saveTask(planned.project.id, {
+        ...current,
+        status: "done",
+        requestedAction: null,
+        currentExecution: {
+          ...current.currentExecution!,
+          status: "completed",
+          finishedAt: "2026-08-03T01:00:00.000Z",
+        },
+      });
+    }
+    await capacityWorkflow.reconcile();
+
+    plannedSnapshot = (await capacityStore.getProject(planned.project.id))!;
+    expect(plannedSnapshot.tasks.slice(0, 2).every(({ status }) => status === "done"))
+      .toBe(true);
+    expect(
+      plannedSnapshot.tasks.slice(2).every(({ status }) => status === "developing"),
+    ).toBe(true);
+    expect(capacityDispatcher.started).toHaveLength(2);
+  });
+
+  it("dispatches an existing task continuation before reserved development", async () => {
+    const priorityStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-continuation-priority-")),
+    );
+    const priorityDispatcher = new RecordingTaskDispatcher();
+    const priorityWorkflow = new WorkflowEngine(
+      priorityStore,
+      priorityDispatcher,
+      { maxConcurrentTasks: 1 },
+      new RecordingProjectExecutor(),
+    );
+    const project = await priorityStore.createProject({
+      name: "Prioritized",
+      repositoryPath: "/workspace/prioritized",
+      defaultBranch: "main",
+      productDocument: "# Prioritized\n",
+      tasks: [
+        { title: "Review me", description: "Review", acceptanceCriteria: [] },
+        { title: "Develop me", description: "Develop", acceptanceCriteria: [] },
+      ],
+    });
+    await priorityStore.saveTask(project.project.id, {
+      ...project.tasks[0]!,
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        attemptId: "developed",
+        action: "develop",
+        status: "completed",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        finishedAt: "2026-08-03T00:30:00.000Z",
+      },
+    });
+    await priorityStore.saveTask(project.project.id, {
+      ...project.tasks[1]!,
+      requestedAction: "develop",
+    });
+
+    await priorityWorkflow.reconcile();
+
+    expect(priorityDispatcher.started).toHaveLength(1);
+    expect(priorityDispatcher.started[0]?.task.id).toBe(project.tasks[0]!.id);
+    expect((await priorityStore.findTask(project.tasks[1]!.id))!.task.status).toBe(
+      "backlog",
+    );
+  });
+
+  it("manually replans the same project with a new revision", async () => {
+    const created = await registerProject(2);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start one task",
+      taskIds: [created.tasks[0]!.id],
+    });
+
+    const replanned = await workflow.controlProject(created.project.id, "replan");
+
+    expect(replanned.planning).toMatchObject({
+      revision: 2,
+      changeReason: "manual_replan",
+    });
+    expect(replanned.currentExecution).toMatchObject({
+      action: "select_tasks",
+      planningRevision: 2,
+      selectionCapacity: 1,
+    });
+    expect(projectExecutor.started).toHaveLength(2);
   });
 
   it("reevaluates unchanged tasks when the concurrency limit increases", async () => {
@@ -136,14 +668,20 @@ describe("WorkflowEngine", () => {
       expandedExecutor,
     );
     await expandedWorkflow.reconcile();
+    await expandedWorkflow.reconcile();
 
     expect(expandedExecutor.started).toHaveLength(1);
     expect(expandedExecutor.started[0]?.project.requestedAction).toBe(
       "select_tasks",
     );
+    expect((await store.getProject(created.project.id))!.project.planning).toMatchObject({
+      revision: 2,
+      changeReason: "concurrency_changed",
+      concurrencyLimit: 4,
+    });
   });
 
-  it("fills a newly available slot immediately after another project finishes", async () => {
+  it("does not let another project's active work consume selection capacity", async () => {
     const activeProject = await store.createProject({
       name: "Active Game",
       repositoryPath: "/workspace/active-game",
@@ -182,29 +720,13 @@ describe("WorkflowEngine", () => {
     );
 
     await singleSlotWorkflow.reconcile();
-    expect(singleSlotExecutor.started).toHaveLength(0);
-
-    await store.saveTask(activeProject.project.id, {
-      ...activeProject.tasks[0]!,
-      status: "done",
-      requestedAction: null,
-      currentExecution: {
-        attemptId: "attempt_active",
-        action: "integrate",
-        status: "completed",
-        startedAt: "2026-08-03T00:00:00.000Z",
-        finishedAt: "2026-08-03T01:00:00.000Z",
-      },
-      mergedCommit: "main_1",
-    });
-
-    await singleSlotWorkflow.reconcile();
 
     const selections = singleSlotExecutor.started.filter(
       ({ project }) => project.requestedAction === "select_tasks",
     );
     expect(selections).toHaveLength(1);
     expect(selections[0]?.project.id).toBe(waitingProject.project.id);
+    expect(selections[0]?.project.currentExecution?.selectionCapacity).toBe(1);
   });
 
   it("persists a task thread before starting its turn", async () => {
@@ -389,6 +911,18 @@ describe("WorkflowEngine", () => {
     expect(updated.project.currentExecution?.attemptId).not.toBe(
       firstExecution.attemptId,
     );
+    await expect(
+      workflow.submitProjectReport({
+        projectId: created.project.id,
+        attemptId: firstExecution.attemptId,
+        outcome: "selected",
+        summary: "This report arrived after its planning facts changed",
+        taskIds: [created.tasks[0]!.id],
+      }),
+    ).rejects.toThrow(/does not match the current project execution/i);
+    expect((await store.findTask(created.tasks[0]!.id))!.task.requestedAction).toBe(
+      null,
+    );
   });
 
   it("reactivates a completed project when new work is added and rejects cancelled projects", async () => {
@@ -464,7 +998,7 @@ describe("WorkflowEngine", () => {
     expect(reviewing.reviewAttempts).toHaveLength(1);
   });
 
-  it("invalidates a waiting task-selection result when task facts change", async () => {
+  it("keeps a selection decision non-blocking while a waiting task continues", async () => {
     const created = await registerProject(2);
     const taskId = created.tasks[0]!.id;
     await finishProjectExecution({
@@ -484,6 +1018,13 @@ describe("WorkflowEngine", () => {
       question: "Keep the existing files?",
     });
     await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+    await workflow.addProjectWork(created.project.id, [
+      {
+        title: "Later task",
+        description: "Added after the first selection",
+        acceptanceCriteria: [],
+      },
+    ]);
     await finishProjectExecution({
       projectId: created.project.id,
       outcome: "needs_input",
@@ -491,9 +1032,7 @@ describe("WorkflowEngine", () => {
       question: "Wait for the first task?",
     });
 
-    expect((await store.getProject(created.project.id))!.project.status).toBe(
-      "waiting_for_input",
-    );
+    expect((await store.getProject(created.project.id))!.project.status).toBe("active");
 
     await workflow.submitReport({
       taskId,
@@ -505,10 +1044,11 @@ describe("WorkflowEngine", () => {
     });
 
     const snapshot = (await store.getProject(created.project.id))!;
-    expect(snapshot.project.status).not.toBe("waiting_for_input");
-    expect(snapshot.project.latestReport?.question).not.toBe(
+    expect(snapshot.project.status).toBe("active");
+    expect(snapshot.project.planning.lastDecision?.question).toBe(
       "Wait for the first task?",
     );
+    expect(projectExecutor.started).toHaveLength(2);
     expect(snapshot.tasks.find(({ id }) => id === taskId)).toMatchObject({
       status: "reviewing",
       requestedAction: "review",
@@ -554,12 +1094,12 @@ describe("WorkflowEngine", () => {
   });
 
   it("keeps a reported blocker visible until an explicit retry", async () => {
-    const created = await registerProject(1);
+    const created = await registerProject(2);
     await finishProjectExecution({
       projectId: created.project.id,
       outcome: "selected",
-      summary: "Start",
-      taskIds: [created.tasks[0]!.id],
+      summary: "Start both tasks",
+      taskIds: created.tasks.map(({ id: selectedTaskId }) => selectedTaskId),
     });
     const developing = (await store.findTask(created.tasks[0]!.id))!.task;
     const execution = developing.currentExecution!;
@@ -582,14 +1122,18 @@ describe("WorkflowEngine", () => {
       requestedAction: "develop",
       currentExecution: { status: "completed" },
     });
-    expect(taskDispatcher.started).toHaveLength(1);
+    expect(taskDispatcher.started).toHaveLength(2);
+    expect((await store.findTask(created.tasks[1]!.id))!.task).toMatchObject({
+      status: "developing",
+      currentExecution: { status: "running" },
+    });
 
     await workflow.retryTask(developing.id);
     expect((await store.findTask(developing.id))!.task).toMatchObject({
       status: "developing",
       currentExecution: { status: "running" },
     });
-    expect(taskDispatcher.started).toHaveLength(2);
+    expect(taskDispatcher.started).toHaveLength(3);
   });
 
   it("retries failed project execution independently from scheduling resume", async () => {
@@ -604,16 +1148,17 @@ describe("WorkflowEngine", () => {
     const resumed = await workflow.controlProject(created.project.id, "resume");
 
     expect(resumed).toMatchObject({
-      status: "blocked",
+      status: "active",
       scheduling: "running",
       requestedAction: "select_tasks",
       currentExecution: { status: "failed" },
+      planning: { lastDecision: { outcome: "blocked" } },
     });
     expect(projectExecutor.started).toHaveLength(1);
 
     const retried = await workflow.retryProject(created.project.id);
     expect(retried).toMatchObject({
-      status: "selecting_tasks",
+      status: "active",
       requestedAction: "select_tasks",
       currentExecution: { status: "running" },
     });

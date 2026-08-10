@@ -288,7 +288,7 @@ describe("RecoveryManager", () => {
     expect(after.leaseExpiresAt).toBeDefined();
   });
 
-  it("recovers an idle project once without repeating an earlier wait decision", async () => {
+  it("does not repeat an earlier wait decision when work stops without completing", async () => {
     const idleStore = new ProjectStore(
       await mkdtemp(join(tmpdir(), "codrive-idle-recovery-")),
     );
@@ -342,6 +342,12 @@ describe("RecoveryManager", () => {
       idleWorkflow,
       new StubNotifications(),
     );
+    const suppressedReasons: string[] = [];
+    idleStore.subscribe((event) => {
+      if (event.type === "recovery.planning_suppressed") {
+        suppressedReasons.push(event.reason ?? "");
+      }
+    });
 
     await idleRecovery.recoverUnattendedWork();
     expect(projectExecutor.started).toHaveLength(1);
@@ -361,10 +367,11 @@ describe("RecoveryManager", () => {
     await idleRecovery.recoverUnattendedWork(beforeExpiry);
     await idleRecovery.recoverUnattendedWork(beforeExpiry);
 
-    expect(projectExecutor.started).toHaveLength(2);
-    expect(projectExecutor.started[1]?.project.requestedAction).toBe(
-      "select_tasks",
-    );
+    expect(projectExecutor.started).toHaveLength(1);
+    expect(suppressedReasons).toEqual([
+      "planning_revision_already_evaluated",
+      "planning_revision_already_evaluated",
+    ]);
   });
 
   it("checks every minute for a running project with no active Codex work", async () => {

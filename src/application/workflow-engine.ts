@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { WorkflowConflictError } from "../domain/errors.js";
+import { advancePlanning, selectionDecision } from "../domain/planning.js";
 import type {
   CodriveCommand,
   CodriveEvent,
@@ -35,10 +36,6 @@ export interface WorkflowEngineOptions {
   executionLeaseMs?: number;
   now?: () => string;
   createId?: (prefix: string) => string;
-}
-
-interface ReconcileOptions {
-  recoverProjectsWithoutActiveWork?: boolean;
 }
 
 const activeExecutionStatuses = new Set(["pending", "running", "awaiting_report"]);
@@ -181,19 +178,39 @@ export class WorkflowEngine {
   }
 
   recoverProjectsWithoutActiveWork(): Promise<void> {
-    return this.enqueue(() =>
-      this.reconcileInternal({ recoverProjectsWithoutActiveWork: true }),
-    );
+    return this.enqueue(async () => {
+      await this.reconcileInternal();
+      await this.recordSuppressedPlanningRecovery();
+    });
   }
 
-  async availableTaskSlots(): Promise<number> {
-    const activeTasks = countActiveTasks(await this.store.listProjects());
-    return Math.max(0, this.options.maxConcurrentTasks - activeTasks);
+  async availableTaskSlots(projectId: string): Promise<number> {
+    const snapshot = await this.store.getProject(projectId);
+    if (!snapshot) return 0;
+    const execution = snapshot.project.currentExecution;
+    if (
+      execution?.action === "select_tasks" &&
+      activeExecutionStatuses.has(execution.status) &&
+      execution.selectionCapacity !== undefined
+    ) {
+      return execution.selectionCapacity;
+    }
+    return availableProjectPlanningCapacity(
+      snapshot,
+      projectConcurrencyLimit(snapshot.project, this.options.maxConcurrentTasks),
+    );
   }
 
   registerProject(input: CreateProjectInput): Promise<ProjectSnapshot> {
     return this.enqueue(async () => {
       const created = await this.store.createProject(input);
+      await this.store.saveProject({
+        ...created.project,
+        planning: {
+          ...created.project.planning,
+          concurrencyLimit: this.options.maxConcurrentTasks,
+        },
+      });
       await this.reconcileInternal();
       return (await this.store.getProject(created.project.id))!;
     });
@@ -220,9 +237,14 @@ export class WorkflowEngine {
         ...currentProject,
         status: "active",
         requestedAction: null,
+        planning: advancePlanning(
+          currentProject.planning,
+          "work_added",
+          this.now(),
+          this.options.maxConcurrentTasks,
+        ),
         updatedAt: this.now(),
       };
-      delete project.lastSelectionFingerprint;
       await this.store.saveProject(project);
       await this.recordEvent({
         type: "project.work_added",
@@ -231,6 +253,7 @@ export class WorkflowEngine {
         after: projectLifecycleState(project),
         data: { taskCount: tasks.length },
       });
+      await this.recordPlanningRevision(project, snapshot.project.planning.revision);
       await this.reconcileInternal();
       return (await this.store.getProject(projectId))!;
     });
@@ -251,27 +274,23 @@ export class WorkflowEngine {
       if (productDocument) {
         await this.store.saveProductDocument(projectId, productDocument);
       }
-      const refreshesActiveWork = [
-        "active",
-        "selecting_tasks",
-        "evaluating",
-        "waiting_for_input",
-      ].includes(snapshot.project.status);
       const currentProject = hasActiveProjectExecution(snapshot.project)
         ? await this.requireProjectExecutions().cancel(snapshot.project)
         : snapshot.project;
       const project: Project = {
         ...currentProject,
         contextNotes: [...(currentProject.contextNotes ?? []), decision],
-        ...(refreshesActiveWork
-          ? { status: "active", requestedAction: null }
-          : {}),
+        status: "active",
+        requestedAction: null,
+        planning: advancePlanning(
+          currentProject.planning,
+          "project_decision_recorded",
+          this.now(),
+          this.options.maxConcurrentTasks,
+        ),
         updatedAt: this.now(),
       };
-      if (refreshesActiveWork) {
-        delete project.latestReport;
-        delete project.lastSelectionFingerprint;
-      }
+      delete project.latestReport;
       await this.store.saveProject(project);
       await this.recordEvent({
         type: "project.decision_recorded",
@@ -279,7 +298,8 @@ export class WorkflowEngine {
         before: projectLifecycleState(snapshot.project),
         after: projectLifecycleState(project),
       });
-      if (refreshesActiveWork) await this.reconcileInternal();
+      await this.recordPlanningRevision(project, snapshot.project.planning.revision);
+      await this.reconcileInternal();
       return (await this.requireSnapshot(projectId)).project;
     });
   }
@@ -607,12 +627,18 @@ export class WorkflowEngine {
 
   controlProject(
     projectId: string,
-    action: "pause" | "resume" | "cancel",
+    action: "pause" | "resume" | "replan" | "cancel",
   ): Promise<Project> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
       if (snapshot.project.status === "cancelled") {
         throw new WorkflowConflictError(`Cancelled project ${projectId} is terminal`);
+      }
+
+      if (action === "replan") {
+        const project = await this.revisePlanning(projectId, "manual_replan");
+        await this.reconcileInternal();
+        return (await this.requireSnapshot(project.id)).project;
       }
 
       if (action === "pause" || action === "resume") {
@@ -659,6 +685,9 @@ export class WorkflowEngine {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
       const cancelled = await this.cancelTaskInternal(found.project, found.task);
+      if (cancelled !== found.task) {
+        await this.revisePlanning(found.project.id, "task_cancelled");
+      }
       await this.reconcileInternal();
       return cancelled;
     });
@@ -702,119 +731,175 @@ export class WorkflowEngine {
     attemptId: string,
     message: string,
   ): Promise<Project> {
-    return this.enqueue(() =>
-      this.requireProjectExecutions().failTurn(projectId, attemptId, message),
-    );
+    return this.enqueue(async () => {
+      const failed = await this.requireProjectExecutions().failTurn(
+        projectId,
+        attemptId,
+        message,
+      );
+      await this.reconcileInternal();
+      return failed;
+    });
   }
 
-  private async reconcileInternal(options: ReconcileOptions = {}): Promise<void> {
+  private async reconcileInternal(): Promise<void> {
+    await this.alignPlanningConcurrency();
+    await this.dispatchTaskContinuations();
+    await this.startProductEvaluations();
+    await this.startPendingTaskSelection();
+  }
+
+  private async alignPlanningConcurrency(): Promise<void> {
+    for (const { project } of await this.store.listProjects()) {
+      if (project.status === "cancelled") continue;
+      if (project.planning.concurrencyLimit === undefined) {
+        await this.store.saveProject({
+          ...project,
+          planning: {
+            ...project.planning,
+            concurrencyLimit: this.options.maxConcurrentTasks,
+          },
+        });
+        continue;
+      }
+      if (project.planning.concurrencyLimit !== this.options.maxConcurrentTasks) {
+        await this.revisePlanning(project.id, "concurrency_changed");
+      }
+    }
+  }
+
+  private async dispatchTaskContinuations(): Promise<void> {
     const snapshots = await this.store.listProjects();
-    let activeCount = countActiveTasks(snapshots);
+    const activeCountByProject = new Map(
+      snapshots.map(({ project, tasks }) => [project.id, countActiveTasks(tasks)]),
+    );
     const integrationLeases = activeIntegrationRepositories(snapshots);
+    const candidates = snapshots
+      .filter(({ project }) =>
+        project.scheduling === "running" &&
+        !["cancelled", "completed"].includes(project.status),
+      )
+      .flatMap(({ project, tasks }) =>
+        tasks.filter(canDispatchTask).map((task) => ({ project, task })),
+      )
+      .sort(compareTaskDispatchCandidates);
 
-    for (const initialSnapshot of snapshots) {
-      let snapshot = (await this.store.getProject(initialSnapshot.project.id))!;
-      snapshot = await this.resumeAfterTaskSelectionChanges(snapshot);
-      if (
-        snapshot.project.status !== "active" ||
-        snapshot.project.scheduling !== "running"
-      ) {
-        continue;
-      }
-      if (hasActiveProjectExecution(snapshot.project)) continue;
-
-      for (const task of snapshot.tasks) {
-        if (activeCount >= this.options.maxConcurrentTasks) break;
-        if (!canDispatchTask(task)) continue;
-        const repository = resolve(snapshot.project.repositoryPath);
-        if (task.requestedAction === "integrate" && integrationLeases.has(repository)) {
-          continue;
-        }
-        const dispatched = await this.dispatchTask(snapshot.project, task);
-        if (dispatched) {
-          activeCount += 1;
-          if (task.requestedAction === "integrate") integrationLeases.add(repository);
-        }
-      }
-
-      snapshot = (await this.store.getProject(snapshot.project.id))!;
-      if (snapshot.tasks.every(({ status }) => ["done", "cancelled"].includes(status))) {
-        if (this.projectExecutions) {
-          await this.projectExecutions.start(
-            snapshot.project,
-            snapshot.tasks,
-            "evaluate_product",
-          );
-        }
-        continue;
-      }
-
-      const hasBacklog = snapshot.tasks.some(
-        ({ status, requestedAction }) => status === "backlog" && !requestedAction,
-      );
-      const hasReservedWork = snapshot.tasks.some(
-        ({ status, requestedAction }) =>
-          status === "backlog" && requestedAction === "develop",
-      );
-      if (!hasBacklog || hasReservedWork) {
-        await this.rememberSelectionState(snapshot);
-        continue;
-      }
-      if (activeCount >= this.options.maxConcurrentTasks) continue;
-
-      const fingerprint = selectionFingerprint(
-        snapshot.tasks,
+    for (const candidate of candidates) {
+      const concurrencyLimit = projectConcurrencyLimit(
+        candidate.project,
         this.options.maxConcurrentTasks,
       );
-      const projectHasOngoingTask = snapshot.tasks.some(hasOngoingTaskExecution);
-      const shouldRecoverProject =
-        options.recoverProjectsWithoutActiveWork && !projectHasOngoingTask;
+      const activeCount = activeCountByProject.get(candidate.project.id) ?? 0;
+      if (activeCount >= concurrencyLimit) continue;
+      const current = await this.store.findTask(candidate.task.id);
+      if (!current || !canDispatchTask(current.task)) continue;
       if (
-        this.projectExecutions &&
-        (snapshot.project.lastSelectionFingerprint !== fingerprint ||
-          shouldRecoverProject)
+        current.project.scheduling !== "running" ||
+        ["cancelled", "completed"].includes(current.project.status)
       ) {
-        await this.projectExecutions.start(
-          snapshot.project,
-          snapshot.tasks,
-          "select_tasks",
-        );
+        continue;
+      }
+      const repository = resolve(current.project.repositoryPath);
+      if (
+        current.task.requestedAction === "integrate" &&
+        integrationLeases.has(repository)
+      ) {
+        continue;
+      }
+      const dispatched = await this.dispatchTask(current.project, current.task);
+      if (!dispatched) continue;
+      activeCountByProject.set(current.project.id, activeCount + 1);
+      if (current.task.requestedAction === "integrate") {
+        integrationLeases.add(repository);
       }
     }
   }
 
-  private async resumeAfterTaskSelectionChanges(
-    snapshot: ProjectSnapshot,
-  ): Promise<ProjectSnapshot> {
-    const { project, tasks } = snapshot;
-    const waitingForTaskSelection =
-      project.status === "waiting_for_input" &&
-      project.currentExecution?.action === "select_tasks";
-    if (
-      !waitingForTaskSelection ||
-      project.lastSelectionFingerprint ===
-        selectionFingerprint(tasks, this.options.maxConcurrentTasks)
-    ) {
-      return snapshot;
+  private async startProductEvaluations(): Promise<void> {
+    if (!this.projectExecutions) return;
+    for (const snapshot of await this.store.listProjects()) {
+      if (
+        snapshot.project.status !== "active" ||
+        snapshot.project.scheduling !== "running" ||
+        hasActiveProjectExecution(snapshot.project) ||
+        !snapshot.tasks.every(({ status }) => ["done", "cancelled"].includes(status))
+      ) {
+        continue;
+      }
+      await this.projectExecutions.start(
+        snapshot.project,
+        snapshot.tasks,
+        "evaluate_product",
+      );
     }
+  }
 
-    const resumed: Project = {
-      ...project,
-      status: "active",
-      requestedAction: null,
-      updatedAt: this.now(),
-    };
-    delete resumed.latestReport;
-    delete resumed.lastSelectionFingerprint;
-    await this.store.saveProject(resumed);
-    await this.recordEvent({
-      type: "project.selection_invalidated",
-      projectId: project.id,
-      attemptId: project.currentExecution!.attemptId,
-      before: projectLifecycleState(project),
-      after: projectLifecycleState(resumed),
-    });
-    return { project: resumed, tasks };
+  private async startPendingTaskSelection(): Promise<void> {
+    if (!this.projectExecutions) return;
+    const candidates = (await this.store.listProjects())
+      .filter(({ project, tasks }) =>
+        project.status === "active" &&
+        project.scheduling === "running" &&
+        !hasActiveProjectExecution(project) &&
+        project.planning.lastDecision?.revision !== project.planning.revision &&
+        tasks.some(
+          ({ status, requestedAction }) =>
+            status === "backlog" && !requestedAction,
+        ),
+      )
+      .sort(comparePlanningCandidates);
+
+    for (const candidate of candidates) {
+      const capacity = availableProjectPlanningCapacity(
+        candidate,
+        projectConcurrencyLimit(
+          candidate.project,
+          this.options.maxConcurrentTasks,
+        ),
+      );
+      if (capacity <= 0) continue;
+      await this.projectExecutions.start(
+        candidate.project,
+        candidate.tasks,
+        "select_tasks",
+        candidate.project,
+        {
+          planningRevision: candidate.project.planning.revision,
+          selectionCapacity: capacity,
+        },
+      );
+    }
+  }
+
+  private async recordSuppressedPlanningRecovery(): Promise<void> {
+    for (const { project, tasks } of await this.store.listProjects()) {
+      const decision = project.planning.lastDecision;
+      const hasUnevaluatedBacklog = tasks.some(
+        ({ status, requestedAction }) => status === "backlog" && !requestedAction,
+      );
+      if (
+        project.status !== "active" ||
+        project.scheduling !== "running" ||
+        hasActiveProjectExecution(project) ||
+        tasks.some(hasActiveTaskExecution) ||
+        !hasUnevaluatedBacklog ||
+        decision?.revision !== project.planning.revision
+      ) {
+        continue;
+      }
+      await this.recordEvent({
+        type: "recovery.planning_suppressed",
+        component: "recovery",
+        projectId: project.id,
+        decision: "keep_current",
+        reason: "planning_revision_already_evaluated",
+        data: {
+          planningRevision: project.planning.revision,
+          outcome: decision.outcome,
+          wakeCondition: decision.wakeCondition,
+        },
+      });
+    }
   }
 
   private async dispatchTask(
@@ -1008,6 +1093,9 @@ export class WorkflowEngine {
       before: taskLifecycleState(task),
       after: taskLifecycleState(completed),
     });
+    if (completed.status === "done" && task.status !== "done") {
+      await this.revisePlanning(project.id, "task_completed");
+    }
     return completed;
   }
 
@@ -1027,6 +1115,12 @@ export class WorkflowEngine {
     report: ProjectReport,
   ): Promise<Project> {
     const execution = project.currentExecution!;
+    const planningRevision = execution.planningRevision ?? project.planning.revision;
+    if (planningRevision !== project.planning.revision) {
+      throw new WorkflowConflictError(
+        `Task selection revision ${planningRevision} was superseded by ${project.planning.revision}`,
+      );
+    }
     const selected = await this.validateTaskSelectionReport(project.id, report);
     if (report.outcome === "selected") {
       for (const task of selected) {
@@ -1038,22 +1132,15 @@ export class WorkflowEngine {
       }
     }
 
-    const status =
-      report.outcome === "needs_input"
-        ? "waiting_for_input"
-        : report.outcome === "blocked"
-          ? "blocked"
-          : "active";
-    const tasks = (await this.requireSnapshot(project.id)).tasks;
     const completed: Project = {
       ...project,
-      status,
+      status: "active",
       requestedAction: null,
       currentExecution: completedProjectExecution(project, this.now()),
-      lastSelectionFingerprint: selectionFingerprint(
-        tasks,
-        this.options.maxConcurrentTasks,
-      ),
+      planning: {
+        ...project.planning,
+        lastDecision: selectionDecision(report, planningRevision, this.now()),
+      },
       updatedAt: this.now(),
     };
     await this.store.saveProject(completed);
@@ -1083,6 +1170,15 @@ export class WorkflowEngine {
     report: ProjectReport,
   ): Promise<Task[]> {
     const snapshot = await this.requireSnapshot(projectId);
+    const execution = snapshot.project.currentExecution;
+    if (
+      execution?.planningRevision !== undefined &&
+      execution.planningRevision !== snapshot.project.planning.revision
+    ) {
+      throw new WorkflowConflictError(
+        `Task selection revision ${execution.planningRevision} was superseded by ${snapshot.project.planning.revision}`,
+      );
+    }
     if (report.outcome === "selected") {
       const taskIds = report.taskIds!;
       if (new Set(taskIds).size !== taskIds.length) {
@@ -1104,13 +1200,18 @@ export class WorkflowEngine {
         );
       }
 
-      const availableSlots = Math.max(
-        0,
-        this.options.maxConcurrentTasks - countActiveTasks(await this.store.listProjects()),
-      );
-      if (taskIds.length > availableSlots) {
+      const selectionCapacity =
+        execution?.selectionCapacity ??
+        availableProjectPlanningCapacity(
+          snapshot,
+          projectConcurrencyLimit(
+            snapshot.project,
+            this.options.maxConcurrentTasks,
+          ),
+        );
+      if (taskIds.length > selectionCapacity) {
         throw new WorkflowConflictError(
-          `Selected ${taskIds.length} tasks but only ${availableSlots} slots are available`,
+          `Selected ${taskIds.length} tasks but only ${selectionCapacity} slots are available to this selection`,
         );
       }
       return taskIds.map((taskId) => availableTasksById.get(taskId)!);
@@ -1172,13 +1273,18 @@ export class WorkflowEngine {
         status: "active",
         requestedAction: null,
         currentExecution: completedProjectExecution(project, now),
+        planning: advancePlanning(
+          project.planning,
+          "tasks_created",
+          now,
+          this.options.maxConcurrentTasks,
+        ),
         stagnantEvaluationRounds: stagnantRounds,
         ...(execution.progressFingerprint
           ? { lastEvaluationFingerprint: execution.progressFingerprint }
           : {}),
         updatedAt: now,
       };
-      delete active.lastSelectionFingerprint;
       await this.store.saveProject(active);
       await this.recordEvent({
         type: "project.evaluation_tasks_created",
@@ -1190,6 +1296,7 @@ export class WorkflowEngine {
         after: projectLifecycleState(active),
         data: { taskCount: report.tasks!.length },
       });
+      await this.recordPlanningRevision(active, project.planning.revision);
       return active;
     }
 
@@ -1328,18 +1435,68 @@ export class WorkflowEngine {
     return cancelled;
   }
 
-  private async rememberSelectionState(snapshot: ProjectSnapshot): Promise<void> {
-    const fingerprint = selectionFingerprint(
-      snapshot.tasks,
-      this.options.maxConcurrentTasks,
-    );
-    if (snapshot.project.lastSelectionFingerprint === fingerprint) return;
-    const project = {
-      ...snapshot.project,
-      lastSelectionFingerprint: fingerprint,
+  private async revisePlanning(
+    projectId: string,
+    reason:
+      | "task_completed"
+      | "task_cancelled"
+      | "concurrency_changed"
+      | "manual_replan",
+  ): Promise<Project> {
+    const snapshot = await this.requireSnapshot(projectId);
+    let current = snapshot.project;
+    const execution = current.currentExecution;
+    if (
+      execution?.action === "select_tasks" &&
+      activeExecutionStatuses.has(execution.status)
+    ) {
+      current = await this.requireProjectExecutions().cancel(current);
+      await this.recordEvent({
+        type: "project.selection_superseded",
+        projectId,
+        attemptId: execution.attemptId,
+        before: projectLifecycleState(snapshot.project),
+        after: projectLifecycleState(current),
+        data: {
+          planningRevision: execution.planningRevision ?? current.planning.revision,
+          reason,
+        },
+      });
+    }
+
+    const revised: Project = {
+      ...current,
+      status: current.status === "cancelled" ? "cancelled" : "active",
+      requestedAction:
+        current.currentExecution?.action === "select_tasks" ? null : current.requestedAction,
+      planning: advancePlanning(
+        current.planning,
+        reason,
+        this.now(),
+        this.options.maxConcurrentTasks,
+      ),
       updatedAt: this.now(),
     };
-    await this.store.saveProject(project);
+    await this.store.saveProject(revised);
+    await this.recordPlanningRevision(revised, snapshot.project.planning.revision);
+    return revised;
+  }
+
+  private recordPlanningRevision(
+    project: Project,
+    previousRevision: number,
+  ): Promise<unknown> {
+    return this.recordEvent({
+      type: "project.planning_revision_advanced",
+      projectId: project.id,
+      before: { status: project.status },
+      after: { status: project.status },
+      data: {
+        previousRevision,
+        planningRevision: project.planning.revision,
+        reason: project.planning.changeReason,
+      },
+    });
   }
 
   private async requireTask(taskId: string): Promise<{ project: Project; task: Task }> {
@@ -1448,10 +1605,8 @@ function hasActiveProjectExecution(project: Project): boolean {
     : false;
 }
 
-function countActiveTasks(snapshots: ProjectSnapshot[]): number {
-  return snapshots
-    .flatMap(({ tasks }) => tasks)
-    .filter(hasActiveTaskExecution).length;
+function countActiveTasks(tasks: Task[]): number {
+  return tasks.filter(hasActiveTaskExecution).length;
 }
 
 function activeIntegrationRepositories(snapshots: ProjectSnapshot[]): Set<string> {
@@ -1468,22 +1623,47 @@ function activeIntegrationRepositories(snapshots: ProjectSnapshot[]): Set<string
   );
 }
 
-function selectionFingerprint(tasks: Task[], maxConcurrentTasks: number): string {
-  const taskStates = tasks
-    .map((task) => `${task.id}:${selectionState(task)}`)
-    .sort()
-    .join("|");
-  return `maxConcurrentTasks:${maxConcurrentTasks}|${taskStates}`;
+function availableProjectPlanningCapacity(
+  snapshot: ProjectSnapshot,
+  concurrencyLimit: number,
+): number {
+  const reservedDevelopTasks = snapshot.tasks
+    .filter(
+      ({ status, requestedAction }) =>
+        status === "backlog" && requestedAction === "develop",
+    ).length;
+  return Math.max(
+    0,
+    concurrencyLimit - countActiveTasks(snapshot.tasks) - reservedDevelopTasks,
+  );
 }
 
-function selectionState(task: Task): string {
-  if (task.status === "backlog") {
-    return task.requestedAction === "develop" ? "selected" : "backlog";
-  }
-  if (["developing", "reviewing", "changes_requested", "integrating"].includes(task.status)) {
-    return "active";
-  }
-  return task.status;
+function projectConcurrencyLimit(project: Project, fallback: number): number {
+  return project.planning.concurrencyLimit ?? fallback;
+}
+
+function compareTaskDispatchCandidates(
+  left: { project: Project; task: Task },
+  right: { project: Project; task: Task },
+): number {
+  const actionPriority = (task: Task) => (task.requestedAction === "develop" ? 1 : 0);
+  return (
+    actionPriority(left.task) - actionPriority(right.task) ||
+    left.task.updatedAt.localeCompare(right.task.updatedAt) ||
+    left.project.id.localeCompare(right.project.id) ||
+    left.task.order - right.task.order ||
+    left.task.id.localeCompare(right.task.id)
+  );
+}
+
+function comparePlanningCandidates(
+  left: ProjectSnapshot,
+  right: ProjectSnapshot,
+): number {
+  return (
+    left.project.planning.changedAt.localeCompare(right.project.planning.changedAt) ||
+    left.project.id.localeCompare(right.project.id)
+  );
 }
 
 function completedProjectExecution(

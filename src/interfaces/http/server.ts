@@ -95,7 +95,7 @@ const commandSchema = z.discriminatedUnion("type", [
     type: z.literal("project.control"),
     payload: z.object({
       projectId: z.string().min(1),
-      action: z.enum(["pause", "resume", "retry", "cancel"]),
+      action: z.enum(["pause", "resume", "retry", "replan", "cancel"]),
     }),
   }),
   z.object({
@@ -187,10 +187,14 @@ export function createHttpServer(
         projectDocument: dependencies.store.productDocumentPath(snapshot.project.id),
         repositoryPath: snapshot.project.repositoryPath,
         contextNotes: snapshot.project.contextNotes ?? [],
+        planning: snapshot.project.planning,
         taskDocuments: snapshot.tasks.map((task) =>
           dependencies.store.taskPath(snapshot.project.id, task.id),
         ),
-        availableTaskSlots: await dependencies.workflow.availableTaskSlots(),
+        availableTaskSlots: await dependencies.workflow.availableTaskSlots(
+          snapshot.project.id,
+        ),
+        planningRevision: snapshot.project.currentExecution?.planningRevision ?? null,
       };
     },
   );

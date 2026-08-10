@@ -11,7 +11,7 @@ Codrive is a local, single-user orchestration service that connects filesystem-b
 - `src/interfaces` owns the HTTP API, CLI, and local board.
 - `skills` contains the product's installable Codex Skills.
 
-Project-level Codex turns decide which backlog tasks should start from current product and repository facts. Codrive validates IDs, task availability, concurrency, and the single integration lease. Codex reevaluates task relationships during every selection.
+Project-level Codex turns decide which backlog tasks should start from current product and repository facts. Codrive validates IDs, task availability, each project's concurrency budget, and the repository integration lease. Codex reevaluates task relationships during every selection.
 
 The HTTP surface has three boundaries: board reads, Skill context reads, and the unified `/api/commands` write endpoint. State transitions belong to `WorkflowEngine`, not route handlers.
 

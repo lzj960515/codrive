@@ -122,6 +122,8 @@ describe("HTTP API", () => {
       projectId: created.project.id,
       requestedAction: "select_tasks",
       availableTaskSlots: 2,
+      planningRevision: 1,
+      planning: { revision: 1 },
       contextNotes: [],
     });
     expect(oldProjectRoute.statusCode).toBe(404);
@@ -176,7 +178,7 @@ describe("HTTP API", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       projectId: created.project.id,
-      status: "selecting_tasks",
+      status: "active",
       scheduling: "running",
     });
   });
@@ -250,11 +252,11 @@ describe("HTTP API", () => {
     });
 
     expect(resumed.json()).toMatchObject({
-      status: "blocked",
+      status: "active",
       currentExecution: { attemptId: failedAttempt.attemptId, status: "failed" },
     });
     expect(retried.json()).toMatchObject({
-      status: "selecting_tasks",
+      status: "active",
       currentExecution: { status: "running" },
     });
     expect(retried.json().currentExecution.attemptId).not.toBe(
@@ -371,6 +373,7 @@ describe("HTTP API", () => {
 
   it("makes recorded product decisions available to task and project Skills", async () => {
     const created = await registerProject();
+    const firstAttempt = created.project.currentExecution!.attemptId;
     const decision = "Use keyboard controls for the first playable version.";
     const recorded = await command({
       type: "project.record_decision",
@@ -390,11 +393,149 @@ describe("HTTP API", () => {
 
     expect(recorded.statusCode).toBe(200);
     expect(recorded.json()).toMatchObject({
-      status: "selecting_tasks",
+      status: "active",
       contextNotes: [decision],
+      planning: { revision: 2, changeReason: "project_decision_recorded" },
+      currentExecution: { action: "select_tasks", planningRevision: 2 },
     });
+    expect(recorded.json().currentExecution.attemptId).not.toBe(firstAttempt);
     expect(projectContext.json().contextNotes).toEqual([decision]);
     expect(taskContext.json().projectContextNotes).toEqual([decision]);
+  });
+
+  it("exposes manual replanning as an explicit planning revision", async () => {
+    const created = await registerProject();
+    const firstAttempt = created.project.currentExecution!.attemptId;
+
+    const response = await command({
+      type: "project.control",
+      payload: { projectId: created.project.id, action: "replan" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "active",
+      planning: { revision: 2, changeReason: "manual_replan" },
+      currentExecution: {
+        action: "select_tasks",
+        planningRevision: 2,
+        selectionCapacity: 2,
+      },
+    });
+    expect(response.json().currentExecution.attemptId).not.toBe(firstAttempt);
+  });
+
+  it("projects task-selection decisions without blocking active task work", async () => {
+    const created = await store.createProject({
+      name: "Planning Game",
+      repositoryPath: "/workspace/planning-game",
+      defaultBranch: "main",
+      productDocument: "# Planning Game\n",
+      tasks: [
+        { title: "Active", description: "Build", acceptanceCriteria: [] },
+        { title: "Backlog", description: "Decide", acceptanceCriteria: [] },
+      ],
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "developing",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: "active_1",
+        action: "develop",
+        status: "running",
+        startedAt: "2026-08-03T00:00:00.000Z",
+      },
+    });
+    await store.saveProject({
+      ...created.project,
+      planning: {
+        ...created.project.planning,
+        lastDecision: {
+          revision: 1,
+          outcome: "needs_input",
+          summary: "A product rule is missing",
+          question: "Which rule should be used?",
+          taskIds: [],
+          wakeCondition: "project_decision_recorded",
+          nextAction: "record_project_decision",
+          decidedAt: "2026-08-03T00:01:00.000Z",
+        },
+      },
+    });
+
+    const board = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+
+    expect(board.json()[0].project).toMatchObject({
+      status: "active",
+      displayStatus: "active",
+      question: "Which rule should be used?",
+      planning: {
+        revision: 1,
+        status: "needs_input",
+        outcome: "needs_input",
+        wakeCondition: "project_decision_recorded",
+        nextAction: "record_project_decision",
+      },
+    });
+  });
+
+  it("does not project a decision from an earlier planning revision", async () => {
+    const created = await store.createProject({
+      name: "Replanned Game",
+      repositoryPath: "/workspace/replanned-game",
+      defaultBranch: "main",
+      productDocument: "# Replanned Game\n",
+      tasks: [{ title: "Backlog", description: "Build", acceptanceCriteria: [] }],
+    });
+    await store.saveProject({
+      ...created.project,
+      planning: {
+        revision: 2,
+        changedAt: "2026-08-03T00:02:00.000Z",
+        changeReason: "manual_replan",
+        lastDecision: {
+          revision: 1,
+          outcome: "needs_input",
+          summary: "This decision is stale",
+          question: "This question is stale",
+          taskIds: [],
+          wakeCondition: "project_decision_recorded",
+          nextAction: "record_project_decision",
+          decidedAt: "2026-08-03T00:01:00.000Z",
+        },
+      },
+      latestReport: {
+        projectId: created.project.id,
+        attemptId: "selection_1",
+        outcome: "needs_input",
+        summary: "This decision is stale",
+        question: "This question is stale",
+      },
+    });
+
+    const board = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+
+    expect(board.json()[0].project).toMatchObject({
+      displayStatus: "selecting_tasks",
+      summary: null,
+      question: null,
+      planning: {
+        revision: 2,
+        status: "pending",
+        outcome: null,
+        summary: null,
+        question: null,
+      },
+    });
   });
 
   it("returns a human-facing board projection without a Web answer form", async () => {

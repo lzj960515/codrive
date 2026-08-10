@@ -32,7 +32,7 @@ Codrive is not another model or coding agent. It gives the regular Codex agent a
 - **Work stays visible.** Development and review tasks appear in Codex App instead of disappearing into a background worker.
 - **Context stays focused.** Each task has one long-lived development conversation, while every review receives a fresh independent context.
 - **Codex keeps the judgment.** Codex decides what can run in parallel, understands the repository, writes code, tests, reviews, resolves conflicts, and integrates changes.
-- **The workflow keeps moving.** Project and task events immediately trigger the next selection, review, rework, integration, or product evaluation step.
+- **The workflow keeps moving.** Selected tasks continue through development, review, rework, and integration; backlog planning runs again only when its facts change.
 - **Everything stays local.** Product documents, task state, execution history, and credentials remain on your machine.
 
 ## Quick start
@@ -61,13 +61,13 @@ Choosing **Later** keeps a small Skills setup button in the lower-left corner of
 
 [Open the editable draw.io source](https://github.com/lzj960515/codrive/blob/main/docs/architecture/codrive-orchestration.drawio)
 
-Codrive owns the deterministic parts: persisted lifecycle state, execution attempts, conversation IDs, the global concurrency limit, and the rule that one repository integrates only one task at a time. Codex owns the judgment-heavy parts: selecting work, implementation, review, rework, Git operations, conflict resolution, integration, and product evaluation.
+Codrive owns the deterministic parts: persisted lifecycle state, execution attempts, conversation IDs, each project's concurrency limit, and the rule that one repository integrates only one task at a time. Codex owns the judgment-heavy parts: selecting work, implementation, review, rework, Git operations, conflict resolution, integration, and product evaluation.
 
-Task selection is dynamic rather than a fixed dependency graph. Whenever capacity becomes available, a temporary Codex task reads the current product, task, and repository facts and can choose several tasks that are useful to start now. Codrive validates the result and gives every selected task its own top-level development conversation and isolated worktree. The default limit is four active tasks across all projects; integration remains serial within each repository.
+Task selection is dynamic rather than a fixed dependency graph. Project registration, a fully completed task, cancellation, added work, a product decision, a concurrency change, or manual replanning creates a new planning revision. One temporary Codex task reads the complete backlog together with active task, product, and repository facts, then can select several independent tasks within that project's capacity fixed for the attempt. Selecting fewer tasks still completes that revision; spare capacity alone never asks the model again.
 
-Project registration, added work, stage reports, completed or failed Codex turns, project controls, and service startup immediately trigger the next workflow decision. The concurrency limit is part of that decision, so changing it invalidates an earlier selection result. When Codrive starts, it upgrades local configurations created with the original one-task default to four.
+Codrive first advances existing task stages, then performs product evaluation, and only then plans an unevaluated backlog revision. Finishing development immediately creates an independent review; rework and integration continue the same task pipeline. A task that needs input or becomes blocked keeps the current planning revision, so already selected siblings can still start while the board explains what is waiting. Each project can run four active tasks by default without consuming another project's capacity, while integration remains serial within each repository.
 
-Once a minute, Codrive also runs a narrow recovery check. It sends task messages that were waiting for their conversation to become idle, resumes AI work that has gone a long time without a result, and restarts task selection when an active project still has unstarted tasks but no Codex work at all. A turn that App Server still reports as `inProgress` keeps its current attempt and receives a renewed lease. Only a confirmed missing or terminal turn is replaced. Startup recovery completes before the command API becomes ready, so user retries cannot race with it.
+Once a minute, Codrive also runs a narrow recovery check. It sends task messages that were waiting for their conversation to become idle and resumes AI work that has gone a long time without a result. When a project has no Codex work at all, recovery starts only a planning revision that has never been evaluated; a persisted selection, input request, or blocker never causes repeated model calls. A turn that App Server still reports as `inProgress` keeps its current attempt and receives a renewed lease. Only a confirmed missing or terminal turn is replaced. Startup recovery completes before the command API becomes ready, so user retries cannot race with it.
 
 ## Codex conversations
 
@@ -92,11 +92,11 @@ The board links directly to development and review conversations. If Codex needs
 | `$codrive-forge` | Shape a product idea into a confirmed product plan and initial task set |
 | `$codrive-task` | Execute the current development, review, rework, integration, or evaluation stage |
 | `$codrive-work` | Add a requirement, milestone, or new round of work to an existing product |
-| `$codrive-control` | Inspect progress and pause, resume, retry, cancel, or record a product decision |
+| `$codrive-control` | Inspect progress; pause, resume, retry, replan, or cancel; and record a product decision |
 
 Skills read the current project and task context from Codrive, so automated task messages stay short and do not repeat the full product specification.
 
-Retry and cancel have different lifecycle meanings. Retry creates a new attempt for a failed task or project execution that still has a requested action. A task waiting for input continues the same attempt in its original conversation. Cancel permanently ends the task or project.
+Retry, replan, and cancel have different lifecycle meanings. Retry creates a new attempt for a failed task or project execution that still has a requested action. Replan advances the planning revision after its facts have explicitly changed. A task waiting for input continues the same attempt in its original conversation. Cancel permanently ends the task or project.
 
 ## Commands
 

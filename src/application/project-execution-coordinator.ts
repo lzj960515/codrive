@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { WorkflowConflictError } from "../domain/errors.js";
+import { selectionDecision } from "../domain/planning.js";
 import type {
   CodriveEvent,
   Project,
@@ -23,6 +24,11 @@ export interface ProjectExecutionCoordinatorOptions {
   ) => Promise<void>;
 }
 
+export interface ProjectExecutionStartContext {
+  planningRevision?: number;
+  selectionCapacity?: number;
+}
+
 export class ProjectExecutionCoordinator {
   constructor(
     private readonly store: ProjectStore,
@@ -35,6 +41,7 @@ export class ProjectExecutionCoordinator {
     tasks: Task[],
     action: ProjectAction,
     previous: Project = project,
+    context: ProjectExecutionStartContext = {},
   ): Promise<Project> {
     if (
       project.currentExecution &&
@@ -55,7 +62,7 @@ export class ProjectExecutionCoordinator {
     const now = this.options.now();
     const pending: Project = {
       ...project,
-      status: action === "select_tasks" ? "selecting_tasks" : "evaluating",
+      status: action === "select_tasks" ? "active" : "evaluating",
       requestedAction: action,
       currentExecution: {
         attemptId: this.options.createId("project_attempt"),
@@ -66,6 +73,7 @@ export class ProjectExecutionCoordinator {
         ...(action === "evaluate_product"
           ? { progressFingerprint: evaluationFingerprint(tasks) }
           : {}),
+        ...context,
       },
       updatedAt: now,
     };
@@ -149,6 +157,18 @@ export class ProjectExecutionCoordinator {
         decision: "ignore",
         reason: "turn_changed",
         data: { currentTurnId: execution.turnId ?? null, scope: "project" },
+      });
+      return project;
+    }
+    if (!activeStatuses.has(execution.status)) {
+      await this.options.recordEvent({
+        type: "workflow.event_suppressed",
+        projectId,
+        attemptId,
+        turnId,
+        decision: "ignore",
+        reason: "execution_not_active",
+        data: { executionStatus: execution.status, scope: "project" },
       });
       return project;
     }
@@ -277,7 +297,14 @@ export class ProjectExecutionCoordinator {
             },
           }
         : project;
-    return this.start(restartable, tasks, project.requestedAction, project);
+    return this.start(restartable, tasks, project.requestedAction, project, {
+      ...(execution?.planningRevision === undefined
+        ? {}
+        : { planningRevision: execution.planningRevision }),
+      ...(execution?.selectionCapacity === undefined
+        ? {}
+        : { selectionCapacity: execution.selectionCapacity }),
+    });
   }
 
   async renewLease(projectId: string, attemptId: string): Promise<Project> {
@@ -383,9 +410,27 @@ export class ProjectExecutionCoordinator {
     const execution = project.currentExecution;
     if (!execution) throw new Error(`Project ${project.id} has no current execution`);
     const now = this.options.now();
-    const blocked: Project = {
+    const selectionFailed = execution.action === "select_tasks";
+    const failed: Project = {
       ...project,
-      status: "blocked",
+      status: selectionFailed ? "active" : "blocked",
+      ...(selectionFailed
+        ? {
+            planning: {
+              ...project.planning,
+              lastDecision: selectionDecision(
+                {
+                  projectId: project.id,
+                  attemptId: execution.attemptId,
+                  outcome: "blocked",
+                  summary: reason,
+                },
+                execution.planningRevision ?? project.planning.revision,
+                now,
+              ),
+            },
+          }
+        : {}),
       currentExecution: {
         ...execution,
         status: "failed",
@@ -394,7 +439,7 @@ export class ProjectExecutionCoordinator {
       },
       updatedAt: now,
     };
-    await this.store.saveProject(blocked);
+    await this.store.saveProject(failed);
     await this.options.recordEvent({
       type: "project.execution_failed",
       projectId: project.id,
@@ -403,10 +448,10 @@ export class ProjectExecutionCoordinator {
       ...(execution.turnId ? { turnId: execution.turnId } : {}),
       reason,
       before: projectLifecycleState(project),
-      after: projectLifecycleState(blocked),
+      after: projectLifecycleState(failed),
       data: { action: execution.action },
     });
-    return blocked;
+    return failed;
   }
 
   private async recordRecoverySuppressed(
