@@ -215,6 +215,10 @@ export class ProjectStore {
     await writeFile(this.productDocumentPath(projectId), document, "utf8");
   }
 
+  async readProductDocument(projectId: string): Promise<string> {
+    return readFile(this.productDocumentPath(projectId), "utf8");
+  }
+
   async saveProject(project: Project): Promise<void> {
     await this.atomicWriteJson(this.projectPath(project.id), project);
   }

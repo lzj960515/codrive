@@ -19,12 +19,22 @@ export function renderBoardClient(accessToken: string): string {
       integrate: "合入", pending: "待开始", awaiting_report: "等待汇报", failed: "执行失败",
       interrupted: "已中断", approved: "审查通过", needs_review: "等待审查",
       needs_input: "等待决定", queued: "待安排", pending: "等待安排",
-      selected: "已完成本轮安排", waiting_for_task: "等待任务完成"
+      selected: "已完成本轮安排", waiting_for_task: "等待任务完成",
+      retry_scheduled: "等待模型重试", active_paused: "执行中 · 后续已暂停",
+      primary: "默认", fallback: "备用"
     };
+    const path = window.location.pathname;
+    const route = path === "/settings"
+      ? { type: "settings" }
+      : path.startsWith("/projects/")
+        ? { type: "project", projectId: decodeURIComponent(path.slice("/projects/".length)) }
+        : { type: "board" };
     let snapshots = [];
     let selectedProjectId = null;
     let selectedTaskId = null;
     let skillStatus = null;
+    let productDetail = null;
+    let systemSettings = null;
     const headers = { "x-codrive-token": TOKEN, "content-type": "application/json" };
     const escapeHtml = value => String(value ?? "").replace(/[&<>\"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[character]));
     const bucket = status => {
@@ -106,8 +116,15 @@ export function renderBoardClient(accessToken: string): string {
 
     async function refresh() {
       try {
-        snapshots = await api("/api/board");
+        const requests = [api("/api/board")];
+        if (route.type === "project") requests.push(api("/api/projects/"+encodeURIComponent(route.projectId)));
+        if (route.type === "settings") requests.push(api("/api/system/settings"));
+        const results = await Promise.all(requests);
+        snapshots = results[0];
+        productDetail = route.type === "project" ? results[1] : null;
+        systemSettings = route.type === "settings" ? results[1] : null;
         document.getElementById("offline").style.display = "none";
+        if (route.type === "project") selectedProjectId = route.projectId;
         if (!selectedProjectId || !snapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
           selectedProjectId = snapshots[0]?.project.id ?? null;
           selectedTaskId = null;
@@ -124,8 +141,11 @@ export function renderBoardClient(accessToken: string): string {
 
     function render() {
       renderProjects();
-      renderWorkspace();
-      renderTaskDetail();
+      if (route.type === "settings") renderSettings();
+      else if (route.type === "project") renderProductDetail();
+      else renderWorkspace();
+      if (route.type === "board") renderTaskDetail();
+      else clearTaskDetail();
     }
 
     function renderProjects() {
@@ -142,6 +162,10 @@ export function renderBoardClient(accessToken: string): string {
         : '';
       host.querySelectorAll("[data-project]").forEach(button => {
         button.onclick = () => {
+          if (route.type !== "board") {
+            window.location.href = "/projects/"+encodeURIComponent(button.dataset.project);
+            return;
+          }
           selectedProjectId = button.dataset.project;
           selectedTaskId = null;
           document.body.classList.remove("detail-open", "nav-open");
@@ -165,18 +189,22 @@ export function renderBoardClient(accessToken: string): string {
       const actions = terminal ? [] : [project.scheduling === "paused"
         ? '<button class="action-button" data-project-action="resume">继续</button>'
         : '<button class="action-button" data-project-action="pause">暂停</button>'];
+      actions.unshift('<a class="action-button" href="/projects/'+encodeURIComponent(project.id)+'">产品详情</a>');
       if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
       if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
       if (project.status !== "cancelled") actions.push('<button class="action-button danger" data-project-action="cancel">取消</button>');
-      const projectCopy = project.question || project.summary;
-      const projectDescription = projectCopy ? '<p>'+escapeHtml(projectCopy)+'</p>' : '';
+      const planningNotice = project.planningNotice;
+      const planningCopy = planningNotice?.question || planningNotice?.summary;
+      const planningBanner = planningCopy
+        ? '<div class="planning-notice"><b>调度说明</b><span title="'+escapeHtml(planningCopy)+'">'+escapeHtml(planningCopy)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'#planning">查看完整说明</a></div>'
+        : '';
       host.innerHTML =
         '<header class="workspace-header">'+
           '<div class="workspace-topline">'+
             '<div class="project-identity">'+
               '<button id="mobile-projects" class="mobile-projects" type="button" aria-label="打开项目列表">☰</button>'+
               '<span class="project-status-dot"></span>'+
-              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1>'+escapeHtml(project.name)+'</h1>'+projectDescription+'</div>'+
+              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1><a href="/projects/'+encodeURIComponent(project.id)+'">'+escapeHtml(project.name)+'</a></h1>'+planningBanner+'</div>'+
             '</div>'+
             '<div class="project-actions">'+actions.join("")+'</div>'+
           '</div>'+
@@ -209,11 +237,103 @@ export function renderBoardClient(accessToken: string): string {
     function taskCard(task) {
       const copy = task.question || task.summary || task.description;
       const alert = ["waiting_for_input", "blocked", "changes_requested"].includes(task.status) ? "task-alert" : "";
+      const visibleStatus = task.executionStatus === "retry_scheduled" ? task.executionStatus : task.status;
       return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
-        '<span class="task-card-top"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(task.status))+'</span></span>'+
+        '<span class="task-card-top"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(visibleStatus))+'</span></span>'+
         '<h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(copy)+'</p>'+
         '<span class="task-card-footer"><span class="task-action">'+escapeHtml(label(task.requestedAction || task.report?.outcome || "queued"))+'</span><span>'+escapeHtml(formatTime(task.updatedAt))+'</span></span>'+
       '</button>';
+    }
+
+    function renderSettings() {
+      const host = document.getElementById("project");
+      if (!systemSettings) return;
+      const { settings, availableModels } = systemSettings;
+      const options = selected => availableModels.map(model =>
+        '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+' · '+escapeHtml(model.id)+'</option>'
+      ).join("");
+      host.innerHTML =
+        '<div class="page-screen settings-screen">'+
+          '<header class="page-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Runtime controls</div><h1>运行设置</h1><p>这些设置立即作用于后续调度；正在运行的 turn 会使用启动时已经保存的模型。</p></header>'+
+          '<form id="settings-form" class="settings-form">'+
+            '<label class="setting-field"><span><b>每个项目的并发任务数</b><small>每个项目独立计算容量，不同项目互不占用槽位。</small></span><input name="maxConcurrentTasks" type="number" min="1" max="32" required value="'+settings.maxConcurrentTasks+'"></label>'+
+            '<label class="setting-field"><span><b>默认模型</b><small>新任务、审查、合入与项目规划优先使用这个模型。</small></span><select name="primary">'+options(settings.models.primary)+'</select></label>'+
+            '<label class="setting-field"><span><b>Fallback 模型</b><small>默认模型容量重试三次后，在同一任务对话中切换到这里。</small></span><select name="fallback">'+options(settings.models.fallback)+'</select></label>'+
+            '<div class="settings-actions"><button class="primary-button" type="submit">保存并应用</button><span id="settings-status" role="status"></span></div>'+
+          '</form>'+
+        '</div>';
+      document.getElementById("settings-form").onsubmit = async event => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const status = document.getElementById("settings-status");
+        status.textContent = "正在保存...";
+        try {
+          systemSettings = await command("system.update_settings", {
+            maxConcurrentTasks: Number(form.get("maxConcurrentTasks")),
+            models: {
+              primary: String(form.get("primary")),
+              fallback: String(form.get("fallback"))
+            }
+          });
+          status.textContent = "设置已保存并生效。";
+          renderSettings();
+          document.getElementById("settings-status").textContent = "设置已保存并生效。";
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      };
+    }
+
+    function renderProductDetail() {
+      const host = document.getElementById("project");
+      if (!productDetail) return;
+      const { project, productDocument, planningNotice, tasks } = productDetail;
+      const model = project.currentExecution?.modelRouting;
+      const notice = planningNotice
+        ? '<section id="planning" class="product-panel planning-panel"><div class="panel-heading"><span>调度说明</span><b>'+escapeHtml(label(planningNotice.outcome))+'</b></div><p>'+escapeHtml(planningNotice.summary || planningNotice.question)+'</p>'+(planningNotice.question ? '<div class="decision-question">'+escapeHtml(planningNotice.question)+'</div>' : '')+'</section>'
+        : '<section id="planning" class="product-panel planning-panel quiet"><div class="panel-heading"><span>调度说明</span><b>当前无提示</b></div><p>当前规划版本没有需要额外说明的决定。</p></section>';
+      const notes = project.contextNotes.length
+        ? '<ul class="context-notes">'+project.contextNotes.map(note => '<li>'+escapeHtml(note)+'</li>').join("")+'</ul>'
+        : '<p class="empty-copy">尚未记录产品决定或补充上下文。</p>';
+      host.innerHTML =
+        '<div class="page-screen product-screen">'+
+          '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><a class="action-button" href="/settings">运行设置</a></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
+          '<div class="product-grid">'+
+            '<div class="product-main">'+notice+
+              '<section class="product-panel"><div class="panel-heading"><span>产品文档</span><b>PROJECT.md</b></div><article class="markdown-body">'+renderMarkdown(productDocument)+'</article></section>'+
+              '<section class="product-panel"><div class="panel-heading"><span>任务清单</span><b>'+tasks.length+'</b></div><div class="product-task-list">'+tasks.map(productTask).join("")+'</div></section>'+
+            '</div>'+
+            '<aside class="product-rail">'+
+              '<section class="product-panel compact"><div class="panel-heading"><span>注册信息</span></div><dl class="detail-meta"><dt>项目 ID</dt><dd>'+escapeHtml(project.id)+'</dd><dt>仓库</dt><dd>'+escapeHtml(project.repositoryPath)+'</dd><dt>默认分支</dt><dd>'+escapeHtml(project.defaultBranch)+'</dd><dt>注册时间</dt><dd>'+escapeHtml(formatTime(project.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(project.updatedAt))+'</dd></dl></section>'+
+              '<section class="product-panel compact"><div class="panel-heading"><span>当前执行</span><b>'+escapeHtml(label(project.executionStatus || "pending"))+'</b></div><dl class="detail-meta"><dt>动作</dt><dd>'+escapeHtml(label(project.requestedAction || "pending"))+'</dd>'+(model ? '<dt>模型</dt><dd>'+escapeHtml(model.model)+'</dd><dt>路由</dt><dd>'+escapeHtml(label(model.route))+'</dd><dt>容量重试</dt><dd>'+model.retryCount+'</dd>' : '')+'</dl></section>'+
+              '<section class="product-panel compact"><div class="panel-heading"><span>产品上下文</span><b>'+project.contextNotes.length+'</b></div>'+notes+'</section>'+
+            '</aside>'+
+          '</div>'+
+        '</div>';
+    }
+
+    function productTask(task) {
+      const executionStatus = task.executionStatus === "retry_scheduled" ? task.executionStatus : task.status;
+      return '<article class="product-task"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><div><h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(task.description)+'</p></div><span class="status-pill">'+escapeHtml(label(executionStatus))+'</span></article>';
+    }
+
+    function renderMarkdown(markdown) {
+      return String(markdown || "").split("\\n").map(line => {
+        const value = escapeHtml(line);
+        if (line.startsWith("### ")) return '<h3>'+escapeHtml(line.slice(4))+'</h3>';
+        if (line.startsWith("## ")) return '<h2>'+escapeHtml(line.slice(3))+'</h2>';
+        if (line.startsWith("# ")) return '<h1>'+escapeHtml(line.slice(2))+'</h1>';
+        if (line.startsWith("- ")) return '<div class="markdown-list-item">'+escapeHtml(line.slice(2))+'</div>';
+        return line.trim() ? '<p>'+value+'</p>' : '<div class="markdown-space"></div>';
+      }).join("");
+    }
+
+    function clearTaskDetail() {
+      selectedTaskId = null;
+      document.body.classList.remove("detail-open");
+      const detail = document.getElementById("task-detail");
+      detail.setAttribute("aria-hidden", "true");
+      document.getElementById("task-detail-content").innerHTML = "";
     }
 
     function renderTaskDetail() {
@@ -256,7 +376,9 @@ export function renderBoardClient(accessToken: string): string {
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           reportSection+
           (links ? '<section class="detail-section"><h3>Codex 对话</h3><div class="conversation-list">'+links+'</div></section>' : '')+
-          '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.requestedAction || task.status))+'</dd><dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
+          '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.requestedAction || task.status))+'</dd>'+
+            (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd><dt>容量重试</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+
+            '<dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
         '</div>';
       document.getElementById("close-detail").onclick = closeDetail;
       host.querySelector("[data-retry]")?.addEventListener("click", async () => {

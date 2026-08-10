@@ -8,17 +8,35 @@ import type {
   ProjectAction,
   ProjectReport,
   Task,
+  ModelRoutingSettings,
 } from "../domain/types.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
 import { projectLifecycleState } from "./lifecycle-recorder.js";
 import type { ProjectExecutor } from "./project-executor.js";
+import {
+  type CodexTurnFailure,
+  initialModelRouting,
+  isModelCapacityFailure,
+  isRetryDue,
+  markRetryStarted,
+  planModelCapacityRecovery,
+} from "./model-routing.js";
 
-const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
+const activeStatuses = new Set([
+  "pending",
+  "running",
+  "retry_scheduled",
+  "awaiting_report",
+]);
+const inFlightStatuses = new Set(["running", "awaiting_report"]);
+const reportSubmissionStatuses = new Set(["pending", "running", "awaiting_report"]);
 
 export interface ProjectExecutionCoordinatorOptions {
   now: () => string;
   createId: (prefix: string) => string;
   leaseExpiration: () => string;
+  modelSettings: () => ModelRoutingSettings;
+  modelCapacityRetryDelaysMs: readonly number[];
   recordEvent: (
     event: Omit<CodriveEvent, "eventId" | "occurredAt">,
   ) => Promise<void>;
@@ -69,6 +87,7 @@ export class ProjectExecutionCoordinator {
         action,
         status: "pending",
         startedAt: now,
+        modelRouting: initialModelRouting(this.options.modelSettings()),
         leaseExpiresAt: this.options.leaseExpiration(),
         ...(action === "evaluate_product"
           ? { progressFingerprint: evaluationFingerprint(tasks) }
@@ -104,7 +123,7 @@ export class ProjectExecutionCoordinator {
     if (
       !execution ||
       execution.attemptId !== report.attemptId ||
-      !activeStatuses.has(execution.status)
+      !reportSubmissionStatuses.has(execution.status)
     ) {
       throw new WorkflowConflictError(
         `Report does not match the current project execution for ${project.id}`,
@@ -160,7 +179,7 @@ export class ProjectExecutionCoordinator {
       });
       return project;
     }
-    if (!activeStatuses.has(execution.status)) {
+    if (!inFlightStatuses.has(execution.status)) {
       await this.options.recordEvent({
         type: "workflow.event_suppressed",
         projectId,
@@ -326,7 +345,9 @@ export class ProjectExecutionCoordinator {
   async cancel(project: Project): Promise<Project> {
     const execution = project.currentExecution;
     if (!execution || !activeStatuses.has(execution.status)) return project;
-    await this.executor.interrupt(project);
+    if (inFlightStatuses.has(execution.status)) {
+      await this.executor.interrupt(project);
+    }
     return {
       ...project,
       currentExecution: {
@@ -340,11 +361,84 @@ export class ProjectExecutionCoordinator {
   async failTurn(
     projectId: string,
     attemptId: string,
-    message: string,
+    failure: CodexTurnFailure,
   ): Promise<Project> {
     const project = await this.requireProject(projectId);
-    if (project.currentExecution?.attemptId !== attemptId) return project;
-    return this.fail(project, message);
+    const execution = project.currentExecution;
+    if (
+      !execution ||
+      execution.attemptId !== attemptId ||
+      execution.turnId !== failure.turnId ||
+      !inFlightStatuses.has(execution.status)
+    ) {
+      return project;
+    }
+    if (!isModelCapacityFailure(failure)) {
+      return this.fail(project, failure.message);
+    }
+
+    const recovery = planModelCapacityRecovery(
+      execution.modelRouting,
+      failure,
+      this.options.modelSettings(),
+      new Date(this.options.now()),
+      this.options.modelCapacityRetryDelaysMs,
+    );
+    if (recovery.outcome === "exhausted") {
+      return this.fail(project, failure.message, undefined, recovery.routing);
+    }
+
+    const scheduled: Project = {
+      ...project,
+      currentExecution: {
+        ...execution,
+        status: "retry_scheduled",
+        modelRouting: recovery.routing,
+      },
+      updatedAt: this.options.now(),
+    };
+    await this.store.saveProject(scheduled);
+    await this.options.recordEvent({
+      type: "turn.retry_scheduled",
+      projectId: project.id,
+      attemptId,
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      turnId: failure.turnId,
+      reason: failure.message,
+      before: projectLifecycleState(project),
+      after: projectLifecycleState(scheduled),
+      data: {
+        scope: "project",
+        model: recovery.routing.model,
+        modelRoute: recovery.routing.route,
+        retryCount: recovery.routing.retryCount,
+        nextRetryAt: recovery.routing.nextRetryAt,
+      },
+    });
+    return scheduled;
+  }
+
+  async retryScheduled(project: Project, now: Date): Promise<Project> {
+    const execution = project.currentExecution;
+    if (
+      !execution ||
+      execution.status !== "retry_scheduled" ||
+      !isRetryDue(execution.modelRouting, now)
+    ) {
+      return project;
+    }
+    const pending: Project = {
+      ...project,
+      currentExecution: {
+        ...execution,
+        status: execution.reportReminderCount ? "awaiting_report" : "pending",
+        modelRouting: markRetryStarted(execution.modelRouting),
+        leaseExpiresAt: this.options.leaseExpiration(),
+      },
+      updatedAt: this.options.now(),
+    };
+    await this.store.saveProject(pending);
+    return this.dispatch(pending);
   }
 
   private async dispatch(project: Project): Promise<Project> {
@@ -371,12 +465,14 @@ export class ProjectExecutionCoordinator {
         });
       }
 
-      const turnId = await this.executor.startTurn(withThread, threadId);
+      const turnId = execution.reportReminderCount
+        ? await this.executor.requestReport(withThread, threadId)
+        : await this.executor.startTurn(withThread, threadId);
       const running: Project = {
         ...withThread,
         currentExecution: {
           ...withThread.currentExecution!,
-          status: "running",
+          status: execution.reportReminderCount ? "awaiting_report" : "running",
           turnId,
           leaseExpiresAt: this.options.leaseExpiration(),
         },
@@ -406,6 +502,7 @@ export class ProjectExecutionCoordinator {
     project: Project,
     reason: string,
     reportReminderCount?: number,
+    modelRouting = project.currentExecution?.modelRouting,
   ): Promise<Project> {
     const execution = project.currentExecution;
     if (!execution) throw new Error(`Project ${project.id} has no current execution`);
@@ -435,6 +532,7 @@ export class ProjectExecutionCoordinator {
         ...execution,
         status: "failed",
         ...(reportReminderCount === undefined ? {} : { reportReminderCount }),
+        ...(modelRouting ? { modelRouting } : {}),
         finishedAt: now,
       },
       updatedAt: now,

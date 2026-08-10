@@ -16,6 +16,8 @@ import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  testModelRouting,
+  testModels,
 } from "../support/recording-executors.js";
 
 class StubNotifications implements NotificationSource {
@@ -55,6 +57,7 @@ async function createTaskConversationFixture(conversationActive = false) {
   let sequence = 0;
   const workflow = new WorkflowEngine(store, dispatcher, {
     maxConcurrentTasks: 1,
+    models: testModels,
     now: () => "2026-08-03T00:00:00.000Z",
     createId: (prefix) => `${prefix}_${++sequence}`,
   });
@@ -89,6 +92,7 @@ describe("RecoveryManager", () => {
     taskDispatcher = new RecordingTaskDispatcher();
     workflow = new WorkflowEngine(store, taskDispatcher, {
       maxConcurrentTasks: 1,
+      models: testModels,
       now: () => "2026-08-03T00:00:00.000Z",
       createId: (prefix) => `${prefix}_${++createId}`,
     });
@@ -111,6 +115,133 @@ describe("RecoveryManager", () => {
       status: "blocked",
       currentExecution: { status: "failed" },
     });
+  });
+
+  it("restores a persisted model-capacity retry at its exact backoff deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T00:00:00.000Z"));
+    const timedStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-model-retry-")),
+    );
+    const created = await timedStore.createProject({
+      name: "Retry Game",
+      repositoryPath: "/workspace/retry-game",
+      defaultBranch: "main",
+      productDocument: "# Retry Game\n",
+      tasks: [{ title: "Loop", description: "Build", acceptanceCriteria: [] }],
+    });
+    await timedStore.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      requestedAction: "develop",
+    });
+    const dispatcher = new RecordingTaskDispatcher();
+    const timedWorkflow = new WorkflowEngine(timedStore, dispatcher, {
+      maxConcurrentTasks: 1,
+      models: testModels,
+      now: () => new Date(Date.now()).toISOString(),
+    });
+    await timedWorkflow.reconcile();
+    const first = (await timedStore.findTask(created.tasks[0]!.id))!.task
+      .currentExecution!;
+    await timedWorkflow.failTurn(created.tasks[0]!.id, first.attemptId, {
+      turnId: first.turnId!,
+      message: "Selected model is at capacity. Please try a different model.",
+      codexErrorInfo: "serverOverloaded",
+    });
+    const restartedRecovery = new RecoveryManager(
+      timedStore,
+      new WorkflowEngine(timedStore, dispatcher, {
+        maxConcurrentTasks: 1,
+        models: testModels,
+        now: () => new Date(Date.now()).toISOString(),
+      }),
+      new StubNotifications(),
+    );
+
+    try {
+      await restartedRecovery.start();
+      expect(vi.getTimerCount()).toBe(2);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(dispatcher.started).toHaveLength(1);
+      expect(
+        (await timedStore.findTask(created.tasks[0]!.id))!.task.currentExecution,
+      ).toMatchObject({ status: "retry_scheduled", attemptId: first.attemptId });
+
+      const beforeRetry = Date.now();
+      await vi.advanceTimersToNextTimerAsync();
+      expect(Date.now() - beforeRetry).toBe(1);
+      vi.useRealTimers();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(
+        (await timedStore.findTask(created.tasks[0]!.id))!.task.currentExecution,
+      ).toMatchObject({ status: "running", attemptId: first.attemptId });
+      expect(dispatcher.started).toHaveLength(2);
+
+      await timedWorkflow.retryScheduledExecutions(new Date());
+      expect(dispatcher.started).toHaveLength(2);
+    } finally {
+      restartedRecovery.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the newest retry timer when schedule refreshes finish out of order", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T00:00:00.000Z"));
+    const snapshot = (await store.getProject(
+      (await store.findTask(taskId))!.project.id,
+    ))!;
+    const running = snapshot.tasks[0]!.currentExecution!;
+    const retrySnapshot = (nextRetryAt: string) => ({
+      project: snapshot.project,
+      tasks: [
+        {
+          ...snapshot.tasks[0]!,
+          currentExecution: {
+            ...running,
+            status: "retry_scheduled" as const,
+            modelRouting: {
+              ...running.modelRouting,
+              nextRetryAt,
+            },
+          },
+        },
+      ],
+    });
+    let resolveOlderRefresh!: (
+      value: Awaited<ReturnType<ProjectStore["listProjects"]>>,
+    ) => void;
+    const olderRefresh = new Promise<
+      Awaited<ReturnType<ProjectStore["listProjects"]>>
+    >((resolve) => {
+      resolveOlderRefresh = resolve;
+    });
+    vi.spyOn(store, "listProjects")
+      .mockImplementationOnce(() => olderRefresh)
+      .mockResolvedValueOnce([
+        retrySnapshot("2026-08-03T00:00:10.000Z"),
+      ]);
+    const refreshTimer = (
+      recovery as unknown as {
+        scheduleRetryWakeup(now?: Date): Promise<void>;
+      }
+    ).scheduleRetryWakeup.bind(recovery);
+
+    try {
+      const older = refreshTimer();
+      await refreshTimer();
+      resolveOlderRefresh([
+        retrySnapshot("2026-08-03T00:00:05.000Z"),
+      ]);
+      await older;
+
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      recovery.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("asks the same task conversation for a missing report", async () => {
@@ -311,6 +442,7 @@ describe("RecoveryManager", () => {
         action: "develop",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
       },
     });
     const projectExecutor = new RecordingProjectExecutor();
@@ -319,6 +451,7 @@ describe("RecoveryManager", () => {
       new RecordingTaskDispatcher(),
       {
         maxConcurrentTasks: 4,
+        models: testModels,
         now: () => "2026-08-03T00:00:00.000Z",
         createId: (prefix) => `${prefix}_idle`,
       },
@@ -382,7 +515,7 @@ describe("RecoveryManager", () => {
     const timedWorkflow = new WorkflowEngine(
       timedStore,
       new RecordingTaskDispatcher(),
-      { maxConcurrentTasks: 4 },
+      { maxConcurrentTasks: 4, models: testModels },
       projectExecutor,
     );
     const timedRecovery = new RecoveryManager(
@@ -460,7 +593,7 @@ describe("RecoveryManager", () => {
     const evaluationWorkflow = new WorkflowEngine(
       evaluationStore,
       new RecordingTaskDispatcher(),
-      { maxConcurrentTasks: 4 },
+      { maxConcurrentTasks: 4, models: testModels },
       projectExecutor,
     );
     await evaluationWorkflow.reconcile();

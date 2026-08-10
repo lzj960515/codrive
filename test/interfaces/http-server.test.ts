@@ -5,13 +5,17 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
+import { SystemSettingsService } from "../../src/application/system-settings-service.js";
 import type { ProjectSnapshot } from "../../src/domain/types.js";
+import { ConfigStore } from "../../src/infrastructure/config-store.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import { SkillInstaller } from "../../src/infrastructure/skill-installer.js";
 import { createHttpServer } from "../../src/interfaces/http/server.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  testModelRouting,
+  testModels,
 } from "../support/recording-executors.js";
 
 describe("HTTP API", () => {
@@ -19,15 +23,18 @@ describe("HTTP API", () => {
   let engine: WorkflowEngine;
   let server: ReturnType<typeof createHttpServer>;
   let skillInstaller: SkillInstaller;
+  let settingsService: SystemSettingsService;
   let errors: string[];
 
   beforeEach(async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-http-"));
+    const configStore = new ConfigStore(stateDirectory);
+    await configStore.loadOrCreate();
     store = new ProjectStore(stateDirectory);
     engine = new WorkflowEngine(
       store,
       new RecordingTaskDispatcher(),
-      { maxConcurrentTasks: 2 },
+      { maxConcurrentTasks: 2, models: testModels },
       new RecordingProjectExecutor(),
     );
     skillInstaller = new SkillInstaller(
@@ -35,11 +42,28 @@ describe("HTTP API", () => {
       join(stateDirectory, "installed-skills"),
       "0.2.0",
     );
+    settingsService = new SystemSettingsService(configStore, engine, {
+      listModels: async () => [
+        {
+          id: "gpt-5.6-sol",
+          displayName: "GPT-5.6-Sol",
+          description: "Frontier coding model",
+          isDefault: true,
+        },
+        {
+          id: "gpt-5.6-terra",
+          displayName: "GPT-5.6-Terra",
+          description: "Balanced coding model",
+          isDefault: false,
+        },
+      ],
+    });
     errors = [];
     server = createHttpServer({
       store,
       workflow: engine,
       skillInstaller,
+      settingsService,
       accessToken: "secret",
       onError: (message) => errors.push(message),
     });
@@ -166,6 +190,52 @@ describe("HTTP API", () => {
     expect(current.json().skills.state).toBe("current");
   });
 
+  it("reads and updates concurrency and model routing through the settings boundary", async () => {
+    const current = await server.inject({
+      method: "GET",
+      url: "/api/system/settings",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const updated = await command({
+      type: "system.update_settings",
+      payload: {
+        maxConcurrentTasks: 2,
+        models: {
+          primary: "gpt-5.6-terra",
+          fallback: "gpt-5.6-sol",
+        },
+      },
+    });
+    const page = await server.inject({ method: "GET", url: "/settings" });
+
+    expect(current.statusCode).toBe(200);
+    expect(current.json()).toMatchObject({
+      settings: { maxConcurrentTasks: 4, models: testModels },
+      availableModels: [
+        { id: "gpt-5.6-sol" },
+        { id: "gpt-5.6-terra" },
+      ],
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({
+      settings: {
+        maxConcurrentTasks: 2,
+        models: {
+          primary: "gpt-5.6-terra",
+          fallback: "gpt-5.6-sol",
+        },
+      },
+    });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain("运行设置");
+    expect(page.body).toContain("每个项目的并发任务数");
+    expect(page.body).toContain("默认模型");
+    expect(page.body).toContain("Fallback 模型");
+    const clientScript = page.body.match(/<script>([\s\S]+)<\/script>/)?.[1];
+    expect(clientScript).toBeDefined();
+    expect(() => new Function(clientScript!)).not.toThrow();
+  });
+
   it("resolves a unique project from its repository path", async () => {
     const created = await registerProject();
 
@@ -239,7 +309,10 @@ describe("HTTP API", () => {
     await engine.failProjectTurn(
       created.project.id,
       failedAttempt.attemptId,
-      "Selected model is at capacity",
+      {
+        turnId: failedAttempt.turnId!,
+        message: "Planner process failed",
+      },
     );
 
     const resumed = await command({
@@ -445,6 +518,7 @@ describe("HTTP API", () => {
         action: "develop",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
       },
     });
     await store.saveProject({
@@ -473,7 +547,10 @@ describe("HTTP API", () => {
     expect(board.json()[0].project).toMatchObject({
       status: "active",
       displayStatus: "active",
-      question: "Which rule should be used?",
+      planningNotice: {
+        summary: "A product rule is missing",
+        question: "Which rule should be used?",
+      },
       planning: {
         revision: 1,
         status: "needs_input",
@@ -526,8 +603,7 @@ describe("HTTP API", () => {
 
     expect(board.json()[0].project).toMatchObject({
       displayStatus: "selecting_tasks",
-      summary: null,
-      question: null,
+      planningNotice: null,
       planning: {
         revision: 2,
         status: "pending",
@@ -536,6 +612,91 @@ describe("HTTP API", () => {
         question: null,
       },
     });
+  });
+
+  it("projects paused scheduling before active project workflow status", async () => {
+    const created = await registerProject("Semantic Atlas");
+
+    await command({
+      type: "project.control",
+      payload: { projectId: created.project.id, action: "pause" },
+    });
+    const board = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+
+    expect(board.json()[0].project).toMatchObject({
+      status: "active",
+      scheduling: "paused",
+      displayStatus: "paused",
+    });
+  });
+
+  it("exposes registered product information and the complete planning notice", async () => {
+    const created = await registerProject("Semantic Atlas");
+    const summary =
+      "当前不新增任务：产品契约与评测基线任务仅因所选模型容量不足而失败，原任务工作树保留了未提交现场，仍应由原任务对话继续。";
+    await store.saveProject({
+      ...created.project,
+      contextNotes: ["地图数据由本地 fixture 提供"],
+      planning: {
+        ...created.project.planning,
+        lastDecision: {
+          revision: 1,
+          outcome: "wait_for_active_tasks",
+          summary,
+          taskIds: [],
+          wakeCondition: "task_completed",
+          nextAction: "wait_for_task_completion",
+          decidedAt: "2026-08-10T09:00:00.000Z",
+        },
+      },
+    });
+
+    const detail = await server.inject({
+      method: "GET",
+      url: `/api/projects/${created.project.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const missing = await server.inject({
+      method: "GET",
+      url: "/api/projects/missing",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const page = await server.inject({
+      method: "GET",
+      url: `/projects/${created.project.id}`,
+    });
+
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({
+      project: {
+        id: created.project.id,
+        name: "Semantic Atlas",
+        repositoryPath: "/workspace/game",
+        defaultBranch: "main",
+        contextNotes: ["地图数据由本地 fixture 提供"],
+      },
+      productDocument: "# Semantic Atlas\n",
+      planningNotice: {
+        summary,
+        outcome: "wait_for_active_tasks",
+      },
+      tasks: [
+        expect.objectContaining({
+          id: created.tasks[0]!.id,
+          title: "Loop",
+          status: "backlog",
+        }),
+      ],
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain("产品详情");
+    expect(page.body).toContain("产品文档");
+    expect(page.body).toContain("调度说明");
   });
 
   it("returns a human-facing board projection without a Web answer form", async () => {
@@ -569,6 +730,7 @@ describe("HTTP API", () => {
         action: "develop",
         status: "waiting_for_input",
         startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
       },
     });
 

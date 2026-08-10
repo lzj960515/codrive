@@ -55,6 +55,8 @@ Help me plan this snake game with Codrive, then start development after I confir
 
 Choosing **Later** keeps a small Skills setup button in the lower-left corner of the board. When a future Codrive release changes its bundled Skills, the board offers the update again.
 
+The board includes a **Runtime settings** page for the per-project concurrency limit, primary model, and fallback model. Each product title opens a detail page with its registered repository, complete `PROJECT.md`, planning decision, product context, task list, and current execution information.
+
 ## How it works
 
 ![Codrive product loop and scheduling architecture](https://raw.githubusercontent.com/lzj960515/codrive/main/docs/architecture/codrive-orchestration.png)
@@ -67,7 +69,9 @@ Task selection is dynamic rather than a fixed dependency graph. Project registra
 
 Codrive first advances existing task stages, then performs product evaluation, and only then plans an unevaluated backlog revision. Finishing development immediately creates an independent review; rework and integration continue the same task pipeline. A task that needs input or becomes blocked keeps the current planning revision, so already selected siblings can still start while the board explains what is waiting. Each project can run four active tasks by default without consuming another project's capacity, while integration remains serial within each repository.
 
-Once a minute, Codrive also runs a narrow recovery check. It sends task messages that were waiting for their conversation to become idle and resumes AI work that has gone a long time without a result. When a project has no Codex work at all, recovery starts only a planning revision that has never been evaluated; a persisted selection, input request, or blocker never causes repeated model calls. A turn that App Server still reports as `inProgress` keeps its current attempt and receives a renewed lease. Only a confirmed missing or terminal turn is replaced. Startup recovery completes before the command API becomes ready, so user retries cannot race with it.
+Model capacity is a recoverable execution state rather than an immediate task blocker. Codrive keeps the same stage, attempt, and conversation, then retries the primary model after 5, 10, and 20 seconds. If capacity is still unavailable, it switches that execution to the configured fallback model, which receives the same retry budget. Only an exhausted fallback becomes blocked. Scheduled retries remain persisted across service restarts, count against that project's capacity, and wait while the project is paused.
+
+Once a minute, Codrive also runs a narrow recovery check. It sends task messages that were waiting for their conversation to become idle and resumes AI work that has gone a long time without a result. Capacity retries use their exact persisted deadlines instead of waiting for this scan. When a project has no Codex work at all, recovery starts only a planning revision that has never been evaluated; a persisted selection, input request, or blocker never causes repeated model calls. A turn that App Server still reports as `inProgress` keeps its current attempt and receives a renewed lease. Only a confirmed missing or terminal turn is replaced. Startup recovery completes before the command API becomes ready, so user retries cannot race with it.
 
 ## Codex conversations
 
@@ -83,7 +87,7 @@ Persistent task conversations stay attached to the product repository in Codex A
 
 Each task conversation runs one Codex turn at a time. Before development, rework, integration, recovery, or a report reminder continues an existing conversation, Codrive waits until that conversation is idle; an idle event resumes it immediately, with the minute recovery check as a fallback.
 
-The board links directly to development and review conversations. If Codex needs a product decision, the board shows the question and sends you back to the relevant Codex task; Codrive does not create a second chat interface.
+The board links directly to development and review conversations. A paused project is labeled **Paused**, or **Running · future scheduling paused** while an already-started turn is still active. Planner output appears separately as a complete **Scheduling note**, instead of being mixed with the product status. If Codex needs a product decision, the board shows the question and sends you back to the relevant Codex task; Codrive does not create a second chat interface.
 
 ## Built-in Skills
 

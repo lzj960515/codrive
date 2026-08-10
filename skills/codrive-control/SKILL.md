@@ -1,6 +1,6 @@
 ---
 name: codrive-control
-description: 查询和控制本地 Codrive 项目与任务，包括看板状态、暂停、恢复、取消、重试和补充上下文。用户询问 Codrive 进度、阻塞原因或要求干预自动流程时使用。
+description: 查询和控制本地 Codrive 项目、任务与运行设置，包括产品详情、看板状态、暂停、恢复、取消、重试、重新规划、模型路由和补充上下文。用户询问 Codrive 进度、阻塞原因、模型容量恢复或要求干预自动流程时使用。
 compatibility: Requires Node.js 20+ and a running local Codrive service.
 ---
 
@@ -16,6 +16,29 @@ node <skill-directory>/scripts/codrive-control.mjs project <project-id>
 node <skill-directory>/scripts/codrive-control.mjs task <task-id>
 ```
 
+`project` 返回注册信息、完整 `PROJECT.md`、规划决定、产品上下文、任务与当前执行信息。看板中的“调度说明”来自当前规划版本的持久化决定，用于解释等待条件和下一行动。
+
+## 运行设置
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs settings
+node <skill-directory>/scripts/codrive-control.mjs update-settings
+```
+
+`update-settings` 通过标准输入接收完整设置：
+
+```json
+{
+  "maxConcurrentTasks": 4,
+  "models": {
+    "primary": "<primary-model-id>",
+    "fallback": "<fallback-model-id>"
+  }
+}
+```
+
+并发上限按项目独立计算。模型设置作用于后续创建的执行；已经运行的 turn 保持启动时保存的模型。修改并发会为每个项目创建一个新的规划版本，单独修改模型路由保持现有规划版本。
+
 ## 控制项目
 
 动作是 `pause`、`resume`、`retry`、`replan` 或 `cancel`：
@@ -24,7 +47,7 @@ node <skill-directory>/scripts/codrive-control.mjs task <task-id>
 node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> <action>
 ```
 
-暂停和恢复只控制后续调度。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 在同一规划版本创建新的执行 attempt。确认产品、仓库或外部 Gate 已变化时，使用 `replan` 创建新的规划版本并重新判断 backlog。取消会永久终止项目并进入最终状态。
+暂停和恢复只控制后续调度；已经运行的 turn 可以结束，所以看板可能显示“执行中 · 后续已暂停”。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 在同一规划版本创建新的执行 attempt。确认产品、仓库或外部 Gate 已变化时，使用 `replan` 创建新的规划版本并重新判断 backlog。取消会永久终止项目并进入最终状态。
 
 ## 控制任务
 
@@ -33,7 +56,7 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> retry
 node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel
 ```
 
-任务级 `retry` 用于 `blocked` 且仍保留 `requestedAction` 的失败阶段。`waiting_for_input` 由用户在原开发对话中回复，随后继续同一个 attempt。任务级 `cancel` 会永久终止任务并进入最终状态。
+模型容量失败会在原 attempt 和原对话中按 5 秒、10 秒、20 秒自动重试三次，然后切换到 fallback 模型继续恢复。Fallback 同样重试三次；全部耗尽后任务才进入 `blocked`。此时任务级 `retry` 创建新的 attempt。`waiting_for_input` 由用户在原开发对话中回复，随后继续同一个 attempt。任务级 `cancel` 会永久终止任务并进入最终状态。
 
 ## 记录产品决策
 

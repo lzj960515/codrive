@@ -17,10 +17,14 @@ describe("local runtime state", () => {
     const mode = (await stat(store.configPath)).mode & 0o777;
 
     expect(created).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       host: "127.0.0.1",
       port: 0,
       maxConcurrentTasks: 4,
+      models: {
+        primary: "gpt-5.6-sol",
+        fallback: "gpt-5.6-terra",
+      },
       stateDirectory,
     });
     expect(created.accessToken).toMatch(/^[a-f0-9]{64}$/);
@@ -28,12 +32,13 @@ describe("local runtime state", () => {
     expect(mode).toBe(0o600);
   });
 
-  it("upgrades the early single-task default to four concurrent tasks", async () => {
+  it("rejects an older config schema instead of carrying runtime compatibility", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-config-legacy-"));
     const store = new ConfigStore(stateDirectory);
     await writeFile(
       store.configPath,
       JSON.stringify({
+        schemaVersion: 1,
         host: "127.0.0.1",
         port: 43120,
         maxConcurrentTasks: 1,
@@ -43,25 +48,27 @@ describe("local runtime state", () => {
       "utf8",
     );
 
-    const upgraded = await store.loadOrCreate();
-    const persisted = JSON.parse(await readFile(store.configPath, "utf8"));
-
-    expect(upgraded).toMatchObject({
+    await expect(store.loadOrCreate()).rejects.toThrow(
+      "Unsupported Codrive config version 1",
+    );
+    expect(JSON.parse(await readFile(store.configPath, "utf8"))).toMatchObject({
       schemaVersion: 1,
-      maxConcurrentTasks: 4,
-      port: 43120,
+      maxConcurrentTasks: 1,
     });
-    expect(persisted).toEqual(upgraded);
   });
 
   it("preserves a concurrency value saved by the current config format", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-config-current-"));
     const store = new ConfigStore(stateDirectory);
     const configured = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       host: "127.0.0.1",
       port: 43121,
       maxConcurrentTasks: 1,
+      models: {
+        primary: "gpt-5.6-sol",
+        fallback: "gpt-5.6-terra",
+      },
       accessToken: "b".repeat(64),
       stateDirectory,
     };

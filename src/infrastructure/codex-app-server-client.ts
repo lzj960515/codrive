@@ -4,9 +4,11 @@ import { createRequire } from "node:module";
 
 import type {
   CodexGateway,
+  CodexModelOption,
   CodexTurnStatus,
 } from "../application/codex-gateway.js";
 import type { InitializeResponse } from "./app-server-protocol/InitializeResponse.js";
+import type { ModelListResponse } from "./app-server-protocol/v2/ModelListResponse.js";
 import type { ThreadResumeResponse } from "./app-server-protocol/v2/ThreadResumeResponse.js";
 import type { ThreadReadResponse } from "./app-server-protocol/v2/ThreadReadResponse.js";
 import type { ThreadStartResponse } from "./app-server-protocol/v2/ThreadStartResponse.js";
@@ -121,7 +123,12 @@ export class CodexAppServerClient implements CodexGateway {
     });
   }
 
-  async startTurn(threadId: string, cwd: string, prompt: string): Promise<string> {
+  async startTurn(
+    threadId: string,
+    cwd: string,
+    prompt: string,
+    model: string,
+  ): Promise<string> {
     await this.start();
     const response = await this.requireConnection().request<TurnStartResponse>(
       "turn/start",
@@ -130,10 +137,36 @@ export class CodexAppServerClient implements CodexGateway {
         cwd,
         approvalPolicy: "never",
         sandboxPolicy: { type: "dangerFullAccess" },
+        model,
         input: [{ type: "text", text: prompt, text_elements: [] }],
       },
     );
     return response.turn.id;
+  }
+
+  async listModels(): Promise<CodexModelOption[]> {
+    await this.start();
+    const models: CodexModelOption[] = [];
+    let cursor: string | undefined;
+    do {
+      const response = await this.requireConnection().request<ModelListResponse>(
+        "model/list",
+        {
+          includeHidden: false,
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+      );
+      models.push(
+        ...response.data.map(({ id, displayName, description, isDefault }) => ({
+          id,
+          displayName,
+          description,
+          isDefault,
+        })),
+      );
+      cursor = response.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+    return models;
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

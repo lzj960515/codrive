@@ -35,6 +35,7 @@ export class CodexTaskDispatcher implements TaskDispatcher {
       threadId,
       conversationDirectory(request),
       `请使用 $codrive-task 处理任务 ${request.task.id} 的当前阶段。`,
+      request.task.currentExecution!.modelRouting.model,
     );
   }
 
@@ -46,6 +47,7 @@ export class CodexTaskDispatcher implements TaskDispatcher {
       threadId,
       conversationDirectory(request),
       `请使用 $codrive-task 汇报任务 ${request.task.id} 的当前处理结果。`,
+      request.task.currentExecution!.modelRouting.model,
     );
   }
 
@@ -60,13 +62,14 @@ export class CodexTaskDispatcher implements TaskDispatcher {
     threadId: string,
     cwd: string,
     prompt: string,
+    model: string,
   ): Promise<TurnDispatchResult> {
     if (await this.codex.isThreadActive(threadId)) {
       return { status: "conversation_active" };
     }
     return {
       status: "started",
-      turnId: await this.codex.startTurn(threadId, cwd, prompt),
+      turnId: await this.codex.startTurn(threadId, cwd, prompt, model),
     };
   }
 }

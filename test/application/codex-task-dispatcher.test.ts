@@ -19,8 +19,13 @@ class RecordingGateway implements CodexGateway {
     this.calls.push({ method: "resumeThread", args: [threadId, cwd] });
   }
 
-  async startTurn(threadId: string, cwd: string, prompt: string): Promise<string> {
-    this.calls.push({ method: "startTurn", args: [threadId, cwd, prompt] });
+  async startTurn(
+    threadId: string,
+    cwd: string,
+    prompt: string,
+    model: string,
+  ): Promise<string> {
+    this.calls.push({ method: "startTurn", args: [threadId, cwd, prompt, model] });
     return `turn_${++this.turn}`;
   }
 
@@ -32,12 +37,21 @@ class RecordingGateway implements CodexGateway {
     return null;
   }
 
+  async listModels(): Promise<[]> {
+    return [];
+  }
+
   async isThreadActive(): Promise<boolean> {
     return this.threadActive;
   }
 }
 
 const timestamp = "2026-08-03T00:00:00.000Z";
+const modelRouting = () => ({
+  model: "gpt-5.6-sol",
+  route: "primary" as const,
+  retryCount: 0,
+});
 const project: Project = {
   id: "project_1",
   name: "Tiny Game",
@@ -72,6 +86,7 @@ function task(overrides: Partial<Task> = {}): Task {
       action: "develop",
       status: "pending",
       startedAt: timestamp,
+      modelRouting: modelRouting(),
     },
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -103,6 +118,7 @@ describe("CodexTaskDispatcher", () => {
           "thread_1",
           "/workspace/game",
           "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+          "gpt-5.6-sol",
         ],
       },
     ]);
@@ -122,6 +138,7 @@ describe("CodexTaskDispatcher", () => {
         action: "review",
         status: "pending",
         startedAt: timestamp,
+        modelRouting: modelRouting(),
       },
       reviewAttempts: [{ attemptId: "review_1", createdAt: timestamp }],
     });
@@ -134,6 +151,7 @@ describe("CodexTaskDispatcher", () => {
         action: "rework",
         status: "pending",
         startedAt: timestamp,
+        modelRouting: modelRouting(),
       },
     });
     const integrating = task({
@@ -146,6 +164,7 @@ describe("CodexTaskDispatcher", () => {
         action: "integrate",
         status: "pending",
         startedAt: timestamp,
+        modelRouting: modelRouting(),
       },
     });
 
@@ -182,6 +201,7 @@ describe("CodexTaskDispatcher", () => {
         action: "develop",
         status: "pending",
         startedAt: timestamp,
+        modelRouting: modelRouting(),
         threadId: "persisted_thread",
       },
     });
@@ -214,6 +234,7 @@ describe("CodexTaskDispatcher", () => {
           "thread_1",
           project.repositoryPath,
           "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+          "gpt-5.6-sol",
         ],
       },
       {
@@ -222,6 +243,7 @@ describe("CodexTaskDispatcher", () => {
           "thread_1",
           project.repositoryPath,
           "请使用 $codrive-task 汇报任务 task_1 的当前处理结果。",
+          "gpt-5.6-sol",
         ],
       },
     ]);
@@ -240,6 +262,7 @@ describe("CodexTaskDispatcher", () => {
           action: "rework",
           status: "pending",
           startedAt: timestamp,
+          modelRouting: modelRouting(),
           threadId: "thread_1",
         },
       }),
@@ -262,6 +285,7 @@ describe("CodexTaskDispatcher", () => {
         action: "develop",
         status: "running",
         startedAt: timestamp,
+        modelRouting: modelRouting(),
         threadId: "thread_1",
         turnId: "turn_1",
       },

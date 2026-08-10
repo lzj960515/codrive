@@ -15,6 +15,7 @@ import type {
   Task,
   TaskReport,
   LifecycleEventSource,
+  ModelRoutingSettings,
 } from "../domain/types.js";
 import {
   applyTaskReport,
@@ -30,17 +31,40 @@ import {
 import { ProjectExecutionCoordinator } from "./project-execution-coordinator.js";
 import type { ProjectExecutor } from "./project-executor.js";
 import type { DispatchRequest, TaskDispatcher } from "./task-dispatcher.js";
+import {
+  type CodexTurnFailure,
+  defaultModelCapacityRetryDelaysMs,
+  initialModelRouting,
+  isModelCapacityFailure,
+  isRetryDue,
+  markRetryStarted,
+  planModelCapacityRecovery,
+} from "./model-routing.js";
 
 export interface WorkflowEngineOptions {
   maxConcurrentTasks: number;
+  models: ModelRoutingSettings;
+  modelCapacityRetryDelaysMs?: readonly number[];
   executionLeaseMs?: number;
   now?: () => string;
   createId?: (prefix: string) => string;
 }
 
-const activeExecutionStatuses = new Set(["pending", "running", "awaiting_report"]);
+const activeExecutionStatuses = new Set([
+  "pending",
+  "running",
+  "retry_scheduled",
+  "awaiting_report",
+]);
+const inFlightExecutionStatuses = new Set(["running", "awaiting_report"]);
 const reportableExecutionStatuses = new Set([
   ...activeExecutionStatuses,
+  "waiting_for_input",
+]);
+const reportSubmissionStatuses = new Set([
+  "pending",
+  "running",
+  "awaiting_report",
   "waiting_for_input",
 ]);
 const integrationLeaseStatuses = new Set([
@@ -53,6 +77,9 @@ export class WorkflowEngine {
   private readonly now: () => string;
   private readonly createId: (prefix: string) => string;
   private readonly executionLeaseMs: number;
+  private readonly modelCapacityRetryDelaysMs: readonly number[];
+  private maxConcurrentTasks: number;
+  private models: ModelRoutingSettings;
   private readonly projectExecutions: ProjectExecutionCoordinator | undefined;
   private operation: Promise<unknown> = Promise.resolve();
 
@@ -66,6 +93,10 @@ export class WorkflowEngine {
     this.now = options.now ?? (() => new Date().toISOString());
     this.createId = options.createId ?? ((prefix) => `${prefix}_${randomUUID()}`);
     this.executionLeaseMs = options.executionLeaseMs ?? 6 * 60 * 60 * 1000;
+    this.modelCapacityRetryDelaysMs =
+      options.modelCapacityRetryDelaysMs ?? defaultModelCapacityRetryDelaysMs;
+    this.maxConcurrentTasks = options.maxConcurrentTasks;
+    this.models = options.models;
     this.lifecycle =
       lifecycle ??
       new LifecycleRecorder(store, {
@@ -77,6 +108,8 @@ export class WorkflowEngine {
           now: this.now,
           createId: this.createId,
           leaseExpiration: () => this.leaseExpiration(),
+          modelSettings: () => this.models,
+          modelCapacityRetryDelaysMs: this.modelCapacityRetryDelaysMs,
           recordEvent: async (event) => {
             await this.recordEvent(event);
           },
@@ -197,8 +230,19 @@ export class WorkflowEngine {
     }
     return availableProjectPlanningCapacity(
       snapshot,
-      projectConcurrencyLimit(snapshot.project, this.options.maxConcurrentTasks),
+      projectConcurrencyLimit(snapshot.project, this.maxConcurrentTasks),
     );
+  }
+
+  updateRuntimeSettings(settings: {
+    maxConcurrentTasks: number;
+    models: ModelRoutingSettings;
+  }): Promise<void> {
+    return this.enqueue(async () => {
+      this.maxConcurrentTasks = settings.maxConcurrentTasks;
+      this.models = settings.models;
+      await this.reconcileInternal();
+    });
   }
 
   registerProject(input: CreateProjectInput): Promise<ProjectSnapshot> {
@@ -208,7 +252,7 @@ export class WorkflowEngine {
         ...created.project,
         planning: {
           ...created.project.planning,
-          concurrencyLimit: this.options.maxConcurrentTasks,
+          concurrencyLimit: this.maxConcurrentTasks,
         },
       });
       await this.reconcileInternal();
@@ -241,7 +285,7 @@ export class WorkflowEngine {
           currentProject.planning,
           "work_added",
           this.now(),
-          this.options.maxConcurrentTasks,
+          this.maxConcurrentTasks,
         ),
         updatedAt: this.now(),
       };
@@ -286,7 +330,7 @@ export class WorkflowEngine {
           currentProject.planning,
           "project_decision_recorded",
           this.now(),
-          this.options.maxConcurrentTasks,
+          this.maxConcurrentTasks,
         ),
         updatedAt: this.now(),
       };
@@ -319,7 +363,7 @@ export class WorkflowEngine {
       if (
         !execution ||
         execution.attemptId !== report.attemptId ||
-        !reportableExecutionStatuses.has(execution.status)
+        !reportSubmissionStatuses.has(execution.status)
       ) {
         throw new WorkflowConflictError(
           `Report does not match the current execution for ${report.taskId}`,
@@ -394,6 +438,19 @@ export class WorkflowEngine {
           decision: "ignore",
           reason: "turn_changed",
           data: { currentTurnId: execution.turnId ?? null },
+        });
+        return found.task;
+      }
+      if (!inFlightExecutionStatuses.has(execution.status)) {
+        await this.recordEvent({
+          type: "workflow.event_suppressed",
+          projectId: found.project.id,
+          taskId,
+          attemptId,
+          turnId,
+          decision: "ignore",
+          reason: "execution_not_in_flight",
+          data: { executionStatus: execution.status },
         });
         return found.task;
       }
@@ -693,11 +750,64 @@ export class WorkflowEngine {
     });
   }
 
-  failTurn(taskId: string, attemptId: string, message: string): Promise<Task> {
+  failTurn(
+    taskId: string,
+    attemptId: string,
+    failure: CodexTurnFailure,
+  ): Promise<Task> {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
       const execution = found.task.currentExecution;
-      if (!execution || execution.attemptId !== attemptId) return found.task;
+      if (
+        !execution ||
+        execution.attemptId !== attemptId ||
+        execution.turnId !== failure.turnId ||
+        !inFlightExecutionStatuses.has(execution.status)
+      ) {
+        return found.task;
+      }
+      let exhaustedModelRouting;
+      if (isModelCapacityFailure(failure)) {
+        const recovery = planModelCapacityRecovery(
+          execution.modelRouting,
+          failure,
+          this.models,
+          new Date(this.now()),
+          this.modelCapacityRetryDelaysMs,
+        );
+        if (recovery.outcome === "retry_scheduled") {
+          const scheduled: Task = {
+            ...found.task,
+            currentExecution: {
+              ...execution,
+              status: "retry_scheduled",
+              modelRouting: recovery.routing,
+            },
+            updatedAt: this.now(),
+          };
+          await this.store.saveTask(found.project.id, scheduled);
+          await this.recordEvent({
+            type: "turn.retry_scheduled",
+            projectId: found.project.id,
+            taskId,
+            attemptId,
+            ...(execution.threadId ? { threadId: execution.threadId } : {}),
+            turnId: failure.turnId,
+            reason: failure.message,
+            before: taskLifecycleState(found.task),
+            after: taskLifecycleState(scheduled),
+            data: {
+              model: recovery.routing.model,
+              modelRoute: recovery.routing.route,
+              retryCount: recovery.routing.retryCount,
+              nextRetryAt: recovery.routing.nextRetryAt,
+            },
+          });
+          await this.reconcileInternal();
+          return (await this.requireTask(taskId)).task;
+        }
+        exhaustedModelRouting = recovery.routing;
+      }
       const now = this.now();
       const failed: Task = {
         ...found.task,
@@ -705,6 +815,9 @@ export class WorkflowEngine {
         currentExecution: {
           ...execution,
           status: "failed",
+          ...(exhaustedModelRouting
+            ? { modelRouting: exhaustedModelRouting }
+            : {}),
           finishedAt: now,
         },
         updatedAt: now,
@@ -717,7 +830,7 @@ export class WorkflowEngine {
         attemptId,
         ...(execution.threadId ? { threadId: execution.threadId } : {}),
         ...(execution.turnId ? { turnId: execution.turnId } : {}),
-        reason: message,
+        reason: failure.message,
         before: taskLifecycleState(found.task),
         after: taskLifecycleState(failed),
       });
@@ -729,24 +842,81 @@ export class WorkflowEngine {
   failProjectTurn(
     projectId: string,
     attemptId: string,
-    message: string,
+    failure: CodexTurnFailure,
   ): Promise<Project> {
     return this.enqueue(async () => {
       const failed = await this.requireProjectExecutions().failTurn(
         projectId,
         attemptId,
-        message,
+        failure,
       );
       await this.reconcileInternal();
-      return failed;
+      return (await this.requireSnapshot(failed.id)).project;
     });
+  }
+
+  retryScheduledExecutions(now = new Date(this.now())): Promise<void> {
+    return this.enqueue(() => this.dispatchScheduledModelRetries(now));
   }
 
   private async reconcileInternal(): Promise<void> {
     await this.alignPlanningConcurrency();
+    await this.dispatchScheduledModelRetries(new Date(this.now()));
     await this.dispatchTaskContinuations();
     await this.startProductEvaluations();
     await this.startPendingTaskSelection();
+  }
+
+  private async dispatchScheduledModelRetries(now: Date): Promise<void> {
+    for (const snapshot of await this.store.listProjects()) {
+      if (
+        snapshot.project.scheduling !== "running" ||
+        snapshot.project.status === "cancelled"
+      ) {
+        continue;
+      }
+      if (
+        snapshot.project.currentExecution?.status === "retry_scheduled" &&
+        isRetryDue(snapshot.project.currentExecution.modelRouting, now)
+      ) {
+        await this.requireProjectExecutions().retryScheduled(
+          snapshot.project,
+          now,
+        );
+      }
+      for (const task of snapshot.tasks) {
+        if (
+          task.currentExecution?.status === "retry_scheduled" &&
+          isRetryDue(task.currentExecution.modelRouting, now)
+        ) {
+          await this.startScheduledTaskRetry(snapshot.project, task);
+        }
+      }
+    }
+  }
+
+  private async startScheduledTaskRetry(
+    project: Project,
+    task: Task,
+  ): Promise<Task> {
+    const current = (await this.requireTask(task.id)).task;
+    const execution = current.currentExecution;
+    if (!execution || execution.status !== "retry_scheduled") return current;
+
+    const pending: Task = {
+      ...current,
+      currentExecution: {
+        ...execution,
+        status: execution.reportReminderCount ? "awaiting_report" : "pending",
+        modelRouting: markRetryStarted(execution.modelRouting),
+        leaseExpiresAt: this.leaseExpiration(),
+      },
+      updatedAt: this.now(),
+    };
+    await this.store.saveTask(project.id, pending);
+    return execution.reportReminderCount
+      ? this.continueTaskReportRequest(project, pending)
+      : this.continueTaskDispatch(project, pending);
   }
 
   private async alignPlanningConcurrency(): Promise<void> {
@@ -757,12 +927,12 @@ export class WorkflowEngine {
           ...project,
           planning: {
             ...project.planning,
-            concurrencyLimit: this.options.maxConcurrentTasks,
+            concurrencyLimit: this.maxConcurrentTasks,
           },
         });
         continue;
       }
-      if (project.planning.concurrencyLimit !== this.options.maxConcurrentTasks) {
+      if (project.planning.concurrencyLimit !== this.maxConcurrentTasks) {
         await this.revisePlanning(project.id, "concurrency_changed");
       }
     }
@@ -787,7 +957,7 @@ export class WorkflowEngine {
     for (const candidate of candidates) {
       const concurrencyLimit = projectConcurrencyLimit(
         candidate.project,
-        this.options.maxConcurrentTasks,
+        this.maxConcurrentTasks,
       );
       const activeCount = activeCountByProject.get(candidate.project.id) ?? 0;
       if (activeCount >= concurrencyLimit) continue;
@@ -854,7 +1024,7 @@ export class WorkflowEngine {
         candidate,
         projectConcurrencyLimit(
           candidate.project,
-          this.options.maxConcurrentTasks,
+          this.maxConcurrentTasks,
         ),
       );
       if (capacity <= 0) continue;
@@ -910,7 +1080,12 @@ export class WorkflowEngine {
     const attemptId = this.createId("attempt");
     let pending: Task;
     try {
-      pending = startTaskExecution(task, attemptId, this.now());
+      pending = startTaskExecution(
+        task,
+        attemptId,
+        this.now(),
+        initialModelRouting(this.models),
+      );
     } catch (error) {
       await this.recordEvent({
         type: "workflow.invariant_violated",
@@ -1206,7 +1381,7 @@ export class WorkflowEngine {
           snapshot,
           projectConcurrencyLimit(
             snapshot.project,
-            this.options.maxConcurrentTasks,
+            this.maxConcurrentTasks,
           ),
         );
       if (taskIds.length > selectionCapacity) {
@@ -1277,7 +1452,7 @@ export class WorkflowEngine {
           project.planning,
           "tasks_created",
           now,
-          this.options.maxConcurrentTasks,
+            this.maxConcurrentTasks,
         ),
         stagnantEvaluationRounds: stagnantRounds,
         ...(execution.progressFingerprint
@@ -1473,7 +1648,7 @@ export class WorkflowEngine {
         current.planning,
         reason,
         this.now(),
-        this.options.maxConcurrentTasks,
+        this.maxConcurrentTasks,
       ),
       updatedAt: this.now(),
     };

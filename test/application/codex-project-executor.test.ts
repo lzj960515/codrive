@@ -20,8 +20,13 @@ class RecordingGateway implements CodexGateway {
     this.calls.push({ method: "resumeThread", args: [threadId, cwd] });
   }
 
-  async startTurn(threadId: string, cwd: string, prompt: string): Promise<string> {
-    this.calls.push({ method: "startTurn", args: [threadId, cwd, prompt] });
+  async startTurn(
+    threadId: string,
+    cwd: string,
+    prompt: string,
+    model: string,
+  ): Promise<string> {
+    this.calls.push({ method: "startTurn", args: [threadId, cwd, prompt, model] });
     return "project_turn";
   }
 
@@ -31,6 +36,9 @@ class RecordingGateway implements CodexGateway {
   }
   async readTurnStatus(): Promise<null> {
     return null;
+  }
+  async listModels(): Promise<[]> {
+    return [];
   }
 }
 
@@ -56,6 +64,11 @@ function project(action: ProjectAction): Project {
       action,
       status: "pending",
       startedAt: timestamp,
+      modelRouting: {
+        model: "gpt-5.6-sol",
+        route: "primary",
+        retryCount: 0,
+      },
     },
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -89,7 +102,7 @@ describe("CodexProjectExecutor", () => {
       },
       {
         method: "startTurn",
-        args: ["project_thread", "/workspace/game", prompt],
+        args: ["project_thread", "/workspace/game", prompt, "gpt-5.6-sol"],
       },
     ]);
   });

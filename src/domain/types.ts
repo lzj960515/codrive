@@ -10,6 +10,27 @@ export type ProjectStatus =
 export type SchedulingStatus = "running" | "paused";
 export type ProjectAction = "select_tasks" | "evaluate_product";
 
+export interface ModelRoutingSettings {
+  primary: string;
+  fallback: string;
+}
+
+export type ModelRoute = "primary" | "fallback";
+
+export interface ModelCapacityError {
+  kind: "model_capacity";
+  message: string;
+  failedAt: string;
+}
+
+export interface ExecutionModelRouting {
+  model: string;
+  route: ModelRoute;
+  retryCount: number;
+  nextRetryAt?: string;
+  lastError?: ModelCapacityError;
+}
+
 export type PlanningChangeReason =
   | "project_registered"
   | "work_added"
@@ -125,6 +146,7 @@ export interface ProjectExecution {
   threadId?: string;
   turnId?: string;
   startedAt: string;
+  modelRouting: ExecutionModelRouting;
   finishedAt?: string;
   turnCompletedAt?: string;
   report?: ProjectReport;
@@ -151,6 +173,7 @@ export type TaskAction = "develop" | "rework" | "review" | "integrate";
 export type ExecutionStatus =
   | "pending"
   | "running"
+  | "retry_scheduled"
   | "awaiting_report"
   | "waiting_for_input"
   | "completed"
@@ -164,6 +187,7 @@ export interface TaskExecution {
   turnId?: string;
   status: ExecutionStatus;
   startedAt: string;
+  modelRouting: ExecutionModelRouting;
   finishedAt?: string;
   turnCompletedAt?: string;
   report?: TaskReport;

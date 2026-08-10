@@ -22,6 +22,9 @@ export function renderBoardPage(accessToken: string): string {
       <div class="sidebar-heading"><span>项目</span><span id="project-count">0</span></div>
       <nav id="projects" class="project-list" aria-label="Codrive 项目"></nav>
       <div class="sidebar-footer">
+        <a class="sidebar-settings" href="/settings">
+          <span>⚙</span><span>运行设置<small>并发与模型路由</small></span>
+        </a>
         <button id="setup-trigger" class="setup-trigger" type="button" hidden>
           <span class="setup-icon">↻</span>
           <span>连接 Codex<small id="setup-trigger-copy">完成一次设置即可使用</small></span>

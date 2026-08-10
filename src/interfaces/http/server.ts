@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import type { WorkflowEngine } from "../../application/workflow-engine.js";
+import type { SystemSettingsService } from "../../application/system-settings-service.js";
 import {
   InvalidTaskReportError,
   ServiceNotReadyError,
@@ -12,11 +13,13 @@ import type { ProjectStore } from "../../infrastructure/project-store.js";
 import type { SkillInstaller } from "../../infrastructure/skill-installer.js";
 import { renderBoardPage } from "./board.js";
 import { createBoardView } from "./board-view.js";
+import { createProjectDetailView } from "./project-detail-view.js";
 
 export interface HttpServerDependencies {
   store: ProjectStore;
   workflow: WorkflowEngine;
   skillInstaller: SkillInstaller;
+  settingsService: Pick<SystemSettingsService, "read" | "update">;
   accessToken: string;
   isReady?: () => boolean;
   onError?: (message: string) => void;
@@ -82,6 +85,16 @@ const commandSchema = z.discriminatedUnion("type", [
     type: z.literal("system.install_skills"),
     payload: z.object({}),
   }),
+  z.object({
+    type: z.literal("system.update_settings"),
+    payload: z.object({
+      maxConcurrentTasks: z.number().int().positive(),
+      models: z.object({
+        primary: z.string().min(1),
+        fallback: z.string().min(1),
+      }),
+    }),
+  }),
   z.object({ type: z.literal("project.register"), payload: projectInputSchema }),
   z.object({
     type: z.literal("project.add_work"),
@@ -123,7 +136,8 @@ export function createHttpServer(
   const server = Fastify({ logger: false });
 
   server.addHook("onRequest", async (request, reply) => {
-    if (request.url === "/api/health" || request.url === "/") return;
+    const path = new URL(request.url, "http://localhost").pathname;
+    if (path === "/api/health" || isPagePath(path)) return;
     const queryToken = new URL(request.url, "http://localhost").searchParams.get("token");
     if (
       request.headers["x-codrive-token"] !== dependencies.accessToken &&
@@ -156,14 +170,36 @@ export function createHttpServer(
   server.get("/", async (_request, reply) =>
     reply.type("text/html; charset=utf-8").send(renderBoardPage(dependencies.accessToken)),
   );
+  server.get("/settings", async (_request, reply) =>
+    reply.type("text/html; charset=utf-8").send(renderBoardPage(dependencies.accessToken)),
+  );
+  server.get<{ Params: { projectId: string } }>(
+    "/projects/:projectId",
+    async (_request, reply) =>
+      reply.type("text/html; charset=utf-8").send(
+        renderBoardPage(dependencies.accessToken),
+      ),
+  );
 
   server.get("/api/board", async () =>
     createBoardView(await dependencies.store.listProjects()),
+  );
+  server.get<{ Params: { projectId: string } }>(
+    "/api/projects/:projectId",
+    async (request, reply) => {
+      const snapshot = await dependencies.store.getProject(request.params.projectId);
+      if (!snapshot) return reply.code(404).send({ error: "Project not found" });
+      return createProjectDetailView(
+        snapshot,
+        await dependencies.store.readProductDocument(snapshot.project.id),
+      );
+    },
   );
 
   server.get("/api/system", async () => ({
     skills: await dependencies.skillInstaller.getStatus(),
   }));
+  server.get("/api/system/settings", async () => dependencies.settingsService.read());
 
   server.get<{ Params: { taskId: string } }>(
     "/api/contexts/tasks/:taskId",
@@ -234,6 +270,9 @@ export function createHttpServer(
       await dependencies.skillInstaller.install();
       return { skills: await dependencies.skillInstaller.getStatus() };
     }
+    if (command.type === "system.update_settings") {
+      return dependencies.settingsService.update(command.payload);
+    }
     return dependencies.workflow.execute(
       command as CodriveCommand,
       request.headers["x-codrive-source"] === "skill" ? "skill" : "http",
@@ -256,6 +295,10 @@ export function createHttpServer(
   });
 
   return server;
+}
+
+function isPagePath(path: string): boolean {
+  return path === "/" || path === "/settings" || /^\/projects\/[^/]+$/.test(path);
 }
 
 function taskContext(

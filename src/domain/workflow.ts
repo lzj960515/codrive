@@ -1,9 +1,16 @@
-import type { Task, TaskAction, TaskReport, TaskStatus } from "./types.js";
+import type {
+  ExecutionModelRouting,
+  Task,
+  TaskAction,
+  TaskReport,
+  TaskStatus,
+} from "./types.js";
 import { InvalidTaskReportError } from "./errors.js";
 
 const occupiedExecutionStatuses = new Set([
   "pending",
   "running",
+  "retry_scheduled",
   "awaiting_report",
   "waiting_for_input",
 ]);
@@ -12,6 +19,7 @@ export function startTaskExecution(
   task: Task,
   attemptId: string,
   now: string,
+  modelRouting: ExecutionModelRouting,
 ): Task {
   const action = task.requestedAction;
   if (!action) {
@@ -32,6 +40,7 @@ export function startTaskExecution(
       action,
       status: "pending",
       startedAt: now,
+      modelRouting,
     },
     updatedAt: now,
   };

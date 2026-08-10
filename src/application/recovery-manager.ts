@@ -17,9 +17,21 @@ export interface NotificationSource {
   ): Promise<CodexTurnStatus | null>;
 }
 
+const retryScheduleEventTypes = new Set([
+  "turn.retry_scheduled",
+  "turn.started",
+  "task.cancelled",
+  "project.cancelled",
+  "project.paused",
+  "project.resumed",
+]);
+
 export class RecoveryManager {
   private unsubscribe: (() => void) | null = null;
+  private unsubscribeStore: (() => void) | null = null;
   private leaseTimer: NodeJS.Timeout | null = null;
+  private retryTimer: NodeJS.Timeout | null = null;
+  private retryScheduleGeneration = 0;
 
   constructor(
     private readonly store: ProjectStore,
@@ -31,6 +43,9 @@ export class RecoveryManager {
     this.unsubscribe = this.notifications.onNotification((notification) => {
       void this.handleNotification(notification);
     });
+    this.unsubscribeStore = this.store.subscribe((event) => {
+      if (changesRetrySchedule(event.type)) void this.scheduleRetryWakeup();
+    });
     await this.recoverInterruptedExecutions();
     await this.workflow.lifecycle.run(
       {
@@ -40,6 +55,7 @@ export class RecoveryManager {
       },
       () => this.workflow.recoverProjectsWithoutActiveWork(),
     );
+    await this.scheduleRetryWakeup();
     this.leaseTimer = setInterval(async () => {
       await this.recoverUnattendedWork();
     }, 60_000);
@@ -49,8 +65,13 @@ export class RecoveryManager {
   stop(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.unsubscribeStore?.();
+    this.unsubscribeStore = null;
     if (this.leaseTimer) clearInterval(this.leaseTimer);
     this.leaseTimer = null;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.retryScheduleGeneration += 1;
   }
 
   async handleNotification(notification: JsonRpcNotification): Promise<void> {
@@ -182,6 +203,36 @@ export class RecoveryManager {
       },
       () => this.workflow.recoverProjectsWithoutActiveWork(),
     );
+    await this.scheduleRetryWakeup(now);
+  }
+
+  private async scheduleRetryWakeup(now = new Date()): Promise<void> {
+    const generation = ++this.retryScheduleGeneration;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    const snapshots = await this.store.listProjects();
+    if (generation !== this.retryScheduleGeneration) return;
+    const nextRetryAt = Math.min(
+      ...snapshots.flatMap(({ project, tasks }) => {
+        if (project.scheduling !== "running" || project.status === "cancelled") {
+          return [];
+        }
+        return [project.currentExecution, ...tasks.map((task) => task.currentExecution)]
+          .filter((execution) => execution?.status === "retry_scheduled")
+          .map((execution) => Date.parse(execution!.modelRouting.nextRetryAt!));
+      }),
+    );
+    if (!Number.isFinite(nextRetryAt)) return;
+
+    this.retryTimer = setTimeout(async () => {
+      if (generation !== this.retryScheduleGeneration) return;
+      this.retryTimer = null;
+      await this.workflow.retryScheduledExecutions(new Date());
+      if (generation === this.retryScheduleGeneration) {
+        await this.scheduleRetryWakeup();
+      }
+    }, Math.max(0, nextRetryAt - now.getTime()));
+    this.retryTimer.unref();
   }
 
   async recoverDeferredTaskTurns(threadId?: string): Promise<void> {
@@ -226,7 +277,11 @@ export class RecoveryManager {
     notification: JsonRpcNotification,
   ): Promise<void> {
     const params = notification.params as {
-      turn?: { id?: string; status?: string; error?: { message?: string } | null };
+      turn?: {
+        id?: string;
+        status?: string;
+        error?: { message?: string; codexErrorInfo?: unknown } | null;
+      };
     };
     const turnId = params.turn?.id;
     if (!turnId) {
@@ -265,8 +320,13 @@ export class RecoveryManager {
             : this.workflow.failTurn(
                 found.task.id,
                 taskExecution.attemptId,
-                params.turn?.error?.message ??
-                  `Turn ${params.turn?.status ?? "failed"}`,
+                {
+                  turnId,
+                  message:
+                    params.turn?.error?.message ??
+                    `Turn ${params.turn?.status ?? "failed"}`,
+                  codexErrorInfo: params.turn?.error?.codexErrorInfo,
+                },
               ),
       );
       return;
@@ -302,8 +362,13 @@ export class RecoveryManager {
             : this.workflow.failProjectTurn(
                 project.id,
                 projectExecution.attemptId,
-                params.turn?.error?.message ??
-                  `Turn ${params.turn?.status ?? "failed"}`,
+                {
+                  turnId,
+                  message:
+                    params.turn?.error?.message ??
+                    `Turn ${params.turn?.status ?? "failed"}`,
+                  codexErrorInfo: params.turn?.error?.codexErrorInfo,
+                },
               ),
       );
       return;
@@ -483,4 +548,8 @@ function recoveryDecision(
   if (observation.status === "inProgress") return "keep_running";
   if (observation.error) return "defer";
   return "restart";
+}
+
+function changesRetrySchedule(type: string): boolean {
+  return retryScheduleEventTypes.has(type);
 }

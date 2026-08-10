@@ -19,7 +19,13 @@ describe("AI task selection", () => {
     const workflow = new WorkflowEngine(
       store,
       taskDispatcher,
-      { maxConcurrentTasks: 2 },
+      {
+        maxConcurrentTasks: 2,
+        models: {
+          primary: "gpt-5.6-sol",
+          fallback: "gpt-5.6-terra",
+        },
+      },
       projectExecutor,
     );
 

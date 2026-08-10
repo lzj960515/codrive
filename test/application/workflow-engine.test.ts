@@ -10,6 +10,7 @@ import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  testModelRouting,
 } from "../support/recording-executors.js";
 
 let store: ProjectStore;
@@ -17,17 +18,25 @@ let taskDispatcher: RecordingTaskDispatcher;
 let projectExecutor: RecordingProjectExecutor;
 let workflow: WorkflowEngine;
 let id = 0;
+let now: Date;
+
+const models = {
+  primary: "gpt-5.6-sol",
+  fallback: "gpt-5.6-terra",
+};
 
 beforeEach(async () => {
   store = new ProjectStore(await mkdtemp(join(tmpdir(), "codrive-workflow-")));
   taskDispatcher = new RecordingTaskDispatcher();
   projectExecutor = new RecordingProjectExecutor();
+  now = new Date("2026-08-03T00:00:00.000Z");
   workflow = new WorkflowEngine(
     store,
     taskDispatcher,
     {
       maxConcurrentTasks: 2,
-      now: () => "2026-08-03T00:00:00.000Z",
+      models,
+      now: () => now.toISOString(),
       createId: (prefix) => `${prefix}_${++id}`,
     },
     projectExecutor,
@@ -117,6 +126,7 @@ describe("WorkflowEngine", () => {
       taskDispatcher,
       {
         maxConcurrentTasks: 4,
+        models,
         now: () => "2026-08-03T00:00:00.000Z",
         createId: (prefix) => `${prefix}_${++id}`,
       },
@@ -143,6 +153,7 @@ describe("WorkflowEngine", () => {
       taskDispatcher,
       {
         maxConcurrentTasks: 4,
+        models,
         now: () => "2026-08-03T00:00:00.000Z",
         createId: (prefix) => `${prefix}_${++id}`,
       },
@@ -234,7 +245,10 @@ describe("WorkflowEngine", () => {
         await workflow.failProjectTurn(
           created.project.id,
           replanned.currentExecution!.attemptId,
-          "The planning model failed",
+          {
+            turnId: replanned.currentExecution!.turnId!,
+            message: "The planning model failed",
+          },
         );
       }
 
@@ -424,7 +438,7 @@ describe("WorkflowEngine", () => {
     const perProjectWorkflow = new WorkflowEngine(
       store,
       perProjectDispatcher,
-      { maxConcurrentTasks: 1 },
+      { maxConcurrentTasks: 1, models },
       new RecordingProjectExecutor(),
     );
 
@@ -480,7 +494,7 @@ describe("WorkflowEngine", () => {
     const capacityWorkflow = new WorkflowEngine(
       capacityStore,
       capacityDispatcher,
-      { maxConcurrentTasks: 2 },
+      { maxConcurrentTasks: 2, models },
       capacityExecutor,
     );
     const planned = await capacityStore.createProject({
@@ -510,6 +524,7 @@ describe("WorkflowEngine", () => {
           action: "develop",
           status: "running",
           startedAt: "2026-08-03T00:00:00.000Z",
+          modelRouting: testModelRouting(),
         },
       });
     }
@@ -567,7 +582,7 @@ describe("WorkflowEngine", () => {
     const priorityWorkflow = new WorkflowEngine(
       priorityStore,
       priorityDispatcher,
-      { maxConcurrentTasks: 1 },
+      { maxConcurrentTasks: 1, models },
       new RecordingProjectExecutor(),
     );
     const project = await priorityStore.createProject({
@@ -589,6 +604,7 @@ describe("WorkflowEngine", () => {
         action: "develop",
         status: "completed",
         startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
         finishedAt: "2026-08-03T00:30:00.000Z",
       },
     });
@@ -649,13 +665,14 @@ describe("WorkflowEngine", () => {
         action: "develop",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
       },
     });
 
     const singleTaskWorkflow = new WorkflowEngine(
       store,
       new RecordingTaskDispatcher(),
-      { maxConcurrentTasks: 1 },
+      { maxConcurrentTasks: 1, models },
       new RecordingProjectExecutor(),
     );
     await singleTaskWorkflow.reconcile();
@@ -664,7 +681,7 @@ describe("WorkflowEngine", () => {
     const expandedWorkflow = new WorkflowEngine(
       store,
       new RecordingTaskDispatcher(),
-      { maxConcurrentTasks: 4 },
+      { maxConcurrentTasks: 4, models },
       expandedExecutor,
     );
     await expandedWorkflow.reconcile();
@@ -700,6 +717,7 @@ describe("WorkflowEngine", () => {
         action: "develop",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
       },
     });
     const waitingProject = await store.createProject({
@@ -715,7 +733,7 @@ describe("WorkflowEngine", () => {
     const singleSlotWorkflow = new WorkflowEngine(
       store,
       new RecordingTaskDispatcher(),
-      { maxConcurrentTasks: 1 },
+      { maxConcurrentTasks: 1, models },
       singleSlotExecutor,
     );
 
@@ -880,6 +898,7 @@ describe("WorkflowEngine", () => {
         action: "select_tasks",
         status: "completed",
         startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
         report,
       },
     });
@@ -1076,6 +1095,7 @@ describe("WorkflowEngine", () => {
         action: "develop",
         status: "waiting_for_input",
         startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
       },
     });
 
@@ -1143,7 +1163,10 @@ describe("WorkflowEngine", () => {
     await workflow.failProjectTurn(
       created.project.id,
       firstExecution.attemptId,
-      "Selected model is at capacity",
+      {
+        turnId: firstExecution.turnId!,
+        message: "Planner process failed",
+      },
     );
     const resumed = await workflow.controlProject(created.project.id, "resume");
 
@@ -1164,6 +1187,231 @@ describe("WorkflowEngine", () => {
     });
     expect(retried.currentExecution?.attemptId).not.toBe(firstExecution.attemptId);
     expect(projectExecutor.started).toHaveLength(2);
+  });
+
+  it("keeps project planning active while a capacity failure waits to retry", async () => {
+    const created = await registerProject(1);
+    const execution = created.project.currentExecution!;
+
+    await workflow.failProjectTurn(created.project.id, execution.attemptId, {
+      turnId: execution.turnId!,
+      message: "Selected model is at capacity. Please try a different model.",
+      codexErrorInfo: "serverOverloaded",
+    });
+
+    const scheduled = (await store.getProject(created.project.id))!.project;
+    expect(scheduled).toMatchObject({
+      status: "active",
+      requestedAction: "select_tasks",
+      planning: { revision: 1 },
+      currentExecution: {
+        attemptId: execution.attemptId,
+        status: "retry_scheduled",
+        modelRouting: {
+          model: models.primary,
+          route: "primary",
+          retryCount: 1,
+        },
+      },
+    });
+    expect(scheduled.planning.lastDecision).toBeUndefined();
+
+    now = new Date(now.getTime() + 5_000);
+    await workflow.retryScheduledExecutions(now);
+    expect((await store.getProject(created.project.id))!.project).toMatchObject({
+      status: "active",
+      currentExecution: {
+        attemptId: execution.attemptId,
+        status: "running",
+        modelRouting: { model: models.primary, retryCount: 1 },
+      },
+    });
+    expect(projectExecutor.started).toHaveLength(2);
+  });
+
+  it("retries model capacity failures three times before routing the same task attempt to the fallback model", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+    const first = (await store.findTask(taskId))!.task.currentExecution!;
+
+    expect(first).toMatchObject({
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 0,
+      },
+    });
+
+    for (const [index, delay] of [5_000, 10_000, 20_000].entries()) {
+      const running = (await store.findTask(taskId))!.task.currentExecution!;
+      await workflow.failTurn(taskId, running.attemptId, {
+        turnId: running.turnId!,
+        message: "Selected model is at capacity. Please try a different model.",
+        codexErrorInfo: "serverOverloaded",
+      });
+
+      const scheduled = (await store.findTask(taskId))!.task;
+      expect(scheduled).toMatchObject({
+        status: "developing",
+        currentExecution: {
+          attemptId: first.attemptId,
+          threadId: first.threadId,
+          status: "retry_scheduled",
+          modelRouting: {
+            model: models.primary,
+            route: "primary",
+            retryCount: index + 1,
+            lastError: {
+              kind: "model_capacity",
+              message: "Selected model is at capacity. Please try a different model.",
+            },
+          },
+        },
+      });
+      expect(Date.parse(scheduled.currentExecution!.modelRouting.nextRetryAt!)).toBe(
+        now.getTime() + delay,
+      );
+
+      now = new Date(now.getTime() + delay);
+      await workflow.retryScheduledExecutions(now);
+      expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+        attemptId: first.attemptId,
+        status: "running",
+        modelRouting: {
+          model: models.primary,
+          route: "primary",
+          retryCount: index + 1,
+        },
+      });
+    }
+
+    const finalPrimary = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(taskId, finalPrimary.attemptId, {
+      turnId: finalPrimary.turnId!,
+      message: "Selected model is at capacity. Please try a different model.",
+      codexErrorInfo: "serverOverloaded",
+    });
+
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "developing",
+      currentExecution: {
+        attemptId: first.attemptId,
+        threadId: first.threadId,
+        status: "running",
+        modelRouting: {
+          model: models.fallback,
+          route: "fallback",
+          retryCount: 0,
+        },
+      },
+    });
+    expect(taskDispatcher.started).toHaveLength(5);
+    expect(taskDispatcher.started.at(-1)?.model).toBe(models.fallback);
+  });
+
+  it("blocks only after fallback capacity retries are exhausted", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+
+    for (const route of ["primary", "fallback"] as const) {
+      for (const delay of [5_000, 10_000, 20_000]) {
+        const running = (await store.findTask(taskId))!.task.currentExecution!;
+        expect(running.modelRouting.route).toBe(route);
+        await workflow.failTurn(taskId, running.attemptId, {
+          turnId: running.turnId!,
+          message: "Selected model is at capacity. Please try a different model.",
+          codexErrorInfo: "serverOverloaded",
+        });
+        now = new Date(now.getTime() + delay);
+        await workflow.retryScheduledExecutions(now);
+      }
+      const running = (await store.findTask(taskId))!.task.currentExecution!;
+      await workflow.failTurn(taskId, running.attemptId, {
+        turnId: running.turnId!,
+        message: "Selected model is at capacity. Please try a different model.",
+        codexErrorInfo: "serverOverloaded",
+      });
+    }
+
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "blocked",
+      currentExecution: {
+        status: "failed",
+        modelRouting: {
+          model: models.fallback,
+          route: "fallback",
+          retryCount: 3,
+        },
+      },
+    });
+  });
+
+  it("does not retry a non-capacity model failure", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const running = (await store.findTask(created.tasks[0]!.id))!.task
+      .currentExecution!;
+
+    await workflow.failTurn(created.tasks[0]!.id, running.attemptId, {
+      turnId: running.turnId!,
+      message: "The prompt is invalid",
+      codexErrorInfo: "badRequest",
+    });
+
+    expect((await store.findTask(created.tasks[0]!.id))!.task).toMatchObject({
+      status: "blocked",
+      currentExecution: { status: "failed" },
+    });
+    expect(taskDispatcher.started).toHaveLength(1);
+  });
+
+  it("keeps a scheduled retry paused and starts it once scheduling resumes", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+    const running = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(taskId, running.attemptId, {
+      turnId: running.turnId!,
+      message: "Selected model is at capacity. Please try a different model.",
+      codexErrorInfo: "serverOverloaded",
+    });
+    await workflow.controlProject(created.project.id, "pause");
+
+    now = new Date(now.getTime() + 5_000);
+    await workflow.retryScheduledExecutions(now);
+    expect((await store.findTask(taskId))!.task.currentExecution?.status).toBe(
+      "retry_scheduled",
+    );
+    expect(taskDispatcher.started).toHaveLength(1);
+
+    await workflow.controlProject(created.project.id, "resume");
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "running",
+      attemptId: running.attemptId,
+    });
+    expect(taskDispatcher.started).toHaveLength(2);
   });
 
   it("suppresses a stale recovery after the same task attempt has started", async () => {
@@ -1282,6 +1530,7 @@ describe("WorkflowEngine", () => {
         action: "integrate",
         status: "waiting_for_input",
         startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
       },
     });
     await store.saveTask(created.project.id, {

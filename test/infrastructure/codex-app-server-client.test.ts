@@ -48,7 +48,22 @@ describe("CodexAppServerClient", () => {
         threadId,
         "/workspace/game/.worktrees/task",
         "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+        "gpt-5.6-sol",
       );
+      await expect(client.listModels()).resolves.toEqual([
+        {
+          id: "gpt-5.6-sol",
+          displayName: "GPT-5.6-Sol",
+          description: "Frontier coding model",
+          isDefault: true,
+        },
+        {
+          id: "gpt-5.6-terra",
+          displayName: "GPT-5.6-Terra",
+          description: "Balanced coding model",
+          isDefault: false,
+        },
+      ]);
       await expect(client.isThreadActive(threadId)).resolves.toBe(true);
       await expect(client.readTurnStatus(threadId, turnId)).resolves.toBe(
         "inProgress",
@@ -82,7 +97,16 @@ describe("CodexAppServerClient", () => {
     expect(startTurn?.params).toMatchObject({
       approvalPolicy: "never",
       sandboxPolicy: { type: "dangerFullAccess" },
+      model: "gpt-5.6-sol",
     });
+    expect(
+      requests
+        .filter(({ method }) => method === "model/list")
+        .map(({ params }) => params),
+    ).toEqual([
+      { includeHidden: false },
+      { includeHidden: false, cursor: "page_2" },
+    ]);
     expect(interruptTurn?.params).toEqual({
       threadId: "thread_1",
       turnId: "turn_1",
@@ -110,6 +134,19 @@ lines.on("line", (line) => {
   if (request.method === "thread/start") result = { thread: { id: "thread_1" } };
   if (request.method === "thread/resume") result = { thread: { id: request.params.threadId } };
   if (request.method === "turn/start") result = { turn: { id: "turn_1" } };
+  if (request.method === "model/list") result = request.params.cursor === "page_2"
+    ? {
+        data: [
+          { id: "gpt-5.6-terra", model: "gpt-5.6-terra", displayName: "GPT-5.6-Terra", description: "Balanced coding model", hidden: false, isDefault: false }
+        ],
+        nextCursor: null
+      }
+    : {
+        data: [
+          { id: "gpt-5.6-sol", model: "gpt-5.6-sol", displayName: "GPT-5.6-Sol", description: "Frontier coding model", hidden: false, isDefault: true }
+        ],
+        nextCursor: "page_2"
+      };
   if (request.method === "thread/read") result = { thread: { status: { type: "active", activeFlags: [] }, turns: [{ id: "turn_1", status: "inProgress" }] } };
   process.stdout.write(JSON.stringify({ id: request.id, result }) + "\\n");
 });

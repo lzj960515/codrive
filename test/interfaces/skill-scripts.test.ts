@@ -19,14 +19,31 @@ import {
 describe("bundled Skill scripts", () => {
   let stateDirectory: string;
   let server: ReturnType<typeof createHttpServer>;
+  let runtimeSettings: {
+    maxConcurrentTasks: number;
+    models: { primary: string; fallback: string };
+  };
 
   beforeEach(async () => {
     stateDirectory = await mkdtemp(join(tmpdir(), "codrive-skills-"));
+    runtimeSettings = {
+      maxConcurrentTasks: 2,
+      models: {
+        primary: "gpt-5.6-sol",
+        fallback: "gpt-5.6-terra",
+      },
+    };
     const store = new ProjectStore(stateDirectory);
     const workflow = new WorkflowEngine(
       store,
       new RecordingTaskDispatcher(),
-      { maxConcurrentTasks: 2 },
+      {
+        maxConcurrentTasks: 2,
+        models: {
+          primary: "gpt-5.6-sol",
+          fallback: "gpt-5.6-terra",
+        },
+      },
       new RecordingProjectExecutor(),
     );
     server = createHttpServer({
@@ -37,6 +54,13 @@ describe("bundled Skill scripts", () => {
         join(stateDirectory, "installed-skills"),
         "0.2.0",
       ),
+      settingsService: {
+        read: async () => ({ settings: runtimeSettings, availableModels: [] }),
+        update: async (settings: typeof runtimeSettings) => {
+          runtimeSettings = settings;
+          return { settings: runtimeSettings, availableModels: [] };
+        },
+      },
       accessToken: "secret",
     });
     await server.listen({ host: "127.0.0.1", port: 0 });
@@ -103,6 +127,28 @@ describe("bundled Skill scripts", () => {
       await runSkill("codrive-control", ["board"]),
     ) as Array<{ tasks: unknown[] }>;
     expect(board[0]?.tasks).toHaveLength(2);
+
+    const project = JSON.parse(
+      await runSkill("codrive-control", ["project", created.project.id]),
+    ) as { productDocument: string };
+    expect(project.productDocument).toBe("# Game\n");
+
+    const settings = JSON.parse(
+      await runSkill("codrive-control", ["settings"]),
+    ) as { settings: typeof runtimeSettings };
+    expect(settings.settings.maxConcurrentTasks).toBe(2);
+
+    const updatedSettings = JSON.parse(
+      await runSkill("codrive-control", ["update-settings"], {
+        maxConcurrentTasks: 3,
+        models: {
+          primary: "gpt-5.6-terra",
+          fallback: "gpt-5.6-sol",
+        },
+      }),
+    ) as { settings: typeof runtimeSettings };
+    expect(updatedSettings.settings).toEqual(runtimeSettings);
+    expect(runtimeSettings.maxConcurrentTasks).toBe(3);
   });
 
   function runSkill(

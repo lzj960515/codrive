@@ -13,12 +13,31 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
         id: project.id,
         name: project.name,
         status: project.status,
-        displayStatus: projectDisplayStatus(project.status, planning.status, tasks),
+        displayStatus: projectDisplayStatus(
+          project.status,
+          project.scheduling,
+          planning.status,
+          tasks,
+        ),
         scheduling: project.scheduling,
         requestedAction: project.requestedAction,
         executionStatus: project.currentExecution?.status ?? null,
-        summary: planning.summary ?? latestProductReport?.summary ?? null,
-        question: planning.question ?? latestProductReport?.question ?? null,
+        planningNotice: planning.summary || planning.question
+          ? {
+              outcome: planning.outcome,
+              summary: planning.summary,
+              question: planning.question,
+              wakeCondition: planning.wakeCondition,
+              nextAction: planning.nextAction,
+            }
+          : null,
+        latestEvaluation: latestProductReport
+          ? {
+              outcome: latestProductReport.outcome,
+              summary: latestProductReport.summary,
+              question: latestProductReport.question ?? null,
+            }
+          : null,
         planning,
         updatedAt: project.updatedAt,
       },
@@ -30,6 +49,8 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
         order: task.order,
         status: task.status,
         requestedAction: task.requestedAction,
+        executionStatus: task.currentExecution?.status ?? null,
+        modelRouting: task.currentExecution?.modelRouting ?? null,
         summary: task.latestReport?.summary ?? null,
         question: task.latestReport?.question ?? null,
         report: task.latestReport
@@ -62,8 +83,12 @@ function createPlanningView(
       : undefined;
   const status =
     execution?.action === "select_tasks" &&
-    ["pending", "running", "awaiting_report"].includes(execution.status)
-      ? "selecting"
+    ["pending", "running", "retry_scheduled", "awaiting_report"].includes(
+      execution.status,
+    )
+      ? execution.status === "retry_scheduled"
+        ? "retry_scheduled"
+        : "selecting"
       : !decision
         ? "pending"
         : decision.outcome === "wait_for_active_tasks"
@@ -88,6 +113,7 @@ function createPlanningView(
 
 function projectDisplayStatus(
   projectStatus: ProjectSnapshot["project"]["status"],
+  scheduling: ProjectSnapshot["project"]["scheduling"],
   planningStatus: string,
   tasks: ProjectSnapshot["tasks"],
 ): string {
@@ -98,9 +124,13 @@ function projectDisplayStatus(
         status,
       ) &&
       currentExecution &&
-      ["pending", "running", "awaiting_report"].includes(currentExecution.status),
+      ["pending", "running", "retry_scheduled", "awaiting_report"].includes(
+        currentExecution.status,
+      ),
   );
+  if (scheduling === "paused") return activeTasks ? "active_paused" : "paused";
   if (activeTasks) return "active";
+  if (planningStatus === "retry_scheduled") return "retry_scheduled";
   if (planningStatus === "selecting" || planningStatus === "pending") {
     return "selecting_tasks";
   }

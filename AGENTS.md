@@ -7,13 +7,17 @@ Codrive is a local, single-user orchestration service that connects filesystem-b
 - `src/domain` owns project, task, execution, report, and event contracts.
 - `src/application` owns deterministic workflow decisions and dispatch coordination.
 - `ProjectExecutionCoordinator` owns temporary task-selection and product-evaluation turns.
+- `model-routing.ts` owns capacity-failure classification, persisted retry state, exponential backoff, and fallback routing for every Codex turn.
+- `SystemSettingsService` owns validated runtime concurrency and model configuration changes.
 - `src/infrastructure` owns filesystem persistence, App Server transport, and Skill installation.
 - `src/interfaces` owns the HTTP API, CLI, and local board.
 - `skills` contains the product's installable Codex Skills.
 
 Project-level Codex turns decide which backlog tasks should start from current product and repository facts. Codrive validates IDs, task availability, each project's concurrency budget, and the repository integration lease. Codex reevaluates task relationships during every selection.
 
-The HTTP surface has three boundaries: board reads, Skill context reads, and the unified `/api/commands` write endpoint. State transitions belong to `WorkflowEngine`, not route handlers.
+Every execution persists the model selected when it starts. Capacity failures preserve the current attempt, stage, and conversation while the recovery timer performs three exponential-backoff retries before routing to the configured fallback model. Scheduled retries count against the owning project's concurrency budget and resume after a paused project is continued.
+
+The HTTP surface has four read boundaries: board projection, product detail, runtime settings, and Skill context. Writes use the unified `/api/commands` endpoint. State transitions belong to `WorkflowEngine`, and validated runtime configuration belongs to `SystemSettingsService`, not route handlers.
 
 Keep Git worktree creation, coding, review, conflict resolution, commits, merges, and cleanup inside Codex task instructions. Codrive persists state and dispatches conversations; it does not implement those Git workflows.
 

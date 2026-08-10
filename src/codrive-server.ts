@@ -5,6 +5,7 @@ import { CodexTaskDispatcher } from "./application/codex-task-dispatcher.js";
 import { CodexProjectExecutor } from "./application/codex-project-executor.js";
 import { LifecycleRecorder } from "./application/lifecycle-recorder.js";
 import { RecoveryManager } from "./application/recovery-manager.js";
+import { SystemSettingsService } from "./application/system-settings-service.js";
 import { WorkflowEngine } from "./application/workflow-engine.js";
 import { CodexAppServerClient } from "./infrastructure/codex-app-server-client.js";
 import { CodriveLog } from "./infrastructure/codrive-log.js";
@@ -67,14 +68,23 @@ export class CodriveServer {
       const workflow = new WorkflowEngine(
         store,
         dispatcher,
-        { maxConcurrentTasks: this.config.maxConcurrentTasks },
+        {
+          maxConcurrentTasks: this.config.maxConcurrentTasks,
+          models: this.config.models,
+        },
         projectExecutor,
         lifecycle,
+      );
+      const settingsService = new SystemSettingsService(
+        this.configStore,
+        workflow,
+        this.codex,
       );
       this.http = createHttpServer({
         store,
         workflow,
         skillInstaller: new SkillInstaller(),
+        settingsService,
         accessToken: this.config.accessToken,
         isReady: () => this.ready,
         onError: (message) => this.log!.error("http", message),

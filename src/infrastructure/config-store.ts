@@ -3,21 +3,20 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import type { ModelRoutingSettings } from "../domain/types.js";
+
 export interface CodriveConfig {
-  schemaVersion: number;
+  schemaVersion: 2;
   host: "127.0.0.1";
   port: number;
   maxConcurrentTasks: number;
+  models: ModelRoutingSettings;
   accessToken: string;
   stateDirectory: string;
   codexExecutable?: string;
 }
 
-type PersistedCodriveConfig = Omit<CodriveConfig, "schemaVersion"> & {
-  schemaVersion?: number;
-};
-
-const currentSchemaVersion = 1;
+const currentSchemaVersion = 2;
 
 export function defaultStateDirectory(): string {
   return process.env.CODEDRIVE_HOME ?? join(homedir(), ".codrive");
@@ -33,12 +32,7 @@ export class ConfigStore {
   async loadOrCreate(): Promise<CodriveConfig> {
     await mkdir(this.stateDirectory, { recursive: true });
     try {
-      const persisted = await this.readPersisted();
-      const config = upgradeConfig(persisted);
-      if (persisted.schemaVersion !== currentSchemaVersion) {
-        await this.save(config);
-      }
-      return config;
+      return await this.readPersisted();
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
         throw error;
@@ -48,6 +42,10 @@ export class ConfigStore {
         host: "127.0.0.1",
         port: 0,
         maxConcurrentTasks: 4,
+        models: {
+          primary: "gpt-5.6-sol",
+          fallback: "gpt-5.6-terra",
+        },
         accessToken: randomBytes(32).toString("hex"),
         stateDirectory: this.stateDirectory,
       };
@@ -57,7 +55,7 @@ export class ConfigStore {
   }
 
   async read(): Promise<CodriveConfig> {
-    return upgradeConfig(await this.readPersisted());
+    return this.readPersisted();
   }
 
   async save(config: CodriveConfig): Promise<void> {
@@ -71,24 +69,15 @@ export class ConfigStore {
     await chmod(this.configPath, 0o600);
   }
 
-  private async readPersisted(): Promise<PersistedCodriveConfig> {
-    return JSON.parse(
-      await readFile(this.configPath, "utf8"),
-    ) as PersistedCodriveConfig;
-  }
-}
-
-function upgradeConfig(config: PersistedCodriveConfig): CodriveConfig {
-  if (config.schemaVersion === currentSchemaVersion) {
+  private async readPersisted(): Promise<CodriveConfig> {
+    const config = JSON.parse(await readFile(this.configPath, "utf8")) as {
+      schemaVersion?: number;
+    };
+    if (config.schemaVersion !== currentSchemaVersion) {
+      throw new Error(
+        `Unsupported Codrive config version ${config.schemaVersion ?? "missing"}`,
+      );
+    }
     return config as CodriveConfig;
   }
-  if (config.schemaVersion !== undefined) {
-    throw new Error(`Unsupported Codrive config version ${config.schemaVersion}`);
-  }
-  return {
-    ...config,
-    schemaVersion: currentSchemaVersion,
-    maxConcurrentTasks:
-      config.maxConcurrentTasks === 1 ? 4 : config.maxConcurrentTasks,
-  };
 }

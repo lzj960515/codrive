@@ -23,6 +23,7 @@ export class CodexProjectExecutor implements ProjectExecutor {
       threadId,
       project.repositoryPath,
       actionPrompt(project.id, requireAction(project)),
+      project.currentExecution!.modelRouting.model,
     );
   }
 
@@ -31,6 +32,7 @@ export class CodexProjectExecutor implements ProjectExecutor {
       threadId,
       project.repositoryPath,
       `请使用 $codrive-task 汇报项目 ${project.id} 的当前处理结果。`,
+      project.currentExecution!.modelRouting.model,
     );
   }
 

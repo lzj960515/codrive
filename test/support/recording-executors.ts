@@ -6,10 +6,23 @@ import type {
 } from "../../src/application/task-dispatcher.js";
 import type { Project } from "../../src/domain/types.js";
 
+export const testModels = {
+  primary: "gpt-5.6-sol",
+  fallback: "gpt-5.6-terra",
+};
+
+export function testModelRouting() {
+  return {
+    model: testModels.primary,
+    route: "primary" as const,
+    retryCount: 0,
+  };
+}
+
 export class RecordingTaskDispatcher implements TaskDispatcher {
   readonly opened: DispatchRequest[] = [];
-  readonly started: Array<DispatchRequest & { threadId: string }> = [];
-  readonly reminders: Array<DispatchRequest & { threadId: string }> = [];
+  readonly started: Array<DispatchRequest & { threadId: string; model: string }> = [];
+  readonly reminders: Array<DispatchRequest & { threadId: string; model: string }> = [];
   readonly interrupted: DispatchRequest[] = [];
   beforeStartTurn?: (request: DispatchRequest, threadId: string) => Promise<void>;
   conversationActive = false;
@@ -25,7 +38,11 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
   ): Promise<TurnDispatchResult> {
     if (this.conversationActive) return { status: "conversation_active" };
     await this.beforeStartTurn?.(request, threadId);
-    this.started.push({ ...request, threadId });
+    this.started.push({
+      ...request,
+      threadId,
+      model: request.task.currentExecution!.modelRouting.model,
+    });
     return { status: "started", turnId: `task_turn_${this.started.length}` };
   }
 
@@ -34,7 +51,11 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
     threadId: string,
   ): Promise<TurnDispatchResult> {
     if (this.conversationActive) return { status: "conversation_active" };
-    this.reminders.push({ ...request, threadId });
+    this.reminders.push({
+      ...request,
+      threadId,
+      model: request.task.currentExecution!.modelRouting.model,
+    });
     return {
       status: "started",
       turnId: `task_reminder_${this.reminders.length}`,

@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyTaskReport,
-  startTaskExecution,
+  startTaskExecution as startTaskExecutionWithModel,
 } from "../../src/domain/workflow.js";
 import type { Task, TaskReport } from "../../src/domain/types.js";
+import { testModelRouting } from "../support/recording-executors.js";
 
 const timestamp = "2026-08-03T00:00:00.000Z";
+
+function startTaskExecution(task: Task, attemptId: string, now: string): Task {
+  return startTaskExecutionWithModel(task, attemptId, now, testModelRouting());
+}
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
