@@ -1,15 +1,12 @@
+import { taskBoardLayout } from "./task-board-layout.js";
+
 export function renderBoardClient(accessToken: string): string {
   const token = JSON.stringify(accessToken).replaceAll("<", "\\u003c");
+  const layout = JSON.stringify(taskBoardLayout);
   return `<script>
     const TOKEN = ${token};
-    const columns = [
-      ["backlog", "待安排"],
-      ["developing", "开发中"],
-      ["reviewing", "审查中"],
-      ["integrating", "合入中"],
-      ["waiting", "等待中"],
-      ["done", "已完成"]
-    ];
+    const boardLayout = ${layout};
+    const columns = boardLayout.columns;
     const statusLabels = {
       active: "进行中", selecting_tasks: "安排任务中", evaluating: "产品验收中",
       waiting_for_input: "等待决定", stalled: "暂无进展", completed: "已完成",
@@ -37,12 +34,7 @@ export function renderBoardClient(accessToken: string): string {
     let systemSettings = null;
     const headers = { "x-codrive-token": TOKEN, "content-type": "application/json" };
     const escapeHtml = value => String(value ?? "").replace(/[&<>\"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[character]));
-    const bucket = status => {
-      if (["changes_requested"].includes(status)) return "developing";
-      if (["waiting_for_input", "blocked"].includes(status)) return "waiting";
-      if (["done", "cancelled"].includes(status)) return "done";
-      return status;
-    };
+    const bucket = status => boardLayout.statusColumns[status] || status;
     const label = status => statusLabels[status] || String(status || "").replaceAll("_", " ");
     const formatTime = value => value ? new Date(value).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
     const initials = value => String(value || "C").trim().split(/\\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();

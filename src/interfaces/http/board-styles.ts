@@ -200,9 +200,9 @@ export const boardStyles = `
   .board-wrap { height: calc(100dvh - 184px); overflow: auto; }
   .board {
     display: grid;
-    grid-template-columns: repeat(6, minmax(252px, 1fr));
+    grid-template-columns: repeat(7, minmax(252px, 1fr));
     gap: 12px;
-    min-width: 1512px;
+    min-width: 1764px;
     min-height: 100%;
     padding: 18px 20px 34px;
   }
@@ -212,6 +212,7 @@ export const boardStyles = `
   .column:nth-child(4) { animation-delay: .105s; }
   .column:nth-child(5) { animation-delay: .14s; }
   .column:nth-child(6) { animation-delay: .175s; }
+  .column:nth-child(7) { animation-delay: .21s; }
   .column-head { display: flex; justify-content: space-between; align-items: center; height: 38px; padding: 0 10px; margin-bottom: 8px; border-radius: 9px; font-size: 11px; font-weight: 800; }
   .column-head span:first-child { display: flex; gap: 7px; align-items: center; }
   .column-head i { width: 7px; height: 7px; background: currentColor; border-radius: 50%; }
@@ -222,6 +223,7 @@ export const boardStyles = `
   .column[data-column="integrating"] .column-head { color: #28725b; background: #daf0e7; }
   .column[data-column="waiting"] .column-head { color: #8c6325; background: #f8e9c4; }
   .column[data-column="done"] .column-head { color: #59645f; background: #dde5df; }
+  .column[data-column="cancelled"] .column-head { color: #87545c; background: #f2e0e3; }
   .column-body { display: grid; gap: 8px; }
   .task-card {
     position: relative;
@@ -244,6 +246,7 @@ export const boardStyles = `
   .task-card[data-status="reviewing"]::before { background: var(--sky); }
   .task-card[data-status="integrating"]::before, .task-card[data-status="done"]::before { background: var(--mint); }
   .task-card[data-status="waiting_for_input"]::before, .task-card[data-status="blocked"]::before { background: var(--amber); }
+  .task-card[data-status="cancelled"]::before { background: var(--rose); }
   .task-card-top, .task-card-footer { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
   .task-index { color: #929b96; font: 800 9px/1 var(--condensed); letter-spacing: .1em; }
   .task-state { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); font: 800 9px/1 var(--condensed); text-transform: uppercase; }
@@ -396,7 +399,7 @@ export const boardStyles = `
     .project-actions { position: absolute; top: 18px; right: 16px; }
     .project-stats { gap: 14px; margin: 18px 0 0 49px; }
     .board-wrap { height: calc(100dvh - 174px); }
-    .board { grid-template-columns: repeat(6, minmax(82vw, 1fr)); min-width: 492vw; padding: 14px 14px 30px; scroll-snap-type: x proximity; }
+    .board { grid-template-columns: repeat(7, minmax(82vw, 1fr)); min-width: 574vw; padding: 14px 14px 30px; scroll-snap-type: x proximity; }
     .column { scroll-snap-align: start; }
     .task-detail { width: 100vw; }
     .detail-body { padding: 20px 18px 38px; }
