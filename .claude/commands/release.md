@@ -57,11 +57,28 @@ npm version <patch|minor> -m "chore(release): bump version to %s"
 
 This updates `package.json`, creates a Conventional Commit, and creates the matching `v<version>` Git tag.
 
-### 5. Publish to npm
+### 5. Publish through npm's interactive authentication lifecycle
+
+Run the publish command in a persistent interactive TTY with stdin and stdout
+attached. Enable the execution tool's PTY/TTY option and retain its session so
+input and later output continue through the same `npm publish` process.
 
 ```bash
 npm publish --access public
 ```
+
+npm 11 handles publish-time Web OTP only when both streams are TTYs. When the
+live process prints `Press ENTER to open in the browser...`, write one newline
+to that same session. npm owns the authentication URL, opens the exact URL in
+the system browser, polls its completion URL, and then retries the registry
+request with the returned one-time token.
+
+Keep waiting on the same `npm publish` process while the user completes any
+required npm login or authorization in the opened browser. Treat
+`+ codrive@<version>` and a zero exit code as the publish result. Browser
+automation is not part of this release flow: authentication URLs are opaque
+runtime state and tool output can redact their identity before another browser
+receives them.
 
 ### 6. Push the release commit and tag
 
@@ -79,8 +96,11 @@ git status --short --branch
 
 ## Failure semantics
 
-- When npm authentication fails, stop before `npm version`.
-- When `npm publish` fails before the registry accepts the version, preserve the local version commit and tag, fix the cause, and retry the same version.
+- When `npm whoami` fails, restore npm access before `npm version`.
+- When a publish attempt reports Web OTP without waiting, rerun `npm publish` for the same version in an interactive TTY and complete npm's in-process browser flow.
+- When browser authorization needs user interaction, keep the publish session alive and ask the user to finish that exact npm page.
+- When `npm publish` exits ambiguously, query `npm view codrive@<version> version --json` before deciding whether the registry accepted it.
+- When the registry has not accepted the version, preserve the local version commit and tag, fix the cause, and retry the same version.
 - When npm accepts the version but Git push fails, retry the same push. Keep npm and Git on one version instead of bumping again.
 
 ---
