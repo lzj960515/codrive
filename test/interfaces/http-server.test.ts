@@ -760,6 +760,9 @@ describe("HTTP API", () => {
     expect(page.body).toContain("请在对应的 Codex 对话中回复");
     expect(page.body).toContain('id="project-sidebar"');
     expect(page.body).toContain('id="task-detail"');
+    expect(page.body).toContain("data-copy-task-id");
+    expect(page.body).toContain("navigator.clipboard.writeText(task.id)");
+    expect(page.body).toContain("复制任务 ID");
     expect(page.body).toContain('id="mobile-projects"');
     expect(page.body).toContain("验收标准");
     expect(page.body).toContain("selectedTaskId");

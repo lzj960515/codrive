@@ -25,6 +25,11 @@ const retryScheduleEventTypes = new Set([
   "project.paused",
   "project.resumed",
 ]);
+const workflowNotificationMethods = new Set([
+  "transport/disconnected",
+  "thread/status/changed",
+  "turn/completed",
+]);
 
 export class RecoveryManager {
   private unsubscribe: (() => void) | null = null;
@@ -75,6 +80,7 @@ export class RecoveryManager {
   }
 
   async handleNotification(notification: JsonRpcNotification): Promise<void> {
+    if (!workflowNotificationMethods.has(notification.method)) return;
     const correlationId = this.workflow.lifecycle.id("notification");
     await this.workflow.lifecycle.run(
       { source: "app_server", component: "app_server", correlationId },

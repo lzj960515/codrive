@@ -286,6 +286,11 @@ export const boardStyles = `
   .detail-body { padding: 22px 22px 42px; }
   .detail-status { display: flex; gap: 7px; align-items: center; margin-bottom: 11px; color: var(--signal); font: 900 10px/1 var(--condensed); letter-spacing: .1em; text-transform: uppercase; }
   .detail-status span { width: 8px; height: 8px; background: currentColor; border-radius: 50%; }
+  .task-id-row { display: flex; gap: 8px; align-items: center; margin-bottom: 13px; }
+  .task-id-row code { min-width: 0; overflow: hidden; color: #64706a; font: 600 10px/1.3 ui-monospace, "SFMono-Regular", monospace; text-overflow: ellipsis; white-space: nowrap; }
+  .copy-id-button { flex: none; padding: 5px 8px; color: #41504a; background: #eef1ed; border: 1px solid #d8ddd8; border-radius: 7px; cursor: pointer; font: 800 9px/1 var(--condensed); letter-spacing: .04em; }
+  .copy-id-button:hover { color: #a94628; background: var(--signal-soft); border-color: #f2c8b7; }
+  .copy-id-button.copied { color: #28725b; background: #dff4eb; border-color: #b9dfcf; }
   .detail-body h2 { margin: 0; font-size: 24px; line-height: 1.2; letter-spacing: -.035em; }
   .detail-description { margin: 13px 0 0; color: #56615b; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
   .detail-actions { display: flex; gap: 8px; margin-top: 19px; }

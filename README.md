@@ -39,8 +39,19 @@ Codrive is not another model or coding agent. It gives the regular Codex agent a
 
 You need Node.js 20 or newer, Git, and a Codex login available in `~/.codex`.
 
+Install Codrive as a global command for the active Node.js version, then start
+the background service:
+
 ```bash
-npx codrive
+npm install --global codrive@latest
+codrive
+```
+
+If you previously launched Codrive with `npx codrive@latest`, a one-time
+command can install the global command, upgrade, and restart the service:
+
+```bash
+npx codrive@latest upgrade
 ```
 
 Codrive prints the local board URL and log file location. Open it in your browser and follow the first-run prompt:
@@ -105,13 +116,17 @@ Retry, replan, and cancel have different lifecycle meanings. Retry creates a new
 ## Commands
 
 ```text
-npx codrive          Start Codrive and the local board
-npx codrive status   Check whether the local service is running
-npx codrive doctor   Check Node.js, Codex, and login readiness
-npx codrive setup    Install Skills without using the Web prompt
+codrive                         Start Codrive and the local board in the background
+codrive restart                 Restart Codrive
+codrive stop                    Stop Codrive
+codrive upgrade                 Install the latest global release and restart with it
+codrive status                  Show local service status
+codrive doctor                  Check Node.js, Codex, and login readiness
+codrive setup                   Install Skills without using the Web prompt
+codrive serve                   Run in the foreground for development or supervision
 ```
 
-Runtime logs are written to `~/.codrive/codrive.log`. The terminal and log file use the same local-time timestamps and include structured lifecycle events alongside HTTP errors and Codex App Server stderr. Lifecycle events record command and correlation IDs, source, task/project IDs, attempt/thread/turn IDs, recovery observations and decisions, concise state transitions, outcomes, and durations. They omit prompts, chat messages, and report bodies. Each project's append-only `events.ndjson` remains the durable audit history.
+Runtime logs are written to `~/.codrive/codrive.log`. The terminal and log file use the same local-time timestamps and include structured lifecycle events alongside HTTP errors and Codex App Server stderr. Lifecycle events record command and correlation IDs, source, task/project IDs, attempt/thread/turn IDs, recovery observations and decisions, concise state transitions, outcomes, and durations. High-frequency text and command-output deltas are excluded. The active log rotates at about 10 MB. One `codrive.log.1` archive retains up to 10 MB of the most recent complete lines for at most 7 days, keeping the default footprint near 20 MB. Logs omit prompts, chat messages, and report bodies. Each project's append-only `events.ndjson` remains the durable audit history.
 
 ## Security
 

@@ -39,8 +39,17 @@ Codrive 不是另一个大模型，也没有重新实现编码智能体。它只
 
 你需要 Node.js 20 或更高版本、Git，以及 `~/.codex` 中可用的 Codex 登录状态。
 
+先把 Codrive 安装为当前 Node.js 版本下的全局命令，然后启动后台服务：
+
 ```bash
-npx codrive
+npm install --global codrive@latest
+codrive
+```
+
+如果你以前一直使用 `npx codrive@latest`，也可以用一次临时命令完成全局安装、升级和重启：
+
+```bash
+npx codrive@latest upgrade
 ```
 
 Codrive 会输出本地看板地址和日志文件位置。用浏览器打开后，按照首次运行提示完成初始化：
@@ -105,13 +114,17 @@ Skills 会主动从 Codrive 读取当前项目和任务上下文，因此自动�
 ## 常用命令
 
 ```text
-npx codrive          启动 Codrive 和本地看板
-npx codrive status   检查本地服务是否正在运行
-npx codrive doctor   检查 Node.js、Codex 和登录状态
-npx codrive setup    不经过 Web 提示，直接安装 Skills
+codrive                         在后台启动 Codrive 和本地看板
+codrive restart                 重启 Codrive
+codrive stop                    停止 Codrive
+codrive upgrade                 全局安装最新版本并用新版本重启
+codrive status                  查看本地服务状态
+codrive doctor                  检查 Node.js、Codex 和登录状态
+codrive setup                   不经过 Web 提示，直接安装 Skills
+codrive serve                   在前台运行，供开发和进程托管器使用
 ```
 
-运行日志写入 `~/.codrive/codrive.log`。终端和日志文件使用同一份本机时区时间，除 HTTP 错误和 Codex App Server 标准错误外，还会记录结构化生命周期事件，包括命令与关联 ID、来源、项目和任务 ID、attempt/thread/turn ID、恢复器观测与决策、精简的状态迁移、结果和耗时。日志不复制 prompt、聊天正文或报告正文；每个项目的 `events.ndjson` 继续作为持久审计历史。
+运行日志写入 `~/.codrive/codrive.log`。终端和日志文件使用同一份本机时区时间，除 HTTP 错误和 Codex App Server 标准错误外，还会记录结构化生命周期事件，包括命令与关联 ID、来源、项目和任务 ID、attempt/thread/turn ID、恢复器观测与决策、精简的状态迁移、结果和耗时。高频文本与命令输出 delta 不进入 lifecycle 日志。当前日志达到约 10 MB 时轮转；一份 `codrive.log.1` 归档最多保留最近 10 MB 的完整日志行，最长保留 7 天，默认总占用约 20 MB。日志不复制 prompt、聊天正文或报告正文。每个项目的 `events.ndjson` 继续作为持久审计历史。
 
 ## 安全模型
 

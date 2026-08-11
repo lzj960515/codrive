@@ -35,8 +35,8 @@
   },
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
-    "dev": "tsx src/interfaces/cli/index.ts",
-    "start": "node dist/interfaces/cli/index.js",
+    "dev": "tsx src/interfaces/cli/index.ts serve",
+    "start": "node dist/interfaces/cli/index.js serve",
     "prepack": "pnpm build",
     "test": "vitest run",
     "test:watch": "vitest",

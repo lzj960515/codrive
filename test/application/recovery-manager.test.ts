@@ -117,6 +117,17 @@ describe("RecoveryManager", () => {
     });
   });
 
+  it("ignores high-frequency App Server notifications that cannot change workflow state", async () => {
+    const record = vi.spyOn(workflow.lifecycle, "record");
+
+    await recovery.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { delta: "partial response" },
+    });
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it("restores a persisted model-capacity retry at its exact backoff deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-03T00:00:00.000Z"));

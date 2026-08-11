@@ -363,7 +363,9 @@ export function renderBoardClient(accessToken: string): string {
       host.innerHTML =
         '<header class="detail-head"><strong>任务详情</strong><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
         '<div class="detail-body">'+
-          '<div class="detail-status"><span></span>'+escapeHtml(label(task.status))+'</div><h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
+          '<div class="detail-status"><span></span>'+escapeHtml(label(task.status))+'</div>'+
+          '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
+          '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
           (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+question+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           reportSection+
@@ -373,6 +375,21 @@ export function renderBoardClient(accessToken: string): string {
             '<dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
         '</div>';
       document.getElementById("close-detail").onclick = closeDetail;
+      const copyTaskId = host.querySelector("[data-copy-task-id]");
+      copyTaskId?.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(task.id);
+          copyTaskId.textContent = "已复制";
+          copyTaskId.classList.add("copied");
+        } catch {
+          copyTaskId.textContent = "复制失败";
+        }
+        window.setTimeout(() => {
+          if (!copyTaskId.isConnected) return;
+          copyTaskId.textContent = "复制 ID";
+          copyTaskId.classList.remove("copied");
+        }, 1600);
+      });
       host.querySelector("[data-retry]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "retry" });
         await refresh();

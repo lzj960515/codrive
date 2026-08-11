@@ -9,6 +9,18 @@ export class InstanceLock {
     this.path = join(stateDirectory, "server.lock");
   }
 
+  async readOwnerPid(): Promise<number | null> {
+    try {
+      const pid = Number.parseInt(await readFile(this.path, "utf8"), 10);
+      return Number.isFinite(pid) ? pid : null;
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   async acquire(): Promise<void> {
     try {
       this.handle = await open(this.path, "wx", 0o600);
@@ -16,8 +28,8 @@ export class InstanceLock {
       if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) {
         throw error;
       }
-      const pid = Number.parseInt(await readFile(this.path, "utf8"), 10);
-      if (Number.isFinite(pid) && processIsRunning(pid)) {
+      const pid = await this.readOwnerPid();
+      if (pid !== null && processIsRunning(pid)) {
         throw new Error(`Codrive is already running with PID ${pid}`);
       }
       await unlink(this.path);
