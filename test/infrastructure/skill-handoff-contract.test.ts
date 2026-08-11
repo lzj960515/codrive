@@ -19,4 +19,16 @@ describe("non-execution Skill handoff", () => {
       expect(instructions).toContain("结束当前回合");
     },
   );
+
+  it("makes Codex classify and explain every cancellation decision", async () => {
+    const control = await readFile(resolve("skills/codrive-control/SKILL.md"), "utf8");
+    const task = await readFile(resolve("skills/codrive-task/SKILL.md"), "utf8");
+
+    for (const instructions of [control, task]) {
+      expect(instructions).toContain("user_confirmed");
+      expect(instructions).toContain("agent_decision");
+      expect(instructions).toContain("needs_input");
+      expect(instructions).toContain("取消理由");
+    }
+  });
 });

@@ -47,7 +47,7 @@ node <skill-directory>/scripts/codrive-control.mjs update-settings
 node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> <action>
 ```
 
-暂停和恢复只控制后续调度；已经运行的 turn 可以结束，所以看板可能显示“执行中 · 后续已暂停”。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 在同一规划版本创建新的执行 attempt。确认产品、仓库或外部 Gate 已变化时，使用 `replan` 创建新的规划版本并重新判断 backlog。取消会永久终止项目并进入最终状态。
+暂停和恢复只控制后续调度；已经运行的 turn 可以结束，所以看板可能显示“执行中 · 后续已暂停”。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 在同一规划版本创建新的执行 attempt。确认产品、仓库或外部 Gate 已变化时，使用 `replan` 创建新的规划版本并重新判断 backlog。
 
 ## 控制任务
 
@@ -56,7 +56,25 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> retry
 node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel
 ```
 
-模型容量失败会在原 attempt 和原对话中按 5 秒、10 秒、20 秒自动重试三次，然后切换到 fallback 模型继续恢复。Fallback 同样重试三次；全部耗尽后任务才进入 `blocked`。此时任务级 `retry` 创建新的 attempt。`waiting_for_input` 由用户在原开发对话中回复，随后继续同一个 attempt。任务级 `cancel` 会永久终止任务并进入最终状态。
+模型容量失败会在原 attempt 和原对话中按 5 秒、10 秒、20 秒自动重试三次，然后切换到 fallback 模型继续恢复。Fallback 同样重试三次；全部耗尽后任务才进入 `blocked`。此时任务级 `retry` 创建新的 attempt。`waiting_for_input` 由用户在原开发对话中回复，随后继续同一个 attempt。
+
+## 取消判断
+
+取消是永久终态。先读取目标项目或任务的最新状态、报告和对话上下文，再判断取消是否依赖用户意图：
+
+- 需要产品取舍、停止范围或现场保留决定时，通过当前任务或项目报告提交 `needs_input`，在 `question` 中写清建议取消的原因和需要用户回答的问题。用户在原 Codex 对话明确答复后，以 `user_confirmed` 执行取消。
+- 当前事实已经证明目标重复、已被替代或不再可执行，并且取消不需要新的产品选择或外部授权时，以 `agent_decision` 直接执行取消。
+
+项目和任务的取消命令都通过标准输入接收判断依据与取消理由：
+
+```json
+{
+  "decisionBasis": "<user_confirmed|agent_decision>",
+  "reason": "<具体取消理由及其事实或用户决定>"
+}
+```
+
+`user_confirmed` 的取消理由概括用户同意的范围和原因；`agent_decision` 的取消理由写明支持直接取消的事实。取消命令作为这次处理的最后一个副作用，完成后报告新的终态。
 
 ## 记录产品决策
 

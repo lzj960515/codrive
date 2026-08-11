@@ -113,6 +113,8 @@ Skills read the current project and task context from Codrive, so automated task
 
 Retry, replan, and cancel have different lifecycle meanings. Retry creates a new attempt for a failed task or project execution that still has a requested action. Replan advances the planning revision after its facts have explicitly changed. A task waiting for input continues the same attempt in its original conversation. Cancel permanently ends the task or project.
 
+Codex classifies each cancellation before executing it. When cancellation depends on product intent, stopping scope, or preservation choices, Codex reports `needs_input` and asks in the original conversation; after an explicit answer, it cancels with `user_confirmed`. When repository and task facts are already sufficient, Codex can cancel directly with `agent_decision`. Every cancellation requires a concrete reason and records the actor, decision basis, and time. The board does not approve cancellations; it displays the terminal cancellation facts and keeps any earlier report as pre-cancellation progress.
+
 ## Commands
 
 ```text

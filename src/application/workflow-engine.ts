@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { WorkflowConflictError } from "../domain/errors.js";
 import { advancePlanning, selectionDecision } from "../domain/planning.js";
 import type {
+  CancellationInput,
   CodriveCommand,
   CodriveEvent,
   CreateProjectInput,
@@ -148,7 +149,7 @@ export class WorkflowEngine {
           },
           async () => {
             try {
-              const result = await this.dispatchCommand(command);
+              const result = await this.dispatchCommand(command, source);
               target = target.projectId ? target : commandResultTarget(result);
               await this.lifecycle.record({
                 type: "command.succeeded",
@@ -175,7 +176,10 @@ export class WorkflowEngine {
     );
   }
 
-  private dispatchCommand(command: CodriveCommand): Promise<unknown> {
+  private dispatchCommand(
+    command: CodriveCommand,
+    source: LifecycleEventSource,
+  ): Promise<unknown> {
     switch (command.type) {
       case "project.register":
         return this.registerProject(command.payload);
@@ -186,9 +190,19 @@ export class WorkflowEngine {
           command.payload.productDocument,
         );
       case "project.control":
-        return command.payload.action === "retry"
-          ? this.retryProject(command.payload.projectId)
-          : this.controlProject(command.payload.projectId, command.payload.action);
+        if (command.payload.action === "retry") {
+          return this.retryProject(command.payload.projectId);
+        }
+        if (command.payload.action === "cancel") {
+          return this.cancelProject(
+            command.payload.projectId,
+            cancellationInput(command.payload, source),
+          );
+        }
+        return this.controlProject(
+          command.payload.projectId,
+          command.payload.action,
+        );
       case "project.record_decision":
         return this.recordProjectDecision(
           command.payload.projectId,
@@ -198,7 +212,10 @@ export class WorkflowEngine {
       case "task.control":
         return command.payload.action === "retry"
           ? this.retryTask(command.payload.taskId)
-          : this.cancelTask(command.payload.taskId);
+          : this.cancelTask(
+              command.payload.taskId,
+              cancellationInput(command.payload, source),
+            );
       case "task.report":
         return this.submitReport(command.payload);
       case "project.report":
@@ -684,7 +701,7 @@ export class WorkflowEngine {
 
   controlProject(
     projectId: string,
-    action: "pause" | "resume" | "replan" | "cancel",
+    action: "pause" | "resume" | "replan",
   ): Promise<Project> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
@@ -716,32 +733,67 @@ export class WorkflowEngine {
         return (await this.requireSnapshot(projectId)).project;
       }
 
+      throw new WorkflowConflictError(
+        `Unsupported project control action ${action}`,
+      );
+    });
+  }
+
+  cancelProject(
+    projectId: string,
+    cancellationInput: CancellationInput,
+  ): Promise<Project> {
+    return this.enqueue(async () => {
+      const snapshot = await this.requireSnapshot(projectId);
+      if (snapshot.project.status === "cancelled") {
+        throw new WorkflowConflictError(`Cancelled project ${projectId} is terminal`);
+      }
+      const cancellation = {
+        ...cancellationInput,
+        reason: requireCancellationReason(cancellationInput.reason),
+        cancelledAt: this.now(),
+      };
       let project = await this.requireProjectExecutions().cancel(snapshot.project);
       project = {
         ...project,
         status: "cancelled",
         scheduling: "paused",
         requestedAction: null,
-        updatedAt: this.now(),
+        cancellation,
+        updatedAt: cancellation.cancelledAt,
       };
       await this.store.saveProject(project);
       await this.recordEvent({
         type: "project.cancelled",
         projectId,
+        reason: cancellation.reason,
         before: projectLifecycleState(snapshot.project),
         after: projectLifecycleState(project),
+        data: {
+          cancelledBy: cancellation.cancelledBy,
+          decisionBasis: cancellation.decisionBasis,
+        },
       });
       for (const task of snapshot.tasks) {
-        await this.cancelTaskInternal(project, task);
+        await this.cancelTaskInternal(project, task, cancellation);
       }
       return (await this.requireSnapshot(projectId)).project;
     });
   }
 
-  cancelTask(taskId: string): Promise<Task> {
+  cancelTask(taskId: string, cancellationInput: CancellationInput): Promise<Task> {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
-      const cancelled = await this.cancelTaskInternal(found.project, found.task);
+      const cancellation = {
+        ...cancellationInput,
+        reason: requireCancellationReason(cancellationInput.reason),
+        cancelledAt: this.now(),
+      };
+      const cancelled = await this.cancelTaskInternal(
+        found.project,
+        found.task,
+        cancellation,
+      );
       if (cancelled !== found.task) {
         await this.revisePlanning(found.project.id, "task_cancelled");
       }
@@ -1561,9 +1613,13 @@ export class WorkflowEngine {
     return dispatched ? (await this.requireTask(current.id)).task : current;
   }
 
-  private async cancelTaskInternal(project: Project, task: Task): Promise<Task> {
+  private async cancelTaskInternal(
+    project: Project,
+    task: Task,
+    cancellation: NonNullable<Task["cancellation"]>,
+  ): Promise<Task> {
     if (["done", "cancelled"].includes(task.status)) return task;
-    const now = this.now();
+    const now = cancellation.cancelledAt;
     const execution = task.currentExecution;
     const wasActive = execution
       ? activeExecutionStatuses.has(execution.status)
@@ -1572,6 +1628,7 @@ export class WorkflowEngine {
       ...task,
       status: "cancelled",
       requestedAction: null,
+      cancellation,
       ...(execution
         ? {
             currentExecution: {
@@ -1581,7 +1638,7 @@ export class WorkflowEngine {
             },
           }
         : {}),
-      updatedAt: now,
+      updatedAt: cancellation.cancelledAt,
     };
     await this.store.saveTask(project.id, cancelled);
     await this.recordEvent({
@@ -1591,8 +1648,13 @@ export class WorkflowEngine {
       ...(execution ? { attemptId: execution.attemptId } : {}),
       ...(execution?.threadId ? { threadId: execution.threadId } : {}),
       ...(execution?.turnId ? { turnId: execution.turnId } : {}),
+      reason: cancellation.reason,
       before: taskLifecycleState(task),
       after: taskLifecycleState(cancelled),
+      data: {
+        cancelledBy: cancellation.cancelledBy,
+        decisionBasis: cancellation.decisionBasis,
+      },
     });
     if (wasActive && execution?.threadId && execution.turnId) {
       try {
@@ -1872,6 +1934,9 @@ function eventForTask(task: Task): string {
 function commandSummary(command: CodriveCommand): Record<string, unknown> {
   const summary: Record<string, unknown> = { commandType: command.type };
   if ("action" in command.payload) summary.action = command.payload.action;
+  if ("decisionBasis" in command.payload) {
+    summary.decisionBasis = command.payload.decisionBasis;
+  }
   if ("outcome" in command.payload) summary.outcome = command.payload.outcome;
   if ("tasks" in command.payload) {
     summary.taskCount = command.payload.tasks.length;
@@ -1880,6 +1945,25 @@ function commandSummary(command: CodriveCommand): Record<string, unknown> {
     summary.updatesProductDocument = Boolean(command.payload.productDocument);
   }
   return summary;
+}
+
+function cancellationInput(
+  payload: Pick<CancellationInput, "decisionBasis" | "reason">,
+  source: LifecycleEventSource,
+): CancellationInput {
+  return {
+    cancelledBy: source === "skill" ? "codex" : "user",
+    decisionBasis: payload.decisionBasis,
+    reason: requireCancellationReason(payload.reason),
+  };
+}
+
+function requireCancellationReason(reason: string): string {
+  const normalized = reason.trim();
+  if (!normalized) {
+    throw new WorkflowConflictError("Cancellation requires a reason");
+  }
+  return normalized;
 }
 
 function commandResultTarget(result: unknown): {

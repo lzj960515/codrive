@@ -128,6 +128,25 @@ describe("bundled Skill scripts", () => {
     ) as Array<{ tasks: unknown[] }>;
     expect(board[0]?.tasks).toHaveLength(2);
 
+    const cancelled = JSON.parse(
+      await runSkill(
+        "codrive-control",
+        ["task-control", added.tasks[1]!.id, "cancel"],
+        {
+          decisionBasis: "agent_decision",
+          reason: "The feature is no longer part of the approved product scope",
+        },
+      ),
+    ) as {
+      status: string;
+      cancellation: { decisionBasis: string; reason: string };
+    };
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.cancellation).toMatchObject({
+      decisionBasis: "agent_decision",
+      reason: "The feature is no longer part of the approved product scope",
+    });
+
     const project = JSON.parse(
       await runSkill("codrive-control", ["project", created.project.id]),
     ) as { productDocument: string };

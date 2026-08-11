@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
-import type { ProjectReport, Task, TaskReport } from "../../src/domain/types.js";
+import type {
+  ProjectReport,
+  Task,
+  TaskReport,
+} from "../../src/domain/types.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import {
   RecordingProjectExecutor,
@@ -388,13 +392,88 @@ describe("WorkflowEngine", () => {
     expect(snapshot.project.planning.revision).toBe(1);
     expect(projectExecutor.started).toHaveLength(1);
 
-    await workflow.cancelTask(taskId);
+    await workflow.cancelTask(taskId, {
+      cancelledBy: "codex",
+      decisionBasis: "agent_decision",
+      reason: "The blocked task is no longer required",
+    });
     snapshot = (await store.getProject(created.project.id))!;
     expect(snapshot.project.planning).toMatchObject({
       revision: 2,
       changeReason: "task_cancelled",
     });
     expect(projectExecutor.started).toHaveLength(2);
+  });
+
+  it.each([
+    {
+      decisionBasis: "user_confirmed" as const,
+      reason: "The user confirmed that D1 must be reviewed before replacing D2",
+    },
+    {
+      decisionBasis: "agent_decision" as const,
+      reason: "The duplicate task is fully covered by the accepted replacement",
+    },
+  ])(
+    "persists a $decisionBasis Codex cancellation with its reason",
+    async ({ decisionBasis, reason }) => {
+      const created = await registerProject(1);
+      const taskId = created.tasks[0]!.id;
+
+      const cancelled = (await workflow.execute(
+        {
+          type: "task.control",
+          payload: { taskId, action: "cancel", decisionBasis, reason },
+        },
+        "skill",
+      )) as Task;
+
+      expect(cancelled).toMatchObject({
+        status: "cancelled",
+        requestedAction: null,
+        cancellation: {
+          cancelledBy: "codex",
+          decisionBasis,
+          reason,
+          cancelledAt: "2026-08-03T00:00:00.000Z",
+        },
+      });
+    },
+  );
+
+  it("propagates a reasoned Codex project cancellation to unfinished tasks", async () => {
+    const created = await registerProject(1);
+
+    const cancelled = await workflow.execute(
+      {
+        type: "project.control",
+        payload: {
+          projectId: created.project.id,
+          action: "cancel",
+          decisionBasis: "agent_decision",
+          reason: "The registered project duplicates an active canonical project",
+        },
+      },
+      "skill",
+    );
+
+    expect(cancelled).toMatchObject({
+      status: "cancelled",
+      scheduling: "paused",
+      cancellation: {
+        cancelledBy: "codex",
+        decisionBasis: "agent_decision",
+        reason: "The registered project duplicates an active canonical project",
+      },
+    });
+    expect((await store.findTask(created.tasks[0]!.id))!.task).toMatchObject({
+      status: "cancelled",
+      cancellation: {
+        cancelledBy: "codex",
+        decisionBasis: "agent_decision",
+        reason: "The registered project duplicates an active canonical project",
+      },
+    });
   });
 
   it("starts one independent task selection per project", async () => {
@@ -959,7 +1038,11 @@ describe("WorkflowEngine", () => {
     ]);
     expect(active.project.status).not.toBe("completed");
 
-    await workflow.controlProject(created.project.id, "cancel");
+    await workflow.cancelProject(created.project.id, {
+      cancelledBy: "codex",
+      decisionBasis: "agent_decision",
+      reason: "The completed project is being retired",
+    });
     await expect(
       workflow.addProjectWork(created.project.id, [
         { title: "Too late", description: "No", acceptanceCriteria: [] },

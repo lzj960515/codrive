@@ -18,7 +18,8 @@ export function renderBoardClient(accessToken: string): string {
       needs_input: "等待决定", queued: "待安排", pending: "等待安排",
       selected: "已完成本轮安排", waiting_for_task: "等待任务完成",
       retry_scheduled: "等待模型重试", active_paused: "执行中 · 后续已暂停",
-      primary: "默认", fallback: "备用"
+      primary: "默认", fallback: "备用", user_confirmed: "用户确认",
+      agent_decision: "Codex 判断", codex: "Codex", user: "用户"
     };
     const path = window.location.pathname;
     const route = path === "/settings"
@@ -184,10 +185,12 @@ export function renderBoardClient(accessToken: string): string {
       actions.unshift('<a class="action-button" href="/projects/'+encodeURIComponent(project.id)+'">产品详情</a>');
       if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
       if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
-      if (project.status !== "cancelled") actions.push('<button class="action-button danger" data-project-action="cancel">取消</button>');
       const planningNotice = project.planningNotice;
       const planningCopy = planningNotice?.question || planningNotice?.summary;
-      const planningBanner = planningCopy
+      const cancellationReason = project.cancellation?.reason || (project.status === "cancelled" ? "历史取消记录未保存理由。" : null);
+      const planningBanner = cancellationReason
+        ? '<div class="planning-notice cancellation"><b>取消理由</b><span title="'+escapeHtml(cancellationReason)+'">'+escapeHtml(cancellationReason)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'">查看详情</a></div>'
+        : planningCopy
         ? '<div class="planning-notice"><b>调度说明</b><span title="'+escapeHtml(planningCopy)+'">'+escapeHtml(planningCopy)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'#planning">查看完整说明</a></div>'
         : '';
       host.innerHTML =
@@ -212,7 +215,6 @@ export function renderBoardClient(accessToken: string): string {
       document.getElementById("mobile-projects").onclick = () => document.body.classList.add("nav-open");
       host.querySelectorAll("[data-project-action]").forEach(button => {
         button.onclick = async () => {
-          if (button.dataset.projectAction === "cancel" && !window.confirm("取消会永久终止这个项目。确定继续吗？")) return;
           await command("project.control", { projectId: project.id, action: button.dataset.projectAction });
           await refresh();
         };
@@ -227,7 +229,7 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     function taskCard(task) {
-      const copy = task.question || task.summary || task.description;
+      const copy = task.cancellation?.reason || task.question || task.summary || task.description;
       const alert = ["waiting_for_input", "blocked", "changes_requested"].includes(task.status) ? "task-alert" : "";
       const visibleStatus = task.executionStatus === "retry_scheduled" ? task.executionStatus : task.status;
       return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
@@ -281,7 +283,10 @@ export function renderBoardClient(accessToken: string): string {
       if (!productDetail) return;
       const { project, productDocument, planningNotice, tasks } = productDetail;
       const model = project.currentExecution?.modelRouting;
-      const notice = planningNotice
+      const cancellationReason = project.cancellation?.reason || (project.status === "cancelled" ? "历史取消记录未保存理由。" : null);
+      const notice = cancellationReason
+        ? '<section id="planning" class="product-panel planning-panel cancellation"><div class="panel-heading"><span>取消理由</span><b>'+(project.cancellation ? escapeHtml(label(project.cancellation.decisionBasis)) : "历史记录")+'</b></div><p>'+escapeHtml(cancellationReason)+'</p>'+(project.cancellation ? '<div class="cancellation-meta">'+escapeHtml(label(project.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(project.cancellation.cancelledAt))+'</div>' : '<div class="cancellation-meta">该项目在取消理由成为必填项之前结束。</div>')+'</section>'
+        : planningNotice
         ? '<section id="planning" class="product-panel planning-panel"><div class="panel-heading"><span>调度说明</span><b>'+escapeHtml(label(planningNotice.outcome))+'</b></div><p>'+escapeHtml(planningNotice.summary || planningNotice.question)+'</p>'+(planningNotice.question ? '<div class="decision-question">'+escapeHtml(planningNotice.question)+'</div>' : '')+'</section>'
         : '<section id="planning" class="product-panel planning-panel quiet"><div class="panel-heading"><span>调度说明</span><b>当前无提示</b></div><p>当前规划版本没有需要额外说明的决定。</p></section>';
       const notes = project.contextNotes.length
@@ -347,8 +352,11 @@ export function renderBoardClient(accessToken: string): string {
       const question = task.question
         ? '<div class="question-card"><b>需要你决定</b><p>'+escapeHtml(task.question)+'</p><small>请在对应的 Codex 对话中回复。</small></div>'
         : '';
+      const cancellation = task.status === "cancelled"
+        ? '<div class="cancellation-card"><b>取消理由</b><p>'+escapeHtml(task.cancellation?.reason || "历史取消记录未保存理由。")+'</p>'+(task.cancellation ? '<small>'+escapeHtml(label(task.cancellation.decisionBasis))+' · '+escapeHtml(label(task.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(task.cancellation.cancelledAt))+'</small>' : '<small>该任务在取消理由成为必填项之前结束。</small>')+'</div>'
+        : '';
       const reportSection = report
-        ? '<section class="detail-section"><h3>最新进展 <span>'+escapeHtml(label(report.outcome))+'</span></h3><div class="report-card">'+escapeHtml(report.summary)+'</div>'+
+        ? '<section class="detail-section"><h3>'+(task.status === "cancelled" ? "取消前进展" : "最新进展")+' <span>'+escapeHtml(label(report.outcome))+'</span></h3><div class="report-card">'+escapeHtml(report.summary)+'</div>'+
           (report.tests ? '<div class="tests-card">'+escapeHtml(report.tests)+'</div>' : '')+
           (report.findings.length ? '<ul class="finding-list">'+report.findings.map(finding => '<li>'+escapeHtml(finding)+'</li>').join("")+'</ul>' : '')+'</section>'
         : '';
@@ -357,8 +365,7 @@ export function renderBoardClient(accessToken: string): string {
         task.reviewThreadId ? '<a class="detail-link" href="codex://threads/'+escapeHtml(task.reviewThreadId)+'"><span>最新审查</span><span>打开 ↗</span></a>' : ''
       ].filter(Boolean).join("");
       const controls = [
-        task.status === "blocked" ? '<button class="action-button" data-retry>重试</button>' : '',
-        !["done", "cancelled"].includes(task.status) ? '<button class="action-button danger" data-cancel-task>取消</button>' : ''
+        task.status === "blocked" ? '<button class="action-button" data-retry>重试</button>' : ''
       ].filter(Boolean).join("");
       host.innerHTML =
         '<header class="detail-head"><strong>任务详情</strong><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
@@ -366,7 +373,7 @@ export function renderBoardClient(accessToken: string): string {
           '<div class="detail-status"><span></span>'+escapeHtml(label(task.status))+'</div>'+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
-          (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+question+
+          (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+question+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           reportSection+
           (links ? '<section class="detail-section"><h3>Codex 对话</h3><div class="conversation-list">'+links+'</div></section>' : '')+
@@ -392,12 +399,6 @@ export function renderBoardClient(accessToken: string): string {
       });
       host.querySelector("[data-retry]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "retry" });
-        await refresh();
-      });
-      host.querySelector("[data-cancel-task]")?.addEventListener("click", async () => {
-        if (!window.confirm("取消会永久终止这个任务，之后不能重试。确定继续吗？")) return;
-        await command("task.control", { taskId: task.id, action: "cancel" });
-        closeDetail();
         await refresh();
       });
     }

@@ -86,6 +86,19 @@ describe("HTTP API", () => {
     });
   }
 
+  async function skillCommand(payload: Record<string, unknown>) {
+    return await server.inject({
+      method: "POST",
+      url: "/api/commands",
+      headers: {
+        "content-type": "application/json",
+        "x-codrive-token": "secret",
+        "x-codrive-source": "skill",
+      },
+      payload: JSON.stringify(payload),
+    });
+  }
+
   async function registerProject(name = "Game") {
     const response = await command({
       type: "project.register",
@@ -138,6 +151,8 @@ describe("HTTP API", () => {
       taskId,
       status: "backlog",
       requestedAction: null,
+      cancellation: null,
+      projectCancellation: null,
       repositoryPath: "/workspace/game",
     });
     expect(taskContext.json().projectDocument).toContain("PROJECT.md");
@@ -149,6 +164,7 @@ describe("HTTP API", () => {
       planningRevision: 1,
       planning: { revision: 1 },
       contextNotes: [],
+      cancellation: null,
     });
     expect(oldProjectRoute.statusCode).toBe(404);
     expect(oldAnswerRoute.statusCode).toBe(404);
@@ -301,6 +317,171 @@ describe("HTTP API", () => {
       expect.stringMatching(/^POST \/api\/commands 400:/),
       expect.stringMatching(/^POST \/api\/commands 409:/),
     ]);
+  });
+
+  it("requires a reasoned AI decision and hides stale questions after cancellation", async () => {
+    const created = await registerProject();
+    const task = created.tasks[0]!;
+    await store.saveTask(created.project.id, {
+      ...task,
+      status: "waiting_for_input",
+      requestedAction: "develop",
+      latestReport: {
+        taskId: task.id,
+        attemptId: "attempt_1",
+        outcome: "needs_input",
+        summary: "Wait for the architecture review",
+        question: "Which entity model should this task use?",
+      },
+      currentExecution: {
+        attemptId: "attempt_1",
+        action: "develop",
+        status: "waiting_for_input",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
+      },
+    });
+
+    const missingReason = await skillCommand({
+      type: "task.control",
+      payload: {
+        taskId: task.id,
+        action: "cancel",
+        decisionBasis: "user_confirmed",
+        reason: "  ",
+      },
+    });
+    const missingBasis = await skillCommand({
+      type: "task.control",
+      payload: {
+        taskId: task.id,
+        action: "cancel",
+        reason: "The user confirmed cancellation",
+      },
+    });
+
+    expect(missingReason.statusCode).toBe(400);
+    expect(missingBasis.statusCode).toBe(400);
+
+    const cancelled = await skillCommand({
+      type: "task.control",
+      payload: {
+        taskId: task.id,
+        action: "cancel",
+        decisionBasis: "user_confirmed",
+        reason: "The user confirmed that D2 should wait for the D1 architecture review",
+      },
+    });
+    const terminalBoard = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const terminalContext = await server.inject({
+      method: "GET",
+      url: `/api/contexts/tasks/${task.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json()).toMatchObject({
+      status: "cancelled",
+      cancellation: {
+        cancelledBy: "codex",
+        decisionBasis: "user_confirmed",
+        reason: "The user confirmed that D2 should wait for the D1 architecture review",
+      },
+    });
+    expect(terminalBoard.json()[0].tasks[0]).toMatchObject({
+      status: "cancelled",
+      question: null,
+      cancellation: {
+        cancelledBy: "codex",
+        decisionBasis: "user_confirmed",
+        reason: "The user confirmed that D2 should wait for the D1 architecture review",
+      },
+      report: {
+        outcome: "needs_input",
+        question: "Which entity model should this task use?",
+      },
+    });
+    expect(terminalContext.json()).toMatchObject({
+      status: "cancelled",
+      cancellation: {
+        cancelledBy: "codex",
+        decisionBasis: "user_confirmed",
+        reason: "The user confirmed that D2 should wait for the D1 architecture review",
+      },
+      projectCancellation: null,
+    });
+  });
+
+  it("projects a cancelled project instead of its stale planning question", async () => {
+    const created = await registerProject();
+    const snapshotBeforeProjectCancellation = await store.getProject(
+      created.project.id,
+    );
+    expect(snapshotBeforeProjectCancellation).not.toBeNull();
+    const planningRevision = snapshotBeforeProjectCancellation!.project.planning.revision;
+    await store.saveProject({
+      ...snapshotBeforeProjectCancellation!.project,
+      status: "waiting_for_input",
+      planning: {
+        ...snapshotBeforeProjectCancellation!.project.planning,
+        lastDecision: {
+          revision: planningRevision,
+          outcome: "needs_input",
+          summary: "A product decision was needed before cancellation",
+          taskIds: [],
+          question: "Should this product continue?",
+          wakeCondition: "project_decision_recorded",
+          nextAction: "record_project_decision",
+          decidedAt: "2026-08-03T00:00:00.000Z",
+        },
+      },
+    });
+    const cancelledProject = await skillCommand({
+      type: "project.control",
+      payload: {
+        projectId: created.project.id,
+        action: "cancel",
+        decisionBasis: "agent_decision",
+        reason: "All remaining work belongs to the canonical replacement project",
+      },
+    });
+    const cancelledProjectBoard = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const cancelledProjectContext = await server.inject({
+      method: "GET",
+      url: `/api/contexts/projects/${created.project.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+
+    expect(cancelledProject.json()).toMatchObject({
+      status: "cancelled",
+      cancellation: {
+        decisionBasis: "agent_decision",
+        reason: "All remaining work belongs to the canonical replacement project",
+      },
+    });
+    expect(cancelledProjectBoard.json()[0].project).toMatchObject({
+      status: "cancelled",
+      planningNotice: null,
+      planning: {
+        status: "cancelled",
+        question: null,
+      },
+    });
+    expect(cancelledProjectContext.json()).toMatchObject({
+      cancellation: {
+        cancelledBy: "codex",
+        decisionBasis: "agent_decision",
+        reason: "All remaining work belongs to the canonical replacement project",
+      },
+    });
   });
 
   it("exposes project execution retry separately from scheduling resume", async () => {
@@ -763,6 +944,10 @@ describe("HTTP API", () => {
     expect(page.body).toContain("data-copy-task-id");
     expect(page.body).toContain("navigator.clipboard.writeText(task.id)");
     expect(page.body).toContain("复制任务 ID");
+    expect(page.body).toContain("取消前进展");
+    expect(page.body).toContain("取消理由");
+    expect(page.body).not.toContain("data-cancel-task");
+    expect(page.body).not.toContain('data-project-action="cancel"');
     expect(page.body).toContain('id="mobile-projects"');
     expect(page.body).toContain("验收标准");
     expect(page.body).toContain("selectedTaskId");

@@ -91,6 +91,19 @@ export type LifecycleEventComponent =
   | "app_server"
   | "store";
 
+export type CancellationDecisionBasis = "user_confirmed" | "agent_decision";
+export type CancellationActor = "codex" | "user";
+
+export interface CancellationInput {
+  cancelledBy: CancellationActor;
+  decisionBasis: CancellationDecisionBasis;
+  reason: string;
+}
+
+export interface Cancellation extends CancellationInput {
+  cancelledAt: string;
+}
+
 export interface LifecycleState {
   status: string;
   scheduling?: SchedulingStatus;
@@ -113,6 +126,7 @@ export interface Project {
   planning: ProjectPlanningState;
   currentExecution?: ProjectExecution;
   latestReport?: ProjectReport;
+  cancellation?: Cancellation;
   contextNotes?: string[];
   lastEvaluationFingerprint?: string;
   stagnantEvaluationRounds?: number;
@@ -244,6 +258,7 @@ export interface Task {
   reviewedMainCommit?: string;
   mergedCommit?: string;
   latestReport?: TaskReport;
+  cancellation?: Cancellation;
   createdAt: string;
   updatedAt: string;
 }
@@ -312,10 +327,17 @@ export type CodriveCommand =
     }
   | {
       type: "project.control";
-      payload: {
-        projectId: string;
-        action: "pause" | "resume" | "retry" | "replan" | "cancel";
-      };
+      payload:
+        | {
+            projectId: string;
+            action: "pause" | "resume" | "retry" | "replan";
+          }
+        | {
+            projectId: string;
+            action: "cancel";
+            decisionBasis: CancellationDecisionBasis;
+            reason: string;
+          };
     }
   | {
       type: "project.record_decision";
@@ -323,7 +345,14 @@ export type CodriveCommand =
     }
   | {
       type: "task.control";
-      payload: { taskId: string; action: "retry" | "cancel" };
+      payload:
+        | { taskId: string; action: "retry" }
+        | {
+            taskId: string;
+            action: "cancel";
+            decisionBasis: CancellationDecisionBasis;
+            reason: string;
+          };
     }
   | { type: "task.report"; payload: TaskReport }
   | { type: "project.report"; payload: ProjectReport };

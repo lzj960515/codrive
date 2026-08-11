@@ -301,12 +301,17 @@ export const boardStyles = `
   .criteria-list li { display: grid; grid-template-columns: 18px 1fr; gap: 9px; color: #46514b; font-size: 12px; line-height: 1.5; }
   .criteria-list i { display: grid; width: 17px; height: 17px; place-items: center; color: white; background: #d7dcd8; border-radius: 50%; font-size: 9px; font-style: normal; }
   .criteria-list.complete i { background: #3f9477; }
-  .report-card, .question-card, .tests-card { padding: 14px; border-radius: 11px; }
+  .report-card, .question-card, .cancellation-card, .tests-card { padding: 14px; border-radius: 11px; }
   .report-card { color: #3f4b45; background: var(--surface-soft); border: 1px solid var(--line); font-size: 12px; line-height: 1.55; }
   .question-card { color: #6d4819; background: #fff4d9; border: 1px solid #edcf8d; }
   .question-card b { display: block; margin-bottom: 6px; font-size: 11px; }
   .question-card p { margin: 0; font-size: 12px; line-height: 1.55; }
   .question-card small { display: block; margin-top: 9px; color: #947242; }
+  .cancellation-card { margin-top: 16px; color: #71342b; background: #fff0ed; border: 1px solid #e9b8af; }
+  .cancellation-card b { display: block; margin-bottom: 6px; font-size: 11px; }
+  .cancellation-card p { margin: 0; font-size: 12px; line-height: 1.55; }
+  .cancellation-card small, .cancellation-meta { display: block; margin-top: 9px; color: #9d655c; font-size: 10px; }
+  .planning-notice.cancellation, .planning-panel.cancellation { color: #71342b; background: #fff0ed; border-color: #e9b8af; }
   .tests-card { margin-top: 9px; color: #315f51; background: #e8f6f0; font: 600 11px/1.55 ui-monospace, "SFMono-Regular", monospace; white-space: pre-wrap; }
   .finding-list li { position: relative; padding-left: 15px; color: #5d4b42; font-size: 11px; line-height: 1.5; }
   .finding-list li::before { content: ""; position: absolute; left: 0; top: 7px; width: 6px; height: 6px; background: var(--rose); border-radius: 50%; }

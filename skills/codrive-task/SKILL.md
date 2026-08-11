@@ -103,6 +103,15 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 
 `needs_input` 暂停当前执行但保留 `attemptId`。用户在 Codex App 的原任务对话中回答后，继续当前阶段，并使用同一个 `attemptId` 提交新的最终报告。
 
+## 取消判断
+
+当前阶段出现取消候选时，先判断是否需要用户决定：
+
+- 需要产品取舍、停止范围或现场保留决定时，提交 `needs_input`，在 `question` 中说明建议取消的原因和需要用户确认的具体事项。用户在原任务对话明确答复后，使用 `$codrive-control` 以 `user_confirmed` 取消。
+- 当前仓库和任务事实已经证明任务重复、已被替代或不再可执行，并且取消不需要新的产品选择或外部授权时，使用 `$codrive-control` 以 `agent_decision` 直接取消。
+
+两种路径都提供具体取消理由：`user_confirmed` 概括用户同意的范围和原因，`agent_decision` 写明支持直接取消的可观察事实。取消命令成为当前阶段的最后一个副作用，终态任务无需再提交阶段报告。
+
 开发完成报告格式：
 
 ```json

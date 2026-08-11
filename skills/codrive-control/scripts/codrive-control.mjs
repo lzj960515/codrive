@@ -10,8 +10,13 @@ else if (command === "project" && id) result = await request(`/api/projects/${en
 else if (command === "task" && id) result = findTask(await request("/api/board"), id);
 else if (command === "settings") result = await request("/api/system/settings");
 else if (command === "update-settings") result = await sendCommand("system.update_settings", JSON.parse(await readStdin()));
-else if (command === "project-control" && id && action) result = await sendCommand("project.control", { projectId: id, action });
-else if (command === "task-control" && id && action) result = await sendCommand("task.control", { taskId: id, action });
+else if (command === "project-control" && id && action) {
+  const decision = action === "cancel" ? await readCancellationDecision() : {};
+  result = await sendCommand("project.control", { projectId: id, action, ...decision });
+} else if (command === "task-control" && id && action) {
+  const decision = action === "cancel" ? await readCancellationDecision() : {};
+  result = await sendCommand("task.control", { taskId: id, action, ...decision });
+}
 else if (command === "record-decision" && id) {
   const payload = JSON.parse(await readStdin());
   result = await sendCommand("project.record_decision", { projectId: id, ...payload });
@@ -39,5 +44,15 @@ function findTask(board, taskId) {
 }
 
 async function readStdin() { let value = ""; for await (const chunk of process.stdin) value += chunk; return value; }
+async function readCancellationDecision() {
+  const payload = JSON.parse(await readStdin());
+  if (!["user_confirmed", "agent_decision"].includes(payload.decisionBasis)) {
+    fail("Cancellation decisionBasis must be user_confirmed or agent_decision");
+  }
+  if (typeof payload.reason !== "string" || !payload.reason.trim()) {
+    fail("Cancellation reason is required");
+  }
+  return { decisionBasis: payload.decisionBasis, reason: payload.reason.trim() };
+}
 function print(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function fail(message) { process.stderr.write(`${message}\n`); process.exit(1); }

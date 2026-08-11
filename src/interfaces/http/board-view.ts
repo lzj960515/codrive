@@ -22,7 +22,8 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
         scheduling: project.scheduling,
         requestedAction: project.requestedAction,
         executionStatus: project.currentExecution?.status ?? null,
-        planningNotice: planning.summary || planning.question
+        cancellation: project.cancellation ?? null,
+        planningNotice: project.status !== "cancelled" && (planning.summary || planning.question)
           ? {
               outcome: planning.outcome,
               summary: planning.summary,
@@ -35,7 +36,10 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
           ? {
               outcome: latestProductReport.outcome,
               summary: latestProductReport.summary,
-              question: latestProductReport.question ?? null,
+              question:
+                project.status === "cancelled"
+                  ? null
+                  : (latestProductReport.question ?? null),
             }
           : null,
         planning,
@@ -52,7 +56,9 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
         executionStatus: task.currentExecution?.status ?? null,
         modelRouting: task.currentExecution?.modelRouting ?? null,
         summary: task.latestReport?.summary ?? null,
-        question: task.latestReport?.question ?? null,
+        question:
+          task.status === "cancelled" ? null : (task.latestReport?.question ?? null),
+        cancellation: task.cancellation ?? null,
         report: task.latestReport
           ? {
               outcome: task.latestReport.outcome,
@@ -96,10 +102,11 @@ function createPlanningView(
           : decision.outcome;
   return {
     revision: project.planning.revision,
-    status,
+    status: project.status === "cancelled" ? "cancelled" : status,
     outcome: decision?.outcome ?? null,
     summary: decision?.summary ?? null,
-    question: decision?.question ?? null,
+    question:
+      project.status === "cancelled" ? null : (decision?.question ?? null),
     wakeCondition: decision?.wakeCondition ?? null,
     nextAction: decision?.nextAction ?? null,
     selectedTaskIds: decision?.taskIds ?? [],

@@ -80,6 +80,11 @@ const projectReportSchema = z.object({
   question: z.string().optional(),
 });
 
+const cancellationDecisionSchema = {
+  decisionBasis: z.enum(["user_confirmed", "agent_decision"]),
+  reason: z.string().trim().min(1).max(2_000),
+};
+
 const commandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("system.install_skills"),
@@ -106,10 +111,17 @@ const commandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("project.control"),
-    payload: z.object({
-      projectId: z.string().min(1),
-      action: z.enum(["pause", "resume", "retry", "replan", "cancel"]),
-    }),
+    payload: z.discriminatedUnion("action", [
+      z.object({
+        projectId: z.string().min(1),
+        action: z.enum(["pause", "resume", "retry", "replan"]),
+      }),
+      z.object({
+        projectId: z.string().min(1),
+        action: z.literal("cancel"),
+        ...cancellationDecisionSchema,
+      }),
+    ]),
   }),
   z.object({
     type: z.literal("project.record_decision"),
@@ -121,10 +133,14 @@ const commandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("task.control"),
-    payload: z.object({
-      taskId: z.string().min(1),
-      action: z.enum(["retry", "cancel"]),
-    }),
+    payload: z.discriminatedUnion("action", [
+      z.object({ taskId: z.string().min(1), action: z.literal("retry") }),
+      z.object({
+        taskId: z.string().min(1),
+        action: z.literal("cancel"),
+        ...cancellationDecisionSchema,
+      }),
+    ]),
   }),
   z.object({ type: z.literal("task.report"), payload: taskReportSchema }),
   z.object({ type: z.literal("project.report"), payload: projectReportSchema }),
@@ -223,6 +239,7 @@ export function createHttpServer(
         projectDocument: dependencies.store.productDocumentPath(snapshot.project.id),
         repositoryPath: snapshot.project.repositoryPath,
         contextNotes: snapshot.project.contextNotes ?? [],
+        cancellation: snapshot.project.cancellation ?? null,
         planning: snapshot.project.planning,
         taskDocuments: snapshot.tasks.map((task) =>
           dependencies.store.taskPath(snapshot.project.id, task.id),
@@ -312,6 +329,8 @@ function taskContext(
     attemptId: task.currentExecution?.attemptId ?? null,
     status: task.status,
     requestedAction: task.requestedAction,
+    cancellation: task.cancellation ?? null,
+    projectCancellation: project.cancellation ?? null,
     projectDirectory: store.projectDirectory(project.id),
     projectDocument: store.productDocumentPath(project.id),
     taskDocument: store.taskPath(project.id, task.id),
