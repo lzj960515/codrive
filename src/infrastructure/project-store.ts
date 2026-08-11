@@ -15,9 +15,12 @@ import type {
   Project,
   ProjectSnapshot,
   Task,
+  TaskActivity,
   CreateTaskInput,
 } from "../domain/types.js";
+import { projectTaskActivities } from "../domain/task-activity.js";
 import { createPlanningState } from "../domain/planning.js";
+import { migrateStateDirectory } from "./state-migration.js";
 
 export class ProjectStore {
   readonly projectsDirectory: string;
@@ -47,6 +50,7 @@ export class ProjectStore {
       scheduling: "running",
       requestedAction: null,
       planning: createPlanningState(now),
+      evaluation: { stagnantRounds: 0 },
       createdAt: now,
       updatedAt: now,
     };
@@ -60,7 +64,6 @@ export class ProjectStore {
       order: task.order ?? index + 1,
       status: "backlog",
       requestedAction: null,
-      reviewAttempts: [],
       createdAt: now,
       updatedAt: now,
     }));
@@ -167,14 +170,23 @@ export class ProjectStore {
 
   async findProjectsByPath(path: string): Promise<ProjectSnapshot[]> {
     const candidate = resolve(path);
-    return (await this.listProjects()).filter((snapshot) =>
-      [
-        snapshot.project.repositoryPath,
-        ...snapshot.tasks.flatMap(({ workspacePath }) =>
-          workspacePath ? [workspacePath] : [],
+    const matches: ProjectSnapshot[] = [];
+    for (const snapshot of await this.listProjects()) {
+      const taskRoots = await Promise.all(
+        snapshot.tasks.map(async ({ id }) =>
+          projectTaskActivities(await this.listTaskActivities(snapshot.project.id, id))
+            .workspacePath,
         ),
-      ].some((root) => pathContains(root, candidate)),
-    );
+      );
+      if (
+        [snapshot.project.repositoryPath, ...taskRoots.filter(Boolean)].some((root) =>
+          pathContains(root!, candidate),
+        )
+      ) {
+        matches.push(snapshot);
+      }
+    }
+    return matches;
   }
 
   async addTasks(projectId: string, inputs: CreateTaskInput[]): Promise<Task[]> {
@@ -194,7 +206,6 @@ export class ProjectStore {
       order: input.order ?? firstOrder + index,
       status: "backlog",
       requestedAction: null,
-      reviewAttempts: [],
       createdAt: now,
       updatedAt: now,
     }));
@@ -246,6 +257,28 @@ export class ProjectStore {
     }
   }
 
+  async listTaskActivities(
+    projectId: string,
+    taskId?: string,
+  ): Promise<TaskActivity[]> {
+    const events = await this.readEvents(projectId);
+    return events
+      .filter(
+        (event) =>
+          event.type === "task.activity_recorded" &&
+          (!taskId || event.taskId === taskId),
+      )
+      .flatMap((event) => {
+        const activity = event.data?.activity;
+        return isTaskActivity(activity) ? [activity] : [];
+      })
+      .sort(
+        (left, right) =>
+          left.occurredAt.localeCompare(right.occurredAt) ||
+          left.id.localeCompare(right.id),
+      );
+  }
+
   subscribe(listener: (event: CodriveEvent) => void): () => void {
     this.eventListeners.add(listener);
     return () => this.eventListeners.delete(listener);
@@ -286,8 +319,21 @@ export class ProjectStore {
     return JSON.parse(await readFile(path, "utf8")) as T;
   }
 
+  private async readEvents(projectId: string): Promise<CodriveEvent[]> {
+    try {
+      return (await readFile(this.eventsPath(projectId), "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as CodriveEvent);
+    } catch (error) {
+      if (isMissingFile(error)) return [];
+      throw error;
+    }
+  }
+
   private async initializeStore(): Promise<void> {
     await mkdir(this.projectsDirectory, { recursive: true });
+    await migrateStateDirectory(this.stateDirectory);
     const entries = await readdir(this.projectsDirectory, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -368,4 +414,15 @@ function pathContains(root: string, candidate: string): boolean {
 
 function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function isTaskActivity(value: unknown): value is TaskActivity {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "id" in value &&
+      "taskId" in value &&
+      "type" in value &&
+      "occurredAt" in value,
+  );
 }

@@ -59,6 +59,7 @@ function project(action: ProjectAction): Project {
       changeReason: "project_registered",
       concurrencyLimit: 4,
     },
+    evaluation: { stagnantRounds: 0 },
     currentExecution: {
       attemptId: "project_attempt_1",
       action,

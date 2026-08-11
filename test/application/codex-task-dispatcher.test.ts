@@ -66,6 +66,7 @@ const project: Project = {
         changeReason: "project_registered",
         concurrencyLimit: 4,
       },
+      evaluation: { stagnantRounds: 0 },
       createdAt: timestamp,
   updatedAt: timestamp,
 };
@@ -80,7 +81,6 @@ function task(overrides: Partial<Task> = {}): Task {
     order: 1,
     status: "developing",
     requestedAction: "develop",
-    reviewAttempts: [],
     currentExecution: {
       attemptId: "attempt_1",
       action: "develop",
@@ -94,14 +94,26 @@ function task(overrides: Partial<Task> = {}): Task {
   };
 }
 
+function request(currentTask: Task, activity = {}) {
+  return {
+    project,
+    task: currentTask,
+    activity: {
+      reviewCount: 0,
+      latestDecisionRequest: null,
+      ...activity,
+    },
+  };
+}
+
 describe("CodexTaskDispatcher", () => {
   it("creates a development task and sends only its Skill reference", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
-    const request = { project, task: task() };
+    const currentRequest = request(task());
 
-    const threadId = await dispatcher.openThread(request);
-    const turn = await dispatcher.startTurn(request, threadId);
+    const threadId = await dispatcher.openThread(currentRequest);
+    const turn = await dispatcher.startTurn(currentRequest, threadId);
 
     expect({ threadId, turn }).toEqual({
       threadId: "thread_1",
@@ -127,12 +139,9 @@ describe("CodexTaskDispatcher", () => {
   it("keeps review, rework, and integration conversations attached to the project", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
-    const workspacePath = "/workspace/game/.worktrees/task_1";
     const reviewing = task({
       status: "reviewing",
       requestedAction: "review",
-      developmentThreadId: "development_thread",
-      workspacePath,
       currentExecution: {
         attemptId: "review_1",
         action: "review",
@@ -140,12 +149,9 @@ describe("CodexTaskDispatcher", () => {
         startedAt: timestamp,
         modelRouting: modelRouting(),
       },
-      reviewAttempts: [{ attemptId: "review_1", createdAt: timestamp }],
     });
     const reworking = task({
       requestedAction: "rework",
-      developmentThreadId: "development_thread",
-      workspacePath,
       currentExecution: {
         attemptId: "rework_1",
         action: "rework",
@@ -157,8 +163,6 @@ describe("CodexTaskDispatcher", () => {
     const integrating = task({
       status: "integrating",
       requestedAction: "integrate",
-      developmentThreadId: "development_thread",
-      workspacePath,
       currentExecution: {
         attemptId: "integrate_1",
         action: "integrate",
@@ -168,9 +172,9 @@ describe("CodexTaskDispatcher", () => {
       },
     });
 
-    await dispatcher.openThread({ project, task: reviewing });
-    await dispatcher.openThread({ project, task: reworking });
-    await dispatcher.openThread({ project, task: integrating });
+    await dispatcher.openThread(request(reviewing, { developmentThreadId: "development_thread" }));
+    await dispatcher.openThread(request(reworking, { developmentThreadId: "development_thread" }));
+    await dispatcher.openThread(request(integrating, { developmentThreadId: "development_thread" }));
 
     expect(gateway.calls).toEqual([
       {
@@ -195,7 +199,6 @@ describe("CodexTaskDispatcher", () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
     const persisted = task({
-      workspacePath: "/workspace/game/.worktrees/task_1",
       currentExecution: {
         attemptId: "attempt_1",
         action: "develop",
@@ -206,7 +209,7 @@ describe("CodexTaskDispatcher", () => {
       },
     });
 
-    await dispatcher.openThread({ project, task: persisted });
+    await dispatcher.openThread(request(persisted));
 
     expect(gateway.calls).toEqual([
       {
@@ -219,13 +222,10 @@ describe("CodexTaskDispatcher", () => {
   it("starts task and report turns under the project while preserving the task worktree", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
-    const request = {
-      project,
-      task: task({ workspacePath: "/workspace/game/.worktrees/task_1" }),
-    };
+    const currentRequest = request(task());
 
-    await dispatcher.startTurn(request, "thread_1");
-    await dispatcher.requestReport(request, "thread_1");
+    await dispatcher.startTurn(currentRequest, "thread_1");
+    await dispatcher.requestReport(currentRequest, "thread_1");
 
     expect(gateway.calls).toEqual([
       {
@@ -253,10 +253,8 @@ describe("CodexTaskDispatcher", () => {
     const gateway = new RecordingGateway();
     gateway.threadActive = true;
     const dispatcher = new CodexTaskDispatcher(gateway);
-    const request = {
-      project,
-      task: task({
-        developmentThreadId: "thread_1",
+    const currentRequest = request(
+      task({
         currentExecution: {
           attemptId: "attempt_2",
           action: "rework",
@@ -266,10 +264,11 @@ describe("CodexTaskDispatcher", () => {
           threadId: "thread_1",
         },
       }),
-    };
+      { developmentThreadId: "thread_1" },
+    );
 
-    const taskTurn = await dispatcher.startTurn(request, "thread_1");
-    const reportTurn = await dispatcher.requestReport(request, "thread_1");
+    const taskTurn = await dispatcher.startTurn(currentRequest, "thread_1");
+    const reportTurn = await dispatcher.requestReport(currentRequest, "thread_1");
 
     expect(taskTurn).toEqual({ status: "conversation_active" });
     expect(reportTurn).toEqual({ status: "conversation_active" });
@@ -291,7 +290,7 @@ describe("CodexTaskDispatcher", () => {
       },
     });
 
-    await dispatcher.interrupt({ project, task: active });
+    await dispatcher.interrupt(request(active));
 
     expect(gateway.calls).toEqual([
       { method: "interruptTurn", args: ["thread_1", "turn_1"] },

@@ -16,7 +16,9 @@ node <skill-directory>/scripts/codrive-control.mjs project <project-id>
 node <skill-directory>/scripts/codrive-control.mjs task <task-id>
 ```
 
-`project` 返回注册信息、完整 `PROJECT.md`、规划决定、产品上下文、任务与当前执行信息。看板中的“调度说明”来自当前规划版本的持久化决定，用于解释等待条件和下一行动。
+`project` 返回注册信息、完整 `PROJECT.md`、产品上下文、最小规划状态、任务与当前执行信息。`task` 返回任务定义、当前状态、完整进展记录和推导后的 Codex 对话链接。
+
+项目的 `attention` 只表达需要处理的异常状态：`decision_requested` 表示需要在对应 Codex App 对话中作出决定，`blocked` 表示项目存在确定阻塞。没有 `attention` 时，项目按当前任务和规划状态正常推进。
 
 ## 运行设置
 
@@ -60,7 +62,7 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel
 
 ## 取消判断
 
-取消是永久终态。先读取目标项目或任务的最新状态、报告和对话上下文，再判断取消是否依赖用户意图：
+取消是永久终态。先读取目标项目或任务的当前状态、完整进展记录和对话上下文，再判断取消是否依赖用户意图：
 
 - 需要产品取舍、停止范围或现场保留决定时，通过当前任务或项目报告提交 `needs_input`，在 `question` 中写清建议取消的原因和需要用户回答的问题。用户在原 Codex 对话明确答复后，以 `user_confirmed` 执行取消。
 - 当前事实已经证明目标重复、已被替代或不再可执行，并且取消不需要新的产品选择或外部授权时，以 `agent_decision` 直接执行取消。

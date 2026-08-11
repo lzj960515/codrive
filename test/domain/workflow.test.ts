@@ -23,7 +23,6 @@ function task(overrides: Partial<Task> = {}): Task {
     order: 1,
     status: "backlog",
     requestedAction: null,
-    reviewAttempts: [],
     createdAt: timestamp,
     updatedAt: timestamp,
     ...overrides,
@@ -86,8 +85,8 @@ describe("task workflow", () => {
     expect(developed).toMatchObject({
       status: "reviewing",
       requestedAction: "review",
-      candidateCommit: "abc123",
     });
+    expect(developed.currentExecution).toBeUndefined();
 
     const reviewing = startTaskExecution(developed, "review_attempt", timestamp);
     const changesRequested = applyTaskReport(
@@ -156,8 +155,8 @@ describe("task workflow", () => {
     expect(completed).toMatchObject({
       status: "done",
       requestedAction: null,
-      mergedCommit: "merge789",
     });
+    expect(completed.currentExecution).toBeUndefined();
   });
 
   it("keeps the same execution while Codex waits for an answer in the App", () => {
@@ -204,8 +203,8 @@ describe("task workflow", () => {
     expect(completed).toMatchObject({
       status: "reviewing",
       requestedAction: "review",
-      currentExecution: { attemptId: "develop_attempt", status: "completed" },
     });
+    expect(completed.currentExecution).toBeUndefined();
   });
 
   it("requires the artifacts consumed by later stages", () => {

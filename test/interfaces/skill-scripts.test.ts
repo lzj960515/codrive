@@ -104,8 +104,8 @@ describe("bundled Skill scripts", () => {
         summary: "Start the first task",
         taskIds: [created.tasks[0]!.id],
       }),
-    ) as { latestReport: { outcome: string } };
-    expect(reported.latestReport.outcome).toBe("selected");
+    ) as { currentExecution: { result: { outcome: string } } };
+    expect(reported.currentExecution.result.outcome).toBe("selected");
 
     const added = JSON.parse(
       await runSkill("codrive-work", ["add", created.project.id], {
@@ -151,6 +151,12 @@ describe("bundled Skill scripts", () => {
       await runSkill("codrive-control", ["project", created.project.id]),
     ) as { productDocument: string };
     expect(project.productDocument).toBe("# Game\n");
+
+    const task = JSON.parse(
+      await runSkill("codrive-control", ["task", created.tasks[0]!.id]),
+    ) as { task: { id: string }; activities: unknown[] };
+    expect(task.task.id).toBe(created.tasks[0]!.id);
+    expect(task.activities).toEqual([]);
 
     const settings = JSON.parse(
       await runSkill("codrive-control", ["settings"]),

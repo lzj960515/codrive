@@ -41,39 +41,12 @@ export type PlanningChangeReason =
   | "concurrency_changed"
   | "manual_replan";
 
-export type SelectionDecisionOutcome =
-  | "selected"
-  | "wait_for_active_tasks"
-  | "needs_input"
-  | "blocked";
-
-export type SelectionWakeCondition =
-  | "task_completed"
-  | "project_decision_recorded"
-  | "manual_replan";
-
-export type SelectionNextAction =
-  | "wait_for_task_completion"
-  | "record_project_decision"
-  | "resolve_blocker_and_replan";
-
-export interface SelectionDecision {
-  revision: number;
-  outcome: SelectionDecisionOutcome;
-  summary: string;
-  taskIds: string[];
-  question?: string;
-  wakeCondition: SelectionWakeCondition;
-  nextAction: SelectionNextAction;
-  decidedAt: string;
-}
-
 export interface ProjectPlanningState {
   revision: number;
+  evaluatedRevision?: number;
   changedAt: string;
   changeReason: PlanningChangeReason;
   concurrencyLimit?: number;
-  lastDecision?: SelectionDecision;
 }
 
 export type LifecycleEventSource =
@@ -125,13 +98,16 @@ export interface Project {
   requestedAction: ProjectAction | null;
   planning: ProjectPlanningState;
   currentExecution?: ProjectExecution;
-  latestReport?: ProjectReport;
   cancellation?: Cancellation;
   contextNotes?: string[];
-  lastEvaluationFingerprint?: string;
-  stagnantEvaluationRounds?: number;
+  evaluation: ProjectEvaluationState;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectEvaluationState {
+  lastProgressFingerprint?: string;
+  stagnantRounds: number;
 }
 
 export type ProjectReportOutcome =
@@ -163,7 +139,7 @@ export interface ProjectExecution {
   modelRouting: ExecutionModelRouting;
   finishedAt?: string;
   turnCompletedAt?: string;
-  report?: ProjectReport;
+  result?: ProjectReport;
   reportReminderCount?: number;
   progressFingerprint?: string;
   planningRevision?: number;
@@ -204,17 +180,9 @@ export interface TaskExecution {
   modelRouting: ExecutionModelRouting;
   finishedAt?: string;
   turnCompletedAt?: string;
-  report?: TaskReport;
+  submittedActivityId?: string;
   reportReminderCount?: number;
   leaseExpiresAt?: string;
-}
-
-export interface ReviewAttempt {
-  attemptId: string;
-  threadId?: string;
-  outcome?: TaskReportOutcome;
-  createdAt: string;
-  completedAt?: string;
 }
 
 export type TaskReportOutcome =
@@ -240,6 +208,45 @@ export interface TaskReport {
   question?: string;
 }
 
+export type TaskActivityType =
+  | "development_completed"
+  | "rework_completed"
+  | "review_approved"
+  | "review_changes_requested"
+  | "review_requested"
+  | "integration_completed"
+  | "decision_requested"
+  | "blocked"
+  | "execution_failed"
+  | "cancelled";
+
+export interface TaskActivityEvidence {
+  workspacePath?: string;
+  baseCommit?: string;
+  candidateCommit?: string;
+  reviewedMainCommit?: string;
+  mergedCommit?: string;
+  tests?: string;
+  findings?: string[];
+  question?: string;
+  reason?: string;
+  decisionBasis?: CancellationDecisionBasis;
+}
+
+export interface TaskActivity {
+  id: string;
+  projectId: string;
+  taskId: string;
+  type: TaskActivityType;
+  summary: string;
+  occurredAt: string;
+  attemptId?: string;
+  action?: TaskAction;
+  outcome?: TaskReportOutcome;
+  threadId?: string;
+  evidence?: TaskActivityEvidence;
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -249,15 +256,7 @@ export interface Task {
   order: number;
   status: TaskStatus;
   requestedAction: TaskAction | null;
-  developmentThreadId?: string;
-  reviewAttempts: ReviewAttempt[];
   currentExecution?: TaskExecution;
-  workspacePath?: string;
-  baseCommit?: string;
-  candidateCommit?: string;
-  reviewedMainCommit?: string;
-  mergedCommit?: string;
-  latestReport?: TaskReport;
   cancellation?: Cancellation;
   createdAt: string;
   updatedAt: string;

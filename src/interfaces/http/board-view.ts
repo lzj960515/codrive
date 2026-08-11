@@ -3,11 +3,6 @@ import type { ProjectSnapshot } from "../../domain/types.js";
 export function createBoardView(snapshots: ProjectSnapshot[]) {
   return snapshots.map(({ project, tasks }) => {
     const planning = createPlanningView(project, tasks);
-    const latestProductReport =
-      project.currentExecution?.action === "evaluate_product" &&
-      project.currentExecution.report?.attemptId === project.latestReport?.attemptId
-        ? project.latestReport
-        : undefined;
     return {
       project: {
         id: project.id,
@@ -23,25 +18,7 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
         requestedAction: project.requestedAction,
         executionStatus: project.currentExecution?.status ?? null,
         cancellation: project.cancellation ?? null,
-        planningNotice: project.status !== "cancelled" && (planning.summary || planning.question)
-          ? {
-              outcome: planning.outcome,
-              summary: planning.summary,
-              question: planning.question,
-              wakeCondition: planning.wakeCondition,
-              nextAction: planning.nextAction,
-            }
-          : null,
-        latestEvaluation: latestProductReport
-          ? {
-              outcome: latestProductReport.outcome,
-              summary: latestProductReport.summary,
-              question:
-                project.status === "cancelled"
-                  ? null
-                  : (latestProductReport.question ?? null),
-            }
-          : null,
+        attention: projectAttention(project),
         planning,
         updatedAt: project.updatedAt,
       },
@@ -55,22 +32,7 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
         requestedAction: task.requestedAction,
         executionStatus: task.currentExecution?.status ?? null,
         modelRouting: task.currentExecution?.modelRouting ?? null,
-        summary: task.latestReport?.summary ?? null,
-        question:
-          task.status === "cancelled" ? null : (task.latestReport?.question ?? null),
         cancellation: task.cancellation ?? null,
-        report: task.latestReport
-          ? {
-              outcome: task.latestReport.outcome,
-              summary: task.latestReport.summary,
-              tests: task.latestReport.tests ?? null,
-              findings: task.latestReport.findings ?? [],
-              question: task.latestReport.question ?? null,
-            }
-          : null,
-        developmentThreadId: task.developmentThreadId ?? null,
-        reviewThreadId: task.reviewAttempts.at(-1)?.threadId ?? null,
-        reviewCount: task.reviewAttempts.length,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
       })),
@@ -83,9 +45,10 @@ function createPlanningView(
   tasks: ProjectSnapshot["tasks"],
 ) {
   const execution = project.currentExecution;
-  const decision =
-    project.planning.lastDecision?.revision === project.planning.revision
-      ? project.planning.lastDecision
+  const result =
+    execution?.action === "select_tasks" &&
+    execution.planningRevision === project.planning.revision
+      ? execution.result
       : undefined;
   const status =
     execution?.action === "select_tasks" &&
@@ -95,26 +58,43 @@ function createPlanningView(
       ? execution.status === "retry_scheduled"
         ? "retry_scheduled"
         : "selecting"
-      : !decision
+      : project.planning.evaluatedRevision !== project.planning.revision
         ? "pending"
-        : decision.outcome === "wait_for_active_tasks"
+        : result?.outcome === "wait_for_active_tasks"
           ? "waiting_for_task"
-          : decision.outcome;
+          : (result?.outcome ?? "waiting_for_task");
   return {
     revision: project.planning.revision,
+    evaluatedRevision: project.planning.evaluatedRevision ?? null,
     status: project.status === "cancelled" ? "cancelled" : status,
-    outcome: decision?.outcome ?? null,
-    summary: decision?.summary ?? null,
-    question:
-      project.status === "cancelled" ? null : (decision?.question ?? null),
-    wakeCondition: decision?.wakeCondition ?? null,
-    nextAction: decision?.nextAction ?? null,
-    selectedTaskIds: decision?.taskIds ?? [],
+    outcome: result?.outcome ?? null,
+    selectedTaskIds: result?.taskIds ?? [],
     blockingTaskIds: tasks
       .filter(({ status: taskStatus }) =>
         ["waiting_for_input", "blocked"].includes(taskStatus),
       )
       .map(({ id }) => id),
+  };
+}
+
+function projectAttention(project: ProjectSnapshot["project"]) {
+  if (project.status === "cancelled") return null;
+  const execution = project.currentExecution;
+  const result = execution?.result;
+  if (!execution || !result || !["needs_input", "blocked"].includes(result.outcome)) {
+    return null;
+  }
+  if (
+    execution.action === "select_tasks" &&
+    execution.planningRevision !== project.planning.revision
+  ) {
+    return null;
+  }
+  return {
+    kind: result.outcome === "needs_input" ? "decision_requested" : "blocked",
+    summary: result.summary,
+    question: result.question ?? null,
+    occurredAt: execution.finishedAt ?? execution.startedAt,
   };
 }
 

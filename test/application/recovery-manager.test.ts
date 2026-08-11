@@ -579,9 +579,15 @@ describe("RecoveryManager", () => {
     expect((await store.findTask(taskId))?.task).toMatchObject({
       status: "reviewing",
       requestedAction: "review",
-      latestReport: { candidateCommit: "abc123" },
       currentExecution: { action: "review", status: "running" },
     });
+    expect(await store.listTaskActivities((await store.findTask(taskId))!.project.id, taskId))
+      .toEqual([
+        expect.objectContaining({
+          type: "development_completed",
+          evidence: { workspacePath: "/workspace/game/.worktrees/loop", candidateCommit: "abc123" },
+        }),
+      ]);
   });
 
   it("routes completed temporary project turns to product evaluation", async () => {
@@ -598,7 +604,27 @@ describe("RecoveryManager", () => {
     await evaluationStore.saveTask(created.project.id, {
       ...created.tasks[0]!,
       status: "done",
-      mergedCommit: "merged_1",
+    });
+    await evaluationStore.appendEvent({
+      eventId: "activity_event_integrated",
+      type: "task.activity_recorded",
+      projectId: created.project.id,
+      taskId: created.tasks[0]!.id,
+      occurredAt: "2026-08-03T00:00:00.000Z",
+      data: {
+        activity: {
+          id: "activity_integrated",
+          projectId: created.project.id,
+          taskId: created.tasks[0]!.id,
+          type: "integration_completed",
+          action: "integrate",
+          outcome: "completed",
+          attemptId: "integrate_1",
+          summary: "Merged",
+          occurredAt: "2026-08-03T00:00:00.000Z",
+          evidence: { mergedCommit: "merged_1" },
+        },
+      },
     });
     const projectExecutor = new RecordingProjectExecutor();
     const evaluationWorkflow = new WorkflowEngine(

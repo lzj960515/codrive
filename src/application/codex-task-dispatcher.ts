@@ -18,11 +18,14 @@ export class CodexTaskDispatcher implements TaskDispatcher {
     }
 
     if (request.task.currentExecution?.action === "review") {
-      return this.codex.startThread(cwd, threadTitle(request.project, request.task));
+      return this.codex.startThread(
+        cwd,
+        threadTitle(request.project, request.task, request.activity.reviewCount),
+      );
     }
-    if (request.task.developmentThreadId) {
-      await this.codex.resumeThread(request.task.developmentThreadId, cwd);
-      return request.task.developmentThreadId;
+    if (request.activity.developmentThreadId) {
+      await this.codex.resumeThread(request.activity.developmentThreadId, cwd);
+      return request.activity.developmentThreadId;
     }
     return this.codex.startThread(cwd, threadTitle(request.project, request.task));
   }
@@ -78,9 +81,9 @@ function conversationDirectory({ project }: DispatchRequest): string {
   return project.repositoryPath;
 }
 
-function threadTitle(project: Project, task: Task): string {
+function threadTitle(project: Project, task: Task, reviewCount = 0): string {
   if (task.currentExecution?.action === "review") {
-    return `[Codrive Review #${task.reviewAttempts.length}] ${project.name} · ${task.title}`;
+    return `[Codrive Review #${reviewCount + 1}] ${project.name} · ${task.title}`;
   }
   return `[Codrive] ${project.name} · ${task.title}`;
 }

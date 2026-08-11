@@ -45,13 +45,6 @@ export function startTaskExecution(
     updatedAt: now,
   };
 
-  if (action === "review") {
-    nextTask.reviewAttempts = [
-      ...task.reviewAttempts,
-      { attemptId, createdAt: now },
-    ];
-  }
-
   return nextTask;
 }
 
@@ -66,40 +59,23 @@ export function applyTaskReport(
     return suspendTaskForInput(task, report, now);
   }
   const transition = transitionForReport(execution.action, report.outcome);
+  const { currentExecution: _completedExecution, ...taskWithoutExecution } = task;
   const nextTask: Task = {
-    ...task,
-    ...reportArtifacts(report),
+    ...taskWithoutExecution,
     status: transition.status,
     requestedAction: transition.action,
-    latestReport: report,
-    currentExecution: {
-      ...execution,
-      status: "completed",
-      finishedAt: now,
-    },
     updatedAt: now,
   };
-
-  if (execution.action === "review") {
-    nextTask.reviewAttempts = task.reviewAttempts.map((attempt) =>
-      attempt.attemptId === execution.attemptId
-        ? { ...attempt, outcome: report.outcome, completedAt: now }
-        : attempt,
-    );
-  }
-
   return nextTask;
 }
 
 function suspendTaskForInput(task: Task, report: TaskReport, now: string): Task {
   return {
     ...task,
-    latestReport: report,
     status: "waiting_for_input",
     currentExecution: {
       ...task.currentExecution!,
       status: "waiting_for_input",
-      report,
     },
     updatedAt: now,
   };
@@ -203,18 +179,4 @@ function transitionForReport(
   }
 
   throw new Error(`Outcome ${outcome} is invalid for ${action}`);
-}
-
-function reportArtifacts(report: TaskReport): Partial<Task> {
-  return Object.fromEntries(
-    [
-      "workspacePath",
-      "baseCommit",
-      "candidateCommit",
-      "reviewedMainCommit",
-      "mergedCommit",
-    ]
-      .map((key) => [key, report[key as keyof TaskReport]])
-      .filter(([, value]) => value !== undefined),
-  );
 }

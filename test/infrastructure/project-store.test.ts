@@ -81,9 +81,29 @@ describe("ProjectStore", () => {
   it("matches paths inside a registered repository or task worktree", async () => {
     const { store } = await createStore();
     const created = await store.createProject(projectInput);
-    await store.saveTask(created.project.id, {
-      ...created.tasks[0]!,
-      workspacePath: "/workspace/tiny-game/.worktrees/loop",
+    await store.appendEvent({
+      eventId: "activity_event_developed",
+      type: "task.activity_recorded",
+      projectId: created.project.id,
+      taskId: created.tasks[0]!.id,
+      occurredAt: "2026-08-03T00:00:00.000Z",
+      data: {
+        activity: {
+          id: "activity_developed",
+          projectId: created.project.id,
+          taskId: created.tasks[0]!.id,
+          type: "development_completed",
+          action: "develop",
+          outcome: "completed",
+          attemptId: "develop_1",
+          summary: "Implemented",
+          occurredAt: "2026-08-03T00:00:00.000Z",
+          evidence: {
+            workspacePath: "/workspace/tiny-game/.worktrees/loop",
+            candidateCommit: "candidate_1",
+          },
+        },
+      },
     });
 
     await expect(

@@ -7,10 +7,11 @@ export function createProjectDetailView(
 ) {
   const board = createBoardView([snapshot])[0]!;
   const { project } = snapshot;
+  const { attention, ...projectView } = board.project;
   const tasksById = new Map(snapshot.tasks.map((task) => [task.id, task]));
   return {
     project: {
-      ...board.project,
+      ...projectView,
       repositoryPath: project.repositoryPath,
       defaultBranch: project.defaultBranch,
       contextNotes: project.contextNotes ?? [],
@@ -18,7 +19,7 @@ export function createProjectDetailView(
       createdAt: project.createdAt,
     },
     productDocument,
-    planningNotice: board.project.planningNotice,
+    attention,
     tasks: board.tasks.map((taskView) => ({
       ...taskView,
       currentExecution: tasksById.get(taskView.id)?.currentExecution ?? null,

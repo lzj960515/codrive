@@ -1,8 +1,10 @@
 import type { Project, Task } from "../domain/types.js";
+import type { TaskActivityProjection } from "../domain/task-activity.js";
 
 export interface DispatchRequest {
   project: Project;
   task: Task;
+  activity: TaskActivityProjection;
 }
 
 export type TurnDispatchResult =

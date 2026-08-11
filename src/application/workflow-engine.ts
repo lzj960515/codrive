@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 
 import { WorkflowConflictError } from "../domain/errors.js";
-import { advancePlanning, selectionDecision } from "../domain/planning.js";
+import { advancePlanning, markPlanningEvaluated } from "../domain/planning.js";
+import {
+  createTaskLifecycleActivity,
+  createTaskReportActivity,
+  projectTaskActivities,
+  taskActivityMatchesReport,
+  taskReportFromActivity,
+} from "../domain/task-activity.js";
 import type {
   CancellationInput,
   CodriveCommand,
@@ -14,6 +20,7 @@ import type {
   ProjectReport,
   ProjectSnapshot,
   Task,
+  TaskActivity,
   TaskReport,
   LifecycleEventSource,
   ModelRoutingSettings,
@@ -351,7 +358,6 @@ export class WorkflowEngine {
         ),
         updatedAt: this.now(),
       };
-      delete project.latestReport;
       await this.store.saveProject(project);
       await this.recordEvent({
         type: "project.decision_recorded",
@@ -369,8 +375,15 @@ export class WorkflowEngine {
     return this.enqueue(async () => {
       const found = await this.requireTask(report.taskId);
       const execution = found.task.currentExecution;
-      if (found.task.latestReport?.attemptId === report.attemptId) {
-        if (isDeepStrictEqual(found.task.latestReport, report)) return found.task;
+      const activities = await this.store.listTaskActivities(
+        found.project.id,
+        report.taskId,
+      );
+      const previousActivity = activities
+        .filter(({ attemptId }) => attemptId === report.attemptId)
+        .at(-1);
+      if (previousActivity) {
+        if (taskActivityMatchesReport(previousActivity, report)) return found.task;
         if (execution?.status !== "waiting_for_input") {
           throw new WorkflowConflictError(
             `Report conflicts with the recorded result for ${report.taskId}`,
@@ -388,19 +401,30 @@ export class WorkflowEngine {
       }
       validateTaskReport(found.task, report);
 
+      const activity = createTaskReportActivity({
+        activityId: this.createId("activity"),
+        projectId: found.project.id,
+        action: execution.action,
+        report,
+        ...(execution.threadId ? { threadId: execution.threadId } : {}),
+        occurredAt: this.now(),
+      });
       const task: Task = {
         ...found.task,
-        latestReport: report,
-        currentExecution: { ...execution, report },
+        currentExecution: {
+          ...execution,
+          submittedActivityId: activity.id,
+        },
         updatedAt: this.now(),
       };
       await this.store.saveTask(found.project.id, task);
       await this.recordEvent({
-        type: "task.reported",
+        type: "task.activity_recorded",
         projectId: found.project.id,
         taskId: task.id,
         attemptId: execution.attemptId,
-        data: { outcome: report.outcome },
+        ...(execution.threadId ? { threadId: execution.threadId } : {}),
+        data: { activity },
       });
 
       if (execution.turnCompletedAt || execution.status === "waiting_for_input") {
@@ -473,7 +497,12 @@ export class WorkflowEngine {
       }
 
       const now = this.now();
-      if (execution.report) {
+      if (execution.submittedActivityId) {
+        const activity = await this.requireTaskActivity(
+          found.project.id,
+          taskId,
+          execution.submittedActivityId,
+        );
         const taskWithCompletedTurn: Task = {
           ...found.task,
           currentExecution: { ...execution, turnCompletedAt: now },
@@ -492,7 +521,7 @@ export class WorkflowEngine {
         const completed = await this.finalizeTaskReport(
           found.project,
           taskWithCompletedTurn,
-          execution.report,
+          taskReportFromActivity(activity),
         );
         await this.reconcileInternal();
         return completed;
@@ -539,10 +568,10 @@ export class WorkflowEngine {
         attemptId,
         turnId,
       );
-      if (project.currentExecution?.report) {
+      if (project.currentExecution?.result) {
         const completed = await this.finalizeProjectReport(
           project,
-          project.currentExecution.report,
+          project.currentExecution.result,
         );
         await this.reconcileInternal();
         return completed;
@@ -886,6 +915,13 @@ export class WorkflowEngine {
         before: taskLifecycleState(found.task),
         after: taskLifecycleState(failed),
       });
+      await this.recordTaskLifecycleActivity(
+        found.project,
+        failed,
+        "execution_failed",
+        failure.message,
+        now,
+      );
       await this.reconcileInternal();
       return failed;
     });
@@ -1063,7 +1099,7 @@ export class WorkflowEngine {
         project.status === "active" &&
         project.scheduling === "running" &&
         !hasActiveProjectExecution(project) &&
-        project.planning.lastDecision?.revision !== project.planning.revision &&
+        project.planning.evaluatedRevision !== project.planning.revision &&
         tasks.some(
           ({ status, requestedAction }) =>
             status === "backlog" && !requestedAction,
@@ -1095,7 +1131,12 @@ export class WorkflowEngine {
 
   private async recordSuppressedPlanningRecovery(): Promise<void> {
     for (const { project, tasks } of await this.store.listProjects()) {
-      const decision = project.planning.lastDecision;
+      const execution = project.currentExecution;
+      const result =
+        execution?.action === "select_tasks" &&
+        execution.planningRevision === project.planning.revision
+          ? execution.result
+          : undefined;
       const hasUnevaluatedBacklog = tasks.some(
         ({ status, requestedAction }) => status === "backlog" && !requestedAction,
       );
@@ -1105,7 +1146,7 @@ export class WorkflowEngine {
         hasActiveProjectExecution(project) ||
         tasks.some(hasActiveTaskExecution) ||
         !hasUnevaluatedBacklog ||
-        decision?.revision !== project.planning.revision
+        project.planning.evaluatedRevision !== project.planning.revision
       ) {
         continue;
       }
@@ -1117,8 +1158,7 @@ export class WorkflowEngine {
         reason: "planning_revision_already_evaluated",
         data: {
           planningRevision: project.planning.revision,
-          outcome: decision.outcome,
-          wakeCondition: decision.wakeCondition,
+          outcome: result?.outcome ?? "unknown",
         },
       });
     }
@@ -1170,13 +1210,14 @@ export class WorkflowEngine {
 
   private async continueTaskDispatch(project: Project, task: Task): Promise<Task> {
     const execution = task.currentExecution!;
-    const request: DispatchRequest = { project, task };
+    const request = await this.taskDispatchRequest(project, task);
+    const { activity } = request;
     try {
       let withThread = task;
       let threadId = execution.threadId;
       if (!threadId) {
         const createsThread =
-          execution.action === "review" || !task.developmentThreadId;
+          execution.action === "review" || !activity.developmentThreadId;
         const createdThreadId = await this.dispatcher.openThread(request);
         threadId = createdThreadId;
         withThread = {
@@ -1184,15 +1225,6 @@ export class WorkflowEngine {
           currentExecution: { ...execution, threadId: createdThreadId },
           updatedAt: this.now(),
         };
-        if (execution.action === "review") {
-          withThread.reviewAttempts = withThread.reviewAttempts.map((review) =>
-            review.attemptId === execution.attemptId
-              ? { ...review, threadId: createdThreadId }
-              : review,
-          );
-        } else if (!withThread.developmentThreadId) {
-          withThread.developmentThreadId = createdThreadId;
-        }
         await this.store.saveTask(project.id, withThread);
         if (createsThread) {
           await this.recordEvent({
@@ -1208,7 +1240,7 @@ export class WorkflowEngine {
       }
 
       const dispatch = await this.dispatcher.startTurn(
-        { project, task: withThread },
+        { ...request, task: withThread },
         threadId,
       );
       if (dispatch.status === "conversation_active") return withThread;
@@ -1238,28 +1270,38 @@ export class WorkflowEngine {
       return running;
     } catch (error) {
       const current = (await this.requireTask(task.id)).task;
+      const now = this.now();
+      const reason = error instanceof Error ? error.message : String(error);
       const failed: Task = {
         ...current,
         status: "blocked",
         currentExecution: {
           ...current.currentExecution!,
           status: "failed",
-          finishedAt: this.now(),
+          finishedAt: now,
         },
-        updatedAt: this.now(),
+        updatedAt: now,
       };
       await this.store.saveTask(project.id, failed);
+      const failedExecution = failed.currentExecution!;
       await this.recordEvent({
         type: "turn.failed",
         projectId: project.id,
         taskId: task.id,
         attemptId: execution.attemptId,
-        ...(execution.threadId ? { threadId: execution.threadId } : {}),
-        ...(execution.turnId ? { turnId: execution.turnId } : {}),
-        reason: error instanceof Error ? error.message : String(error),
+        ...(failedExecution.threadId ? { threadId: failedExecution.threadId } : {}),
+        ...(failedExecution.turnId ? { turnId: failedExecution.turnId } : {}),
+        reason,
         before: taskLifecycleState(current),
         after: taskLifecycleState(failed),
       });
+      await this.recordTaskLifecycleActivity(
+        project,
+        failed,
+        "execution_failed",
+        reason,
+        now,
+      );
       return failed;
     }
   }
@@ -1270,7 +1312,7 @@ export class WorkflowEngine {
   ): Promise<Task> {
     const execution = task.currentExecution!;
     const dispatch = await this.dispatcher.requestReport(
-      { project, task },
+      await this.taskDispatchRequest(project, task),
       execution.threadId!,
     );
     if (dispatch.status === "conversation_active") return task;
@@ -1364,10 +1406,7 @@ export class WorkflowEngine {
       status: "active",
       requestedAction: null,
       currentExecution: completedProjectExecution(project, this.now()),
-      planning: {
-        ...project.planning,
-        lastDecision: selectionDecision(report, planningRevision, this.now()),
-      },
+      planning: markPlanningEvaluated(project.planning),
       updatedAt: this.now(),
     };
     await this.store.saveProject(completed);
@@ -1463,20 +1502,23 @@ export class WorkflowEngine {
     const now = this.now();
     if (report.outcome === "tasks_required") {
       const stagnantRounds =
-        project.lastEvaluationFingerprint === undefined ||
-        project.lastEvaluationFingerprint !== execution.progressFingerprint
+        project.evaluation.lastProgressFingerprint === undefined ||
+        project.evaluation.lastProgressFingerprint !== execution.progressFingerprint
           ? 0
-          : (project.stagnantEvaluationRounds ?? 0) + 1;
+          : project.evaluation.stagnantRounds + 1;
+      const evaluation = {
+        stagnantRounds,
+        ...(execution.progressFingerprint
+          ? { lastProgressFingerprint: execution.progressFingerprint }
+          : {}),
+      };
       if (stagnantRounds >= 3) {
         const stalled: Project = {
           ...project,
           status: "stalled",
           requestedAction: null,
           currentExecution: completedProjectExecution(project, now),
-          stagnantEvaluationRounds: stagnantRounds,
-          ...(execution.progressFingerprint
-            ? { lastEvaluationFingerprint: execution.progressFingerprint }
-            : {}),
+          evaluation,
           updatedAt: now,
         };
         await this.store.saveProject(stalled);
@@ -1504,12 +1546,9 @@ export class WorkflowEngine {
           project.planning,
           "tasks_created",
           now,
-            this.maxConcurrentTasks,
+          this.maxConcurrentTasks,
         ),
-        stagnantEvaluationRounds: stagnantRounds,
-        ...(execution.progressFingerprint
-          ? { lastEvaluationFingerprint: execution.progressFingerprint }
-          : {}),
+        evaluation,
         updatedAt: now,
       };
       await this.store.saveProject(active);
@@ -1538,10 +1577,12 @@ export class WorkflowEngine {
       status,
       requestedAction: null,
       currentExecution: completedProjectExecution(project, now),
-      ...(execution.progressFingerprint
-        ? { lastEvaluationFingerprint: execution.progressFingerprint }
-        : {}),
-      stagnantEvaluationRounds: 0,
+      evaluation: {
+        stagnantRounds: 0,
+        ...(execution.progressFingerprint
+          ? { lastProgressFingerprint: execution.progressFingerprint }
+          : {}),
+      },
       updatedAt: now,
     };
     await this.store.saveProject(completed);
@@ -1591,6 +1632,13 @@ export class WorkflowEngine {
       before: taskLifecycleState(task),
       after: taskLifecycleState(blocked),
     });
+    await this.recordTaskLifecycleActivity(
+      project,
+      blocked,
+      "execution_failed",
+      "任务对话结束后未提交有效汇报。",
+      now,
+    );
     return blocked;
   }
 
@@ -1656,9 +1704,20 @@ export class WorkflowEngine {
         decisionBasis: cancellation.decisionBasis,
       },
     });
+    await this.recordTaskLifecycleActivity(
+      project,
+      cancelled,
+      "cancelled",
+      cancellation.reason,
+      now,
+      {
+        reason: cancellation.reason,
+        decisionBasis: cancellation.decisionBasis,
+      },
+    );
     if (wasActive && execution?.threadId && execution.turnId) {
       try {
-        await this.dispatcher.interrupt({ project, task });
+        await this.dispatcher.interrupt(await this.taskDispatchRequest(project, task));
       } catch (error) {
         await this.recordEvent({
           type: "turn.interrupt_failed",
@@ -1670,6 +1729,50 @@ export class WorkflowEngine {
       }
     }
     return cancelled;
+  }
+
+  private async taskDispatchRequest(
+    project: Project,
+    task: Task,
+  ): Promise<DispatchRequest> {
+    return {
+      project,
+      task,
+      activity: projectTaskActivities(
+        await this.store.listTaskActivities(project.id, task.id),
+      ),
+    };
+  }
+
+  private async recordTaskLifecycleActivity(
+    project: Project,
+    task: Task,
+    type: "execution_failed" | "cancelled",
+    summary: string,
+    occurredAt: string,
+    evidence?: NonNullable<TaskActivity["evidence"]>,
+  ): Promise<void> {
+    const execution = task.currentExecution;
+    const activity = createTaskLifecycleActivity({
+      activityId: this.createId("activity"),
+      projectId: project.id,
+      taskId: task.id,
+      type,
+      summary,
+      occurredAt,
+      ...(execution?.attemptId ? { attemptId: execution.attemptId } : {}),
+      ...(execution?.action ? { action: execution.action } : {}),
+      ...(execution?.threadId ? { threadId: execution.threadId } : {}),
+      ...(evidence ? { evidence } : {}),
+    });
+    await this.recordEvent({
+      type: "task.activity_recorded",
+      projectId: project.id,
+      taskId: task.id,
+      ...(execution?.attemptId ? { attemptId: execution.attemptId } : {}),
+      ...(execution?.threadId ? { threadId: execution.threadId } : {}),
+      data: { activity },
+    });
   }
 
   private async revisePlanning(
@@ -1740,6 +1843,18 @@ export class WorkflowEngine {
     const found = await this.store.findTask(taskId);
     if (!found) throw new Error(`Task ${taskId} was not found`);
     return found;
+  }
+
+  private async requireTaskActivity(
+    projectId: string,
+    taskId: string,
+    activityId: string,
+  ): Promise<TaskActivity> {
+    const activity = (await this.store.listTaskActivities(projectId, taskId)).find(
+      ({ id }) => id === activityId,
+    );
+    if (!activity) throw new Error(`Task activity ${activityId} was not found`);
+    return activity;
   }
 
   private async requireSnapshot(projectId: string): Promise<ProjectSnapshot> {

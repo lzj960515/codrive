@@ -7,7 +7,7 @@ const [command, id, action] = process.argv.slice(2);
 let result;
 if (command === "board") result = await request("/api/board");
 else if (command === "project" && id) result = await request(`/api/projects/${encodeURIComponent(id)}`);
-else if (command === "task" && id) result = findTask(await request("/api/board"), id);
+else if (command === "task" && id) result = await request(`/api/tasks/${encodeURIComponent(id)}`);
 else if (command === "settings") result = await request("/api/system/settings");
 else if (command === "update-settings") result = await sendCommand("system.update_settings", JSON.parse(await readStdin()));
 else if (command === "project-control" && id && action) {
@@ -35,12 +35,6 @@ async function request(path, options = {}) {
   const response = await fetch(`http://${config.host}:${config.port}${path}`, { ...options, headers: { "content-type": "application/json", "x-codrive-token": config.accessToken, "x-codrive-source": "skill" } });
   if (!response.ok) fail(`Codrive ${response.status}: ${await response.text()}`);
   return response.json();
-}
-
-function findTask(board, taskId) {
-  const task = board.flatMap(({ tasks }) => tasks).find(({ id }) => id === taskId);
-  if (!task) fail(`Task ${taskId} was not found`);
-  return task;
 }
 
 async function readStdin() { let value = ""; for await (const chunk of process.stdin) value += chunk; return value; }

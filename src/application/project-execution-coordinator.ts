@@ -1,7 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { WorkflowConflictError } from "../domain/errors.js";
-import { selectionDecision } from "../domain/planning.js";
+import { markPlanningEvaluated } from "../domain/planning.js";
+import { projectTaskActivities } from "../domain/task-activity.js";
 import type {
   CodriveEvent,
   Project,
@@ -90,7 +91,7 @@ export class ProjectExecutionCoordinator {
         modelRouting: initialModelRouting(this.options.modelSettings()),
         leaseExpiresAt: this.options.leaseExpiration(),
         ...(action === "evaluate_product"
-          ? { progressFingerprint: evaluationFingerprint(tasks) }
+          ? { progressFingerprint: await evaluationFingerprint(this.store, project.id, tasks) }
           : {}),
         ...context,
       },
@@ -112,8 +113,8 @@ export class ProjectExecutionCoordinator {
     validateBeforeSave: (project: Project, report: ProjectReport) => Promise<void>,
   ): Promise<Project> {
     const project = await this.requireProject(report.projectId);
-    if (project.latestReport?.attemptId === report.attemptId) {
-      if (isDeepStrictEqual(project.latestReport, report)) return project;
+    if (project.currentExecution?.result?.attemptId === report.attemptId) {
+      if (isDeepStrictEqual(project.currentExecution.result, report)) return project;
       throw new WorkflowConflictError(
         `Report conflicts with the recorded project execution for ${project.id}`,
       );
@@ -134,8 +135,7 @@ export class ProjectExecutionCoordinator {
 
     const reported: Project = {
       ...project,
-      latestReport: report,
-      currentExecution: { ...execution, report },
+      currentExecution: { ...execution, result: report },
       updatedAt: this.options.now(),
     };
     await this.store.saveProject(reported);
@@ -193,7 +193,7 @@ export class ProjectExecutionCoordinator {
     }
 
     const now = this.options.now();
-    if (execution.report) {
+    if (execution.result) {
       const completed: Project = {
         ...project,
         currentExecution: { ...execution, turnCompletedAt: now },
@@ -508,29 +508,20 @@ export class ProjectExecutionCoordinator {
     if (!execution) throw new Error(`Project ${project.id} has no current execution`);
     const now = this.options.now();
     const selectionFailed = execution.action === "select_tasks";
+    const result: ProjectReport = {
+      projectId: project.id,
+      attemptId: execution.attemptId,
+      outcome: "blocked",
+      summary: reason,
+    };
     const failed: Project = {
       ...project,
       status: selectionFailed ? "active" : "blocked",
-      ...(selectionFailed
-        ? {
-            planning: {
-              ...project.planning,
-              lastDecision: selectionDecision(
-                {
-                  projectId: project.id,
-                  attemptId: execution.attemptId,
-                  outcome: "blocked",
-                  summary: reason,
-                },
-                execution.planningRevision ?? project.planning.revision,
-                now,
-              ),
-            },
-          }
-        : {}),
+      ...(selectionFailed ? { planning: markPlanningEvaluated(project.planning) } : {}),
       currentExecution: {
         ...execution,
         status: "failed",
+        result,
         ...(reportReminderCount === undefined ? {} : { reportReminderCount }),
         ...(modelRouting ? { modelRouting } : {}),
         finishedAt: now,
@@ -608,10 +599,20 @@ function validateProjectReport(action: ProjectAction, report: ProjectReport): vo
   }
 }
 
-function evaluationFingerprint(tasks: Task[]): string {
-  return tasks
-    .filter(({ status }) => status === "done")
-    .map(({ id, mergedCommit }) => `${id}:${mergedCommit ?? "no-commit"}`)
-    .sort()
-    .join("|");
+async function evaluationFingerprint(
+  store: ProjectStore,
+  projectId: string,
+  tasks: Task[],
+): Promise<string> {
+  const integrated = await Promise.all(
+    tasks
+      .filter(({ status }) => status === "done")
+      .map(async ({ id }) => {
+        const projection = projectTaskActivities(
+          await store.listTaskActivities(projectId, id),
+        );
+        return `${id}:${projection.mergedCommit ?? "no-commit"}`;
+      }),
+  );
+  return integrated.sort().join("|");
 }

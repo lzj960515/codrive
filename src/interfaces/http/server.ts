@@ -14,6 +14,8 @@ import type { SkillInstaller } from "../../infrastructure/skill-installer.js";
 import { renderBoardPage } from "./board.js";
 import { createBoardView } from "./board-view.js";
 import { createProjectDetailView } from "./project-detail-view.js";
+import { createTaskDetailView } from "./task-detail-view.js";
+import { projectTaskActivities } from "../../domain/task-activity.js";
 
 export interface HttpServerDependencies {
   store: ProjectStore;
@@ -226,6 +228,19 @@ export function createHttpServer(
     },
   );
 
+  server.get<{ Params: { taskId: string } }>(
+    "/api/tasks/:taskId",
+    async (request, reply) => {
+      const found = await dependencies.store.findTask(request.params.taskId);
+      if (!found) return reply.code(404).send({ error: "Task not found" });
+      return createTaskDetailView(
+        dependencies.store,
+        found.project,
+        found.task,
+      );
+    },
+  );
+
   server.get<{ Params: { projectId: string } }>(
     "/api/contexts/projects/:projectId",
     async (request, reply) => {
@@ -318,11 +333,13 @@ function isPagePath(path: string): boolean {
   return path === "/" || path === "/settings" || /^\/projects\/[^/]+$/.test(path);
 }
 
-function taskContext(
+async function taskContext(
   store: ProjectStore,
   project: Project,
   task: Task,
 ) {
+  const activities = await store.listTaskActivities(project.id, task.id);
+  const activity = projectTaskActivities(activities);
   return {
     taskId: task.id,
     projectId: project.id,
@@ -336,6 +353,13 @@ function taskContext(
     taskDocument: store.taskPath(project.id, task.id),
     repositoryPath: project.repositoryPath,
     projectContextNotes: project.contextNotes ?? [],
-    workspacePath: task.workspacePath ?? null,
+    workspacePath: activity.workspacePath ?? null,
+    delivery: {
+      baseCommit: activity.baseCommit ?? null,
+      candidateCommit: activity.candidateCommit ?? null,
+      reviewedMainCommit: activity.reviewedMainCommit ?? null,
+      mergedCommit: activity.mergedCommit ?? null,
+    },
+    activities,
   };
 }

@@ -22,7 +22,7 @@ node <skill-directory>/scripts/codrive-task.mjs context <task-id>
 node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-directory>
 ```
 
-读取命令返回的 `projectDocument`、`taskDocument` 和仓库 `AGENTS.md`。以任务文件中的 `requestedAction` 决定当前工作。
+读取命令返回的 `projectDocument`、`taskDocument`、完整 `activities` 和仓库 `AGENTS.md`。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务定义、当前状态和已有证据恢复连续上下文。
 
 处理项目级任务选择或产品验收时运行：
 
@@ -34,9 +34,9 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 ## 连续任务工作区
 
-Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查对话始终显示在 Codex App 的同一个项目下。对话目录表示产品归属，`context.workspacePath` 表示实际代码工作区。开发、审查、返工和合入的文件、Git 与测试操作都在任务工作树中完成。
+Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查对话始终显示在 Codex App 的同一个项目下。对话目录表示产品归属；`context.workspacePath` 和 `context.delivery` 是从活动历史推导的当前工作树与 Git 事实。开发、审查、返工和合入的文件、Git 与测试操作都在任务工作树中完成。
 
-- `context` 返回 `workspacePath` 时，先进入该工作树，再执行当前阶段。
+- `context` 返回 `workspacePath` 时，先进入该工作树，再执行当前阶段。提交与审查基线使用 `context.delivery`，并用实际 Git 状态确认。
 - 首次开发尚未记录 `workspacePath` 时，先检查规范路径 `<repository>/.worktrees/codrive/<project-id>/<task-id>`；已有工作树就继续使用，没有时再创建。
 - 进入工作树后检查 `git status`、提交历史和差异，把已有改动作为当前任务的连续执行现场。结合任务目标、验收标准和版本历史，自主决定保留、修改、整合或清理，然后继续当前阶段。
 - 主仓库中的用户改动保持原样；开发工作放在任务工作树，合入时基于最新主分支安全整合。
@@ -65,11 +65,11 @@ Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查
 
 ## 返工 `rework`
 
-读取任务中的最新审查报告，在现有工作树修复所有阻塞问题。运行测试并提交新的候选，随后汇报 `completed`。
+从 `activities` 末尾向前找到最近一条 `review_changes_requested`，读取其中的 `evidence.findings`，在现有工作树修复所有阻塞问题。运行测试并提交新的候选，随后汇报 `completed`。
 
 ## 审查 `review`
 
-从任务契约、验收标准和实际候选提交独立判断，不依赖开发者的解释。验证功能、测试、明显回归、安全和数据风险。
+从任务契约、验收标准、完整活动历史、`context.delivery.candidateCommit` 和实际 Git 状态独立判断。验证功能、测试、明显回归、安全和数据风险。
 
 - 满足交付标准时汇报 `approved`，把审查时的主分支提交写入 `reviewedMainCommit`。
 - 存在阻塞问题时汇报 `changes_requested`，`findings` 只列可操作问题。
@@ -77,7 +77,7 @@ Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查
 
 ## 合入 `integrate`
 
-检查主分支和人工改动，安全同步候选并自主解决可以判断的冲突。运行受影响测试。
+根据 `context.delivery` 恢复候选提交与审查基线，检查主分支和人工改动，安全同步候选并自主解决可以判断的冲突。运行受影响测试。
 
 - 审查后主分支没有影响候选时，合入主分支，删除任务工作树和临时任务分支，再用 `git worktree list` 与 `git branch --list` 确认清理结果，汇报 `completed` 和 `mergedCommit`。
 - 同步或冲突解决改变候选实现时，提交新候选但先不合入，汇报 `needs_review`。
@@ -91,7 +91,7 @@ Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查
 node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 ```
 
-每份报告包含 `context` 返回的 `attemptId`、当前阶段允许的 `outcome` 和简明 `summary`。各阶段同时提供后续流程依赖的事实：
+每份报告包含 `context` 返回的 `attemptId`、当前阶段允许的 `outcome` 和简明 `summary`。报告 JSON 输入形式保持稳定；Codrive 将每次成功报告追加为一条不可变活动。各阶段同时提供后续流程依赖的事实：
 
 - `develop` 完成：`workspacePath`、`baseCommit`、`candidateCommit`、`tests`。
 - `rework` 完成：`candidateCommit`、`tests`。
@@ -101,7 +101,7 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 - `integrate` 需要重审：新的 `candidateCommit` 和 `tests`。
 - 需要用户决定：`needs_input` 和一个明确的 `question`。
 
-`needs_input` 暂停当前执行但保留 `attemptId`。用户在 Codex App 的原任务对话中回答后，继续当前阶段，并使用同一个 `attemptId` 提交新的最终报告。
+`needs_input` 追加“请求决定”活动并保留当前执行和 `attemptId`。用户在 Codex App 的原任务对话中回答后，继续当前阶段，并使用同一个 `attemptId` 提交新的最终报告；历史请求继续保留在活动时间线中。
 
 ## 取消判断
 

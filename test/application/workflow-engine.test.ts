@@ -553,8 +553,12 @@ describe("WorkflowEngine", () => {
 
     expect((await store.getProject(first.project.id))!.project).toMatchObject({
       status: "active",
-      planning: { lastDecision: { outcome: "blocked" } },
-      currentExecution: { action: "select_tasks", status: "failed" },
+      planning: { revision: 1, evaluatedRevision: 1 },
+      currentExecution: {
+        action: "select_tasks",
+        status: "failed",
+        result: { outcome: "blocked", summary: "Planner failed to start" },
+      },
     });
     expect((await store.getProject(second.project.id))!.project.currentExecution).toMatchObject({
       action: "select_tasks",
@@ -844,6 +848,34 @@ describe("WorkflowEngine", () => {
     expect(taskDispatcher.started).toHaveLength(1);
   });
 
+  it("records a terminal activity when a task turn cannot start", async () => {
+    const created = await registerProject(1);
+    taskDispatcher.beforeStartTurn = async () => {
+      throw new Error("Codex task turn failed to start");
+    };
+
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+
+    expect((await store.findTask(created.tasks[0]!.id))!.task).toMatchObject({
+      status: "blocked",
+      currentExecution: { status: "failed" },
+    });
+    expect(
+      await store.listTaskActivities(created.project.id, created.tasks[0]!.id),
+    ).toEqual([
+      expect.objectContaining({
+        type: "execution_failed",
+        summary: "Codex task turn failed to start",
+        threadId: "task_thread_1",
+      }),
+    ]);
+  });
+
   it("lets the same project turn correct invalid task selection reports", async () => {
     const created = await registerProject(3);
     const project = (await store.getProject(created.project.id))!.project;
@@ -862,14 +894,13 @@ describe("WorkflowEngine", () => {
       ).rejects.toThrow(expectedError);
 
       const rejected = (await store.getProject(project.id))!.project;
-      expect(rejected.latestReport).toBeUndefined();
       expect(rejected.currentExecution).toMatchObject({
         attemptId: execution.attemptId,
         threadId: execution.threadId,
         turnId: execution.turnId,
         status: "running",
       });
-      expect(rejected.currentExecution?.report).toBeUndefined();
+      expect(rejected.currentExecution?.result).toBeUndefined();
     };
 
     await expectRejectedWithoutEndingTurn(
@@ -971,14 +1002,14 @@ describe("WorkflowEngine", () => {
     await store.saveProject({
       ...created.project,
       status: "waiting_for_input",
-      latestReport: report,
       currentExecution: {
         attemptId: report.attemptId,
         action: "select_tasks",
         status: "completed",
         startedAt: "2026-08-03T00:00:00.000Z",
         modelRouting: testModelRouting(),
-        report,
+        planningRevision: created.project.planning.revision,
+        result: report,
       },
     });
 
@@ -988,7 +1019,7 @@ describe("WorkflowEngine", () => {
     );
 
     expect(project.status).not.toBe("waiting_for_input");
-    expect(project.latestReport).toBeUndefined();
+    expect(project.currentExecution?.result).toBeUndefined();
   });
 
   it("restarts temporary project selection when new work changes its facts", async () => {
@@ -1094,10 +1125,21 @@ describe("WorkflowEngine", () => {
     expect(reviewing).toMatchObject({
       status: "reviewing",
       requestedAction: "review",
-      developmentThreadId: execution.threadId,
     });
     expect(reviewing.currentExecution?.action).toBe("review");
-    expect(reviewing.reviewAttempts).toHaveLength(1);
+    const activities = await store.listTaskActivities(created.project.id, developing.id);
+    expect(activities).toEqual([
+      expect.objectContaining({
+        type: "decision_requested",
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+      }),
+      expect.objectContaining({
+        type: "development_completed",
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+      }),
+    ]);
   });
 
   it("keeps a selection decision non-blocking while a waiting task continues", async () => {
@@ -1147,9 +1189,10 @@ describe("WorkflowEngine", () => {
 
     const snapshot = (await store.getProject(created.project.id))!;
     expect(snapshot.project.status).toBe("active");
-    expect(snapshot.project.planning.lastDecision?.question).toBe(
-      "Wait for the first task?",
-    );
+    expect(snapshot.project.currentExecution?.result).toMatchObject({
+      outcome: "needs_input",
+      question: "Wait for the first task?",
+    });
     expect(projectExecutor.started).toHaveLength(2);
     expect(snapshot.tasks.find(({ id }) => id === taskId)).toMatchObject({
       status: "reviewing",
@@ -1192,7 +1235,8 @@ describe("WorkflowEngine", () => {
     expect((await store.getProject(created.project.id))!.project).toMatchObject({
       status: "active",
       requestedAction: null,
-      latestReport: { outcome: "wait_for_active_tasks" },
+      planning: { revision: 1, evaluatedRevision: 1 },
+      currentExecution: { result: { outcome: "wait_for_active_tasks" } },
     });
   });
 
@@ -1223,8 +1267,14 @@ describe("WorkflowEngine", () => {
     expect(blocked).toMatchObject({
       status: "blocked",
       requestedAction: "develop",
-      currentExecution: { status: "completed" },
     });
+    expect(blocked.currentExecution).toBeUndefined();
+    expect(await store.listTaskActivities(created.project.id, developing.id)).toEqual([
+      expect.objectContaining({
+        type: "blocked",
+        summary: "The required tool is unavailable",
+      }),
+    ]);
     expect(taskDispatcher.started).toHaveLength(2);
     expect((await store.findTask(created.tasks[1]!.id))!.task).toMatchObject({
       status: "developing",
@@ -1258,7 +1308,7 @@ describe("WorkflowEngine", () => {
       scheduling: "running",
       requestedAction: "select_tasks",
       currentExecution: { status: "failed" },
-      planning: { lastDecision: { outcome: "blocked" } },
+      planning: { revision: 1, evaluatedRevision: 1 },
     });
     expect(projectExecutor.started).toHaveLength(1);
 
@@ -1297,7 +1347,7 @@ describe("WorkflowEngine", () => {
         },
       },
     });
-    expect(scheduled.planning.lastDecision).toBeUndefined();
+    expect(scheduled.planning.evaluatedRevision).toBeUndefined();
 
     now = new Date(now.getTime() + 5_000);
     await workflow.retryScheduledExecutions(now);
@@ -1638,7 +1688,27 @@ describe("WorkflowEngine", () => {
     await store.saveTask(created.project.id, {
       ...created.tasks[0]!,
       status: "done",
-      mergedCommit: "main_1",
+    });
+    await store.appendEvent({
+      eventId: "activity_event_integrated",
+      type: "task.activity_recorded",
+      projectId: created.project.id,
+      taskId: created.tasks[0]!.id,
+      occurredAt: "2026-08-03T00:00:00.000Z",
+      data: {
+        activity: {
+          id: "activity_integrated",
+          projectId: created.project.id,
+          taskId: created.tasks[0]!.id,
+          type: "integration_completed",
+          action: "integrate",
+          outcome: "completed",
+          attemptId: "integrate_1",
+          summary: "Merged",
+          occurredAt: "2026-08-03T00:00:00.000Z",
+          evidence: { mergedCommit: "main_1" },
+        },
+      },
     });
 
     await workflow.reconcile();

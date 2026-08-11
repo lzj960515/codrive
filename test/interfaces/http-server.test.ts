@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
 import { SystemSettingsService } from "../../src/application/system-settings-service.js";
-import type { ProjectSnapshot } from "../../src/domain/types.js";
+import { createTaskReportActivity } from "../../src/domain/task-activity.js";
+import type {
+  ProjectSnapshot,
+  TaskAction,
+  TaskReport,
+} from "../../src/domain/types.js";
 import { ConfigStore } from "../../src/infrastructure/config-store.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import { SkillInstaller } from "../../src/infrastructure/skill-installer.js";
@@ -118,6 +123,33 @@ describe("HTTP API", () => {
     });
     expect(response.statusCode).toBe(200);
     return response.json() as ProjectSnapshot;
+  }
+
+  async function appendTaskReportActivity(
+    projectId: string,
+    action: TaskAction,
+    report: TaskReport,
+    threadId: string,
+    occurredAt = "2026-08-03T00:00:00.000Z",
+  ) {
+    const activity = createTaskReportActivity({
+      activityId: `activity_${report.attemptId}_${report.outcome}`,
+      projectId,
+      action,
+      report,
+      threadId,
+      occurredAt,
+    });
+    await store.appendEvent({
+      eventId: `event_${activity.id}`,
+      type: "task.activity_recorded",
+      projectId,
+      taskId: report.taskId,
+      attemptId: report.attemptId,
+      threadId,
+      occurredAt,
+      data: { activity },
+    });
   }
 
   it("exposes only the board, context, and command surfaces", async () => {
@@ -326,21 +358,27 @@ describe("HTTP API", () => {
       ...task,
       status: "waiting_for_input",
       requestedAction: "develop",
-      latestReport: {
+      currentExecution: {
+        attemptId: "attempt_1",
+        action: "develop",
+        status: "waiting_for_input",
+        threadId: "development_thread",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
+      },
+    });
+    await appendTaskReportActivity(
+      created.project.id,
+      "develop",
+      {
         taskId: task.id,
         attemptId: "attempt_1",
         outcome: "needs_input",
         summary: "Wait for the architecture review",
         question: "Which entity model should this task use?",
       },
-      currentExecution: {
-        attemptId: "attempt_1",
-        action: "develop",
-        status: "waiting_for_input",
-        startedAt: "2026-08-03T00:00:00.000Z",
-        modelRouting: testModelRouting(),
-      },
-    });
+      "development_thread",
+    );
 
     const missingReason = await skillCommand({
       type: "task.control",
@@ -394,17 +432,14 @@ describe("HTTP API", () => {
     });
     expect(terminalBoard.json()[0].tasks[0]).toMatchObject({
       status: "cancelled",
-      question: null,
       cancellation: {
         cancelledBy: "codex",
         decisionBasis: "user_confirmed",
         reason: "The user confirmed that D2 should wait for the D1 architecture review",
       },
-      report: {
-        outcome: "needs_input",
-        question: "Which entity model should this task use?",
-      },
     });
+    expect(terminalBoard.json()[0].tasks[0]).not.toHaveProperty("question");
+    expect(terminalBoard.json()[0].tasks[0]).not.toHaveProperty("report");
     expect(terminalContext.json()).toMatchObject({
       status: "cancelled",
       cancellation: {
@@ -428,15 +463,22 @@ describe("HTTP API", () => {
       status: "waiting_for_input",
       planning: {
         ...snapshotBeforeProjectCancellation!.project.planning,
-        lastDecision: {
-          revision: planningRevision,
+        evaluatedRevision: planningRevision,
+      },
+      currentExecution: {
+        attemptId: "selection_1",
+        action: "select_tasks",
+        status: "completed",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        finishedAt: "2026-08-03T00:01:00.000Z",
+        planningRevision,
+        modelRouting: testModelRouting(),
+        result: {
+          projectId: created.project.id,
+          attemptId: "selection_1",
           outcome: "needs_input",
           summary: "A product decision was needed before cancellation",
-          taskIds: [],
           question: "Should this product continue?",
-          wakeCondition: "project_decision_recorded",
-          nextAction: "record_project_decision",
-          decidedAt: "2026-08-03T00:00:00.000Z",
         },
       },
     });
@@ -469,12 +511,12 @@ describe("HTTP API", () => {
     });
     expect(cancelledProjectBoard.json()[0].project).toMatchObject({
       status: "cancelled",
-      planningNotice: null,
+      attention: null,
       planning: {
         status: "cancelled",
-        question: null,
       },
     });
+    expect(cancelledProjectBoard.json()[0].project).not.toHaveProperty("planningNotice");
     expect(cancelledProjectContext.json()).toMatchObject({
       cancellation: {
         cancelledBy: "codex",
@@ -706,15 +748,22 @@ describe("HTTP API", () => {
       ...created.project,
       planning: {
         ...created.project.planning,
-        lastDecision: {
-          revision: 1,
+        evaluatedRevision: 1,
+      },
+      currentExecution: {
+        attemptId: "selection_1",
+        action: "select_tasks",
+        status: "completed",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        finishedAt: "2026-08-03T00:01:00.000Z",
+        planningRevision: 1,
+        modelRouting: testModelRouting(),
+        result: {
+          projectId: created.project.id,
+          attemptId: "selection_1",
           outcome: "needs_input",
           summary: "A product rule is missing",
           question: "Which rule should be used?",
-          taskIds: [],
-          wakeCondition: "project_decision_recorded",
-          nextAction: "record_project_decision",
-          decidedAt: "2026-08-03T00:01:00.000Z",
         },
       },
     });
@@ -728,18 +777,19 @@ describe("HTTP API", () => {
     expect(board.json()[0].project).toMatchObject({
       status: "active",
       displayStatus: "active",
-      planningNotice: {
+      attention: {
+        kind: "decision_requested",
         summary: "A product rule is missing",
         question: "Which rule should be used?",
       },
       planning: {
         revision: 1,
+        evaluatedRevision: 1,
         status: "needs_input",
         outcome: "needs_input",
-        wakeCondition: "project_decision_recorded",
-        nextAction: "record_project_decision",
       },
     });
+    expect(board.json()[0].project).not.toHaveProperty("planningNotice");
   });
 
   it("does not project a decision from an earlier planning revision", async () => {
@@ -756,23 +806,22 @@ describe("HTTP API", () => {
         revision: 2,
         changedAt: "2026-08-03T00:02:00.000Z",
         changeReason: "manual_replan",
-        lastDecision: {
-          revision: 1,
+      },
+      currentExecution: {
+        attemptId: "selection_1",
+        action: "select_tasks",
+        status: "completed",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        finishedAt: "2026-08-03T00:01:00.000Z",
+        planningRevision: 1,
+        modelRouting: testModelRouting(),
+        result: {
+          projectId: created.project.id,
+          attemptId: "selection_1",
           outcome: "needs_input",
           summary: "This decision is stale",
           question: "This question is stale",
-          taskIds: [],
-          wakeCondition: "project_decision_recorded",
-          nextAction: "record_project_decision",
-          decidedAt: "2026-08-03T00:01:00.000Z",
         },
-      },
-      latestReport: {
-        projectId: created.project.id,
-        attemptId: "selection_1",
-        outcome: "needs_input",
-        summary: "This decision is stale",
-        question: "This question is stale",
       },
     });
 
@@ -784,15 +833,14 @@ describe("HTTP API", () => {
 
     expect(board.json()[0].project).toMatchObject({
       displayStatus: "selecting_tasks",
-      planningNotice: null,
+      attention: null,
       planning: {
         revision: 2,
         status: "pending",
         outcome: null,
-        summary: null,
-        question: null,
       },
     });
+    expect(board.json()[0].project).not.toHaveProperty("planningNotice");
   });
 
   it("projects paused scheduling before active project workflow status", async () => {
@@ -824,14 +872,21 @@ describe("HTTP API", () => {
       contextNotes: ["地图数据由本地 fixture 提供"],
       planning: {
         ...created.project.planning,
-        lastDecision: {
-          revision: 1,
+        evaluatedRevision: 1,
+      },
+      currentExecution: {
+        attemptId: "selection_1",
+        action: "select_tasks",
+        status: "completed",
+        startedAt: "2026-08-10T08:59:00.000Z",
+        finishedAt: "2026-08-10T09:00:00.000Z",
+        planningRevision: 1,
+        modelRouting: testModelRouting(),
+        result: {
+          projectId: created.project.id,
+          attemptId: "selection_1",
           outcome: "wait_for_active_tasks",
           summary,
-          taskIds: [],
-          wakeCondition: "task_completed",
-          nextAction: "wait_for_task_completion",
-          decidedAt: "2026-08-10T09:00:00.000Z",
         },
       },
     });
@@ -861,10 +916,7 @@ describe("HTTP API", () => {
         contextNotes: ["地图数据由本地 fixture 提供"],
       },
       productDocument: "# Semantic Atlas\n",
-      planningNotice: {
-        summary,
-        outcome: "wait_for_active_tasks",
-      },
+      attention: null,
       tasks: [
         expect.objectContaining({
           id: created.tasks[0]!.id,
@@ -877,7 +929,7 @@ describe("HTTP API", () => {
     expect(page.statusCode).toBe(200);
     expect(page.body).toContain("产品详情");
     expect(page.body).toContain("产品文档");
-    expect(page.body).toContain("调度说明");
+    expect(page.body).not.toContain("调度说明");
   });
 
   it("returns a human-facing board projection without a Web answer form", async () => {
@@ -896,41 +948,78 @@ describe("HTTP API", () => {
       ...created.tasks[0]!,
       status: "waiting_for_input",
       requestedAction: "develop",
-      developmentThreadId: "development_thread",
-      latestReport: {
+      currentExecution: {
+        attemptId: "attempt_1",
+        action: "develop",
+        status: "waiting_for_input",
+        threadId: "development_thread",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        modelRouting: testModelRouting(),
+      },
+    });
+    await appendTaskReportActivity(
+      created.project.id,
+      "develop",
+      {
+        taskId: created.tasks[0]!.id,
+        attemptId: "attempt_0",
+        outcome: "completed",
+        summary: "The flight loop is implemented",
+        workspacePath: "/workspace/game/.worktrees/loop",
+        candidateCommit: "candidate_1",
+        tests: "Unit tests passed",
+      },
+      "development_thread",
+      "2026-08-02T23:59:00.000Z",
+    );
+    await appendTaskReportActivity(
+      created.project.id,
+      "develop",
+      {
         taskId: created.tasks[0]!.id,
         attemptId: "attempt_1",
         outcome: "needs_input",
         summary: "A decision is needed",
         question: "Arrows or WASD?",
-        tests: "Unit tests passed",
         findings: ["Keyboard choice is still unresolved"],
       },
-      currentExecution: {
-        attemptId: "attempt_1",
-        action: "develop",
-        status: "waiting_for_input",
-        startedAt: "2026-08-03T00:00:00.000Z",
-        modelRouting: testModelRouting(),
-      },
-    });
+      "development_thread",
+    );
 
     const board = await server.inject({
       method: "GET",
       url: "/api/board",
       headers: { "x-codrive-token": "secret" },
     });
+    const taskDetail = await server.inject({
+      method: "GET",
+      url: `/api/tasks/${created.tasks[0]!.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
     const page = await server.inject({ method: "GET", url: "/" });
 
     expect(board.json()[0].tasks[0]).toMatchObject({
-      question: "Arrows or WASD?",
-      developmentThreadId: "development_thread",
       acceptanceCriteria: ["Arrow keys move the ship", "Restart keeps score"],
-      report: {
-        outcome: "needs_input",
-        tests: "Unit tests passed",
-        findings: ["Keyboard choice is still unresolved"],
-      },
+    });
+    expect(board.json()[0].tasks[0]).not.toHaveProperty("summary");
+    expect(board.json()[0].tasks[0]).not.toHaveProperty("question");
+    expect(board.json()[0].tasks[0]).not.toHaveProperty("report");
+    expect(taskDetail.statusCode).toBe(200);
+    expect(taskDetail.json()).toMatchObject({
+      task: { id: created.tasks[0]!.id, status: "waiting_for_input" },
+      activities: [
+        expect.objectContaining({
+          type: "development_completed",
+          summary: "The flight loop is implemented",
+          evidence: expect.objectContaining({ tests: "Unit tests passed" }),
+        }),
+        expect.objectContaining({
+          type: "decision_requested",
+          summary: "A decision is needed",
+          evidence: expect.objectContaining({ question: "Arrows or WASD?" }),
+        }),
+      ],
+      conversations: { developmentThreadId: "development_thread" },
     });
     expect(page.body).toContain('lang="zh-CN"');
     expect(page.body).toContain("产品工作台");
@@ -938,18 +1027,21 @@ describe("HTTP API", () => {
     expect(page.body).toContain("用 Codrive 的方式帮我做一个经营太空货运公司的游戏");
     expect(page.body).toContain("连接 Codex");
     expect(page.body).toContain("数据保存在本机");
-    expect(page.body).toContain("请在对应的 Codex 对话中回复");
+    expect(page.body).toContain("请在对应的 Codex App 对话中回复");
     expect(page.body).toContain('id="project-sidebar"');
     expect(page.body).toContain('id="task-detail"');
     expect(page.body).toContain("data-copy-task-id");
     expect(page.body).toContain("navigator.clipboard.writeText(task.id)");
     expect(page.body).toContain("复制任务 ID");
-    expect(page.body).toContain("取消前进展");
     expect(page.body).toContain("取消理由");
     expect(page.body).not.toContain("data-cancel-task");
     expect(page.body).not.toContain('data-project-action="cancel"');
     expect(page.body).toContain('id="mobile-projects"');
     expect(page.body).toContain("验收标准");
+    expect(page.body).toContain("进展记录");
+    expect(page.body).toContain("请求决定");
+    expect(page.body).not.toContain("最新进展");
+    expect(page.body).not.toContain("当前进展");
     expect(page.body).toContain("selectedTaskId");
     expect(page.body).toContain("data-task");
     expect(page.body).toContain('id="setup-dialog"');

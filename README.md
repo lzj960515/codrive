@@ -66,7 +66,7 @@ Help me plan this snake game with Codrive, then start development after I confir
 
 Choosing **Later** keeps a small Skills setup button in the lower-left corner of the board. When a future Codrive release changes its bundled Skills, the board offers the update again.
 
-The board includes a **Runtime settings** page for the per-project concurrency limit, primary model, and fallback model. Each product title opens a detail page with its registered repository, complete `PROJECT.md`, planning decision, product context, task list, and current execution information.
+The board includes a **Runtime settings** page for the per-project concurrency limit, primary model, and fallback model. Each product title opens a detail page with its registered repository, complete `PROJECT.md`, minimal planning state, product context, task list, and current execution information.
 
 ## How it works
 
@@ -78,7 +78,7 @@ Codrive owns the deterministic parts: persisted lifecycle state, execution attem
 
 Task selection is dynamic rather than a fixed dependency graph. Project registration, a fully completed task, cancellation, added work, a product decision, a concurrency change, or manual replanning creates a new planning revision. One temporary Codex task reads the complete backlog together with active task, product, and repository facts, then can select several independent tasks within that project's capacity fixed for the attempt. Selecting fewer tasks still completes that revision; spare capacity alone never asks the model again.
 
-Codrive first advances existing task stages, then performs product evaluation, and only then plans an unevaluated backlog revision. Finishing development immediately creates an independent review; rework and integration continue the same task pipeline. A task that needs input or becomes blocked keeps the current planning revision, so already selected siblings can still start while the board explains what is waiting. Each project can run four active tasks by default without consuming another project's capacity, while integration remains serial within each repository.
+Codrive first advances existing task stages, then performs product evaluation, and only then plans an unevaluated backlog revision. Finishing development immediately creates an independent review; rework and integration continue the same task pipeline. A task that needs input or becomes blocked keeps the current planning revision, so already selected siblings can still start. Normal selection and waiting results remain invisible; only a project decision request or blocker creates a pinned attention notice. Each project can run four active tasks by default without consuming another project's capacity, while integration remains serial within each repository.
 
 Model capacity is a recoverable execution state rather than an immediate task blocker. Codrive keeps the same stage, attempt, and conversation, then retries the primary model after 5, 10, and 20 seconds. If capacity is still unavailable, it switches that execution to the configured fallback model, which receives the same retry budget. Only an exhausted fallback becomes blocked. Scheduled retries remain persisted across service restarts, count against that project's capacity, and wait while the project is paused.
 
@@ -98,7 +98,7 @@ Persistent task conversations stay attached to the product repository in Codex A
 
 Each task conversation runs one Codex turn at a time. Before development, rework, integration, recovery, or a report reminder continues an existing conversation, Codrive waits until that conversation is idle; an idle event resumes it immediately, with the minute recovery check as a fallback.
 
-The board links directly to development and review conversations. A paused project is labeled **Paused**, or **Running · future scheduling paused** while an already-started turn is still active. Planner output appears separately as a complete **Scheduling note**, instead of being mixed with the product status. If Codex needs a product decision, the board shows the question and sends you back to the relevant Codex task; Codrive does not create a second chat interface.
+The board links directly to development and review conversations. A paused project is labeled **Paused**, or **Running · future scheduling paused** while an already-started turn is still active. Task details show one immutable, chronological progress timeline: development, rework, review, integration, decision requests, blockers, failures, and cancellations all use the same record shape, with tests, findings, and Git facts kept as evidence on that record. Decision requests send you back to the relevant Codex App conversation; the board has no reply form or decision controls.
 
 ## Built-in Skills
 
@@ -113,7 +113,7 @@ Skills read the current project and task context from Codrive, so automated task
 
 Retry, replan, and cancel have different lifecycle meanings. Retry creates a new attempt for a failed task or project execution that still has a requested action. Replan advances the planning revision after its facts have explicitly changed. A task waiting for input continues the same attempt in its original conversation. Cancel permanently ends the task or project.
 
-Codex classifies each cancellation before executing it. When cancellation depends on product intent, stopping scope, or preservation choices, Codex reports `needs_input` and asks in the original conversation; after an explicit answer, it cancels with `user_confirmed`. When repository and task facts are already sufficient, Codex can cancel directly with `agent_decision`. Every cancellation requires a concrete reason and records the actor, decision basis, and time. The board does not approve cancellations; it displays the terminal cancellation facts and keeps any earlier report as pre-cancellation progress.
+Codex classifies each cancellation before executing it. When cancellation depends on product intent, stopping scope, or preservation choices, Codex reports `needs_input` and asks in the original conversation; after an explicit answer, it cancels with `user_confirmed`. When repository and task facts are already sufficient, Codex can cancel directly with `agent_decision`. Every cancellation requires a concrete reason and records the actor, decision basis, and time. The board does not approve cancellations; it displays the terminal cancellation facts while preserving the earlier activity timeline.
 
 ## Commands
 
