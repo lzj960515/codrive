@@ -168,6 +168,19 @@ describe("RecoveryManager", () => {
       }),
       new StubNotifications(),
     );
+    let resolveRetryStarted!: () => void;
+    const retryStarted = new Promise<void>((resolve) => {
+      resolveRetryStarted = resolve;
+    });
+    const unsubscribeRetryStarted = timedStore.subscribe((event) => {
+      if (
+        event.type === "turn.started" &&
+        event.taskId === created.tasks[0]!.id &&
+        event.attemptId === first.attemptId
+      ) {
+        resolveRetryStarted();
+      }
+    });
 
     try {
       await restartedRecovery.start();
@@ -181,8 +194,7 @@ describe("RecoveryManager", () => {
       const beforeRetry = Date.now();
       await vi.advanceTimersToNextTimerAsync();
       expect(Date.now() - beforeRetry).toBe(1);
-      vi.useRealTimers();
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await retryStarted;
       expect(
         (await timedStore.findTask(created.tasks[0]!.id))!.task.currentExecution,
       ).toMatchObject({ status: "running", attemptId: first.attemptId });
@@ -191,6 +203,7 @@ describe("RecoveryManager", () => {
       await timedWorkflow.retryScheduledExecutions(new Date());
       expect(dispatcher.started).toHaveLength(2);
     } finally {
+      unsubscribeRetryStarted();
       restartedRecovery.stop();
       vi.useRealTimers();
     }
