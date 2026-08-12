@@ -671,7 +671,6 @@ export class WorkflowEngine {
       const snapshot = await this.requireSnapshot(projectId);
       return this.requireProjectExecutions().restart(
         snapshot.project,
-        snapshot.tasks,
         expectedAttemptId,
       );
     });
@@ -722,7 +721,6 @@ export class WorkflowEngine {
       }
       return this.requireProjectExecutions().restart(
         snapshot.project,
-        snapshot.tasks,
         snapshot.project.currentExecution?.attemptId,
       );
     });
@@ -951,8 +949,8 @@ export class WorkflowEngine {
     await this.alignPlanningConcurrency();
     await this.dispatchScheduledModelRetries(new Date(this.now()));
     await this.dispatchTaskContinuations();
-    await this.startProductEvaluations();
     await this.startPendingTaskSelection();
+    await this.markProjectsWithoutWorkIdle();
   }
 
   private async dispatchScheduledModelRetries(now: Date): Promise<void> {
@@ -1035,7 +1033,7 @@ export class WorkflowEngine {
     const candidates = snapshots
       .filter(({ project }) =>
         project.scheduling === "running" &&
-        !["cancelled", "completed"].includes(project.status),
+        project.status === "active",
       )
       .flatMap(({ project, tasks }) =>
         tasks.filter(canDispatchTask).map((task) => ({ project, task })),
@@ -1053,7 +1051,7 @@ export class WorkflowEngine {
       if (!current || !canDispatchTask(current.task)) continue;
       if (
         current.project.scheduling !== "running" ||
-        ["cancelled", "completed"].includes(current.project.status)
+        current.project.status !== "active"
       ) {
         continue;
       }
@@ -1070,25 +1068,6 @@ export class WorkflowEngine {
       if (current.task.requestedAction === "integrate") {
         integrationLeases.add(repository);
       }
-    }
-  }
-
-  private async startProductEvaluations(): Promise<void> {
-    if (!this.projectExecutions) return;
-    for (const snapshot of await this.store.listProjects()) {
-      if (
-        snapshot.project.status !== "active" ||
-        snapshot.project.scheduling !== "running" ||
-        hasActiveProjectExecution(snapshot.project) ||
-        !snapshot.tasks.every(({ status }) => ["done", "cancelled"].includes(status))
-      ) {
-        continue;
-      }
-      await this.projectExecutions.start(
-        snapshot.project,
-        snapshot.tasks,
-        "evaluate_product",
-      );
     }
   }
 
@@ -1118,14 +1097,39 @@ export class WorkflowEngine {
       if (capacity <= 0) continue;
       await this.projectExecutions.start(
         candidate.project,
-        candidate.tasks,
-        "select_tasks",
-        candidate.project,
         {
           planningRevision: candidate.project.planning.revision,
           selectionCapacity: capacity,
         },
       );
+    }
+  }
+
+  private async markProjectsWithoutWorkIdle(): Promise<void> {
+    for (const snapshot of await this.store.listProjects()) {
+      const { project, tasks } = snapshot;
+      if (
+        project.status === "cancelled" ||
+        project.status === "idle" ||
+        hasActiveProjectExecution(project) ||
+        !tasks.every(({ status }) => ["done", "cancelled"].includes(status))
+      ) {
+        continue;
+      }
+      const idle: Project = {
+        ...project,
+        status: "idle",
+        requestedAction: null,
+        planning: markPlanningEvaluated(project.planning),
+        updatedAt: this.now(),
+      };
+      await this.store.saveProject(idle);
+      await this.recordEvent({
+        type: "project.idle",
+        projectId: project.id,
+        before: projectLifecycleState(project),
+        after: projectLifecycleState(idle),
+      });
     }
   }
 
@@ -1372,11 +1376,7 @@ export class WorkflowEngine {
     project: Project,
     report: ProjectReport,
   ): Promise<Project> {
-    const execution = project.currentExecution!;
-    if (execution.action === "select_tasks") {
-      return this.finalizeTaskSelection(project, report);
-    }
-    return this.finalizeProductEvaluation(project, report);
+    return this.finalizeTaskSelection(project, report);
   }
 
   private async finalizeTaskSelection(
@@ -1427,7 +1427,6 @@ export class WorkflowEngine {
     project: Project,
     report: ProjectReport,
   ): Promise<void> {
-    if (project.currentExecution?.action !== "select_tasks") return;
     await this.validateTaskSelectionReport(project.id, report);
   }
 
@@ -1492,110 +1491,6 @@ export class WorkflowEngine {
       );
     }
     return [];
-  }
-
-  private async finalizeProductEvaluation(
-    project: Project,
-    report: ProjectReport,
-  ): Promise<Project> {
-    const execution = project.currentExecution!;
-    const now = this.now();
-    if (report.outcome === "tasks_required") {
-      const stagnantRounds =
-        project.evaluation.lastProgressFingerprint === undefined ||
-        project.evaluation.lastProgressFingerprint !== execution.progressFingerprint
-          ? 0
-          : project.evaluation.stagnantRounds + 1;
-      const evaluation = {
-        stagnantRounds,
-        ...(execution.progressFingerprint
-          ? { lastProgressFingerprint: execution.progressFingerprint }
-          : {}),
-      };
-      if (stagnantRounds >= 3) {
-        const stalled: Project = {
-          ...project,
-          status: "stalled",
-          requestedAction: null,
-          currentExecution: completedProjectExecution(project, now),
-          evaluation,
-          updatedAt: now,
-        };
-        await this.store.saveProject(stalled);
-        await this.recordEvent({
-          type: "project.stalled",
-          projectId: project.id,
-          attemptId: report.attemptId,
-          ...(execution.threadId ? { threadId: execution.threadId } : {}),
-          ...(execution.turnId ? { turnId: execution.turnId } : {}),
-          before: projectLifecycleState(project),
-          after: projectLifecycleState(stalled),
-        });
-        return stalled;
-      }
-      if (report.productDocument) {
-        await this.store.saveProductDocument(project.id, report.productDocument);
-      }
-      await this.store.addTasks(project.id, report.tasks!);
-      const active: Project = {
-        ...project,
-        status: "active",
-        requestedAction: null,
-        currentExecution: completedProjectExecution(project, now),
-        planning: advancePlanning(
-          project.planning,
-          "tasks_created",
-          now,
-          this.maxConcurrentTasks,
-        ),
-        evaluation,
-        updatedAt: now,
-      };
-      await this.store.saveProject(active);
-      await this.recordEvent({
-        type: "project.evaluation_tasks_created",
-        projectId: project.id,
-        attemptId: report.attemptId,
-        ...(execution.threadId ? { threadId: execution.threadId } : {}),
-        ...(execution.turnId ? { turnId: execution.turnId } : {}),
-        before: projectLifecycleState(project),
-        after: projectLifecycleState(active),
-        data: { taskCount: report.tasks!.length },
-      });
-      await this.recordPlanningRevision(active, project.planning.revision);
-      return active;
-    }
-
-    const status =
-      report.outcome === "completed"
-        ? "completed"
-        : report.outcome === "needs_input"
-          ? "waiting_for_input"
-          : "blocked";
-    const completed: Project = {
-      ...project,
-      status,
-      requestedAction: null,
-      currentExecution: completedProjectExecution(project, now),
-      evaluation: {
-        stagnantRounds: 0,
-        ...(execution.progressFingerprint
-          ? { lastProgressFingerprint: execution.progressFingerprint }
-          : {}),
-      },
-      updatedAt: now,
-    };
-    await this.store.saveProject(completed);
-    await this.recordEvent({
-      type: `project.${status}`,
-      projectId: project.id,
-      attemptId: report.attemptId,
-      ...(execution.threadId ? { threadId: execution.threadId } : {}),
-      ...(execution.turnId ? { turnId: execution.turnId } : {}),
-      before: projectLifecycleState(project),
-      after: projectLifecycleState(completed),
-    });
-    return completed;
   }
 
   private async blockTaskForMissingReport(

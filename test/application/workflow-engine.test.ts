@@ -984,6 +984,28 @@ describe("WorkflowEngine", () => {
     expect(projectExecutor.started).toHaveLength(1);
   });
 
+  it("preserves idle while project scheduling is paused and resumed", async () => {
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [{ title: "Task", description: "Build it", acceptanceCriteria: [] }],
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "done",
+    });
+    await workflow.reconcile();
+
+    const paused = await workflow.controlProject(created.project.id, "pause");
+    expect(paused).toMatchObject({ status: "idle", scheduling: "paused" });
+
+    const resumed = await workflow.controlProject(created.project.id, "resume");
+    expect(resumed).toMatchObject({ status: "idle", scheduling: "running" });
+    expect(projectExecutor.started).toHaveLength(0);
+  });
+
   it("clears a resolved project question when its decision is recorded", async () => {
     const created = await store.createProject({
       name: "Tiny Game",
@@ -1001,7 +1023,7 @@ describe("WorkflowEngine", () => {
     };
     await store.saveProject({
       ...created.project,
-      status: "waiting_for_input",
+      status: "active",
       currentExecution: {
         attemptId: report.attemptId,
         action: "select_tasks",
@@ -1018,7 +1040,7 @@ describe("WorkflowEngine", () => {
       "Use both keyboard and controller.",
     );
 
-    expect(project.status).not.toBe("waiting_for_input");
+    expect(project.status).toBe("active");
     expect(project.currentExecution?.result).toBeUndefined();
   });
 
@@ -1054,7 +1076,7 @@ describe("WorkflowEngine", () => {
     );
   });
 
-  it("reactivates a completed project when new work is added and rejects cancelled projects", async () => {
+  it("reactivates an idle project when new work is added and rejects cancelled projects", async () => {
     const created = await store.createProject({
       name: "Tiny Game",
       repositoryPath: "/workspace/game",
@@ -1062,17 +1084,17 @@ describe("WorkflowEngine", () => {
       productDocument: "# Tiny Game\n",
       tasks: [{ title: "Task", description: "Build", acceptanceCriteria: [] }],
     });
-    await store.saveProject({ ...created.project, status: "completed" });
+    await store.saveProject({ ...created.project, status: "idle" });
 
     const active = await workflow.addProjectWork(created.project.id, [
       { title: "Expansion", description: "Build more", acceptanceCriteria: [] },
     ]);
-    expect(active.project.status).not.toBe("completed");
+    expect(active.project.status).toBe("active");
 
     await workflow.cancelProject(created.project.id, {
       cancelledBy: "codex",
       decisionBasis: "agent_decision",
-      reason: "The completed project is being retired",
+      reason: "The idle project is being retired",
     });
     await expect(
       workflow.addProjectWork(created.project.id, [
@@ -1677,45 +1699,52 @@ describe("WorkflowEngine", () => {
     expect(taskDispatcher.started).toHaveLength(0);
   });
 
-  it("starts product evaluation after all known tasks are complete", async () => {
-    const created = await store.createProject({
-      name: "Tiny Game",
-      repositoryPath: "/workspace/game",
-      defaultBranch: "main",
-      productDocument: "# Tiny Game\n",
-      tasks: [{ title: "Task", description: "Build", acceptanceCriteria: [] }],
-    });
-    await store.saveTask(created.project.id, {
-      ...created.tasks[0]!,
-      status: "done",
-    });
-    await store.appendEvent({
-      eventId: "activity_event_integrated",
-      type: "task.activity_recorded",
+  it("marks the project idle when its last task completes the full pipeline", async () => {
+    const created = await registerProject(1);
+    const taskId = created.tasks[0]!.id;
+    await finishProjectExecution({
       projectId: created.project.id,
-      taskId: created.tasks[0]!.id,
-      occurredAt: "2026-08-03T00:00:00.000Z",
-      data: {
-        activity: {
-          id: "activity_integrated",
-          projectId: created.project.id,
-          taskId: created.tasks[0]!.id,
-          type: "integration_completed",
-          action: "integrate",
-          outcome: "completed",
-          attemptId: "integrate_1",
-          summary: "Merged",
-          occurredAt: "2026-08-03T00:00:00.000Z",
-          evidence: { mergedCommit: "main_1" },
-        },
-      },
+      outcome: "selected",
+      summary: "Start the only task",
+      taskIds: [taskId],
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Implemented",
+      workspacePath: "/workspace/game/.worktrees/task",
+      candidateCommit: "candidate_1",
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "approved",
+      summary: "Approved",
+      reviewedMainCommit: "main_1",
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Integrated",
+      mergedCommit: "main_2",
     });
 
-    await workflow.reconcile();
-
-    expect(projectExecutor.started[0]?.project).toMatchObject({
-      status: "evaluating",
-      requestedAction: "evaluate_product",
+    expect((await store.getProject(created.project.id))!.project).toMatchObject({
+      status: "idle",
+      requestedAction: null,
     });
+    expect(projectExecutor.started).toHaveLength(1);
+  });
+
+  it("marks the project idle when its last task is cancelled", async () => {
+    const created = await registerProject(1);
+
+    await workflow.cancelTask(created.tasks[0]!.id, {
+      cancelledBy: "codex",
+      decisionBasis: "agent_decision",
+      reason: "The planned work is no longer required",
+    });
+
+    expect((await store.getProject(created.project.id))!.project).toMatchObject({
+      status: "idle",
+      requestedAction: null,
+    });
+    expect(projectExecutor.interrupted).toHaveLength(1);
   });
 });

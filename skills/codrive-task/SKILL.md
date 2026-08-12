@@ -1,6 +1,6 @@
 ---
 name: codrive-task
-description: 读取并执行 Codrive 看板任务或产品验收的当前阶段，包括开发、返工、独立审查、同步合入、产品完成判断和结果汇报。用户或 Codrive 要求领取、处理、审查、继续、验收或汇报 Codrive 工作时使用。
+description: 读取并执行 Codrive 的项目任务选择或看板任务当前阶段，包括开发、返工、独立审查、同步合入和结果汇报。用户或 Codrive 要求选择、领取、处理、审查、继续、验收或汇报 Codrive 工作时使用。
 compatibility: Requires Node.js 20+, Git, and a running local Codrive service.
 ---
 
@@ -24,13 +24,13 @@ node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-
 
 读取命令返回的 `projectDocument`、`taskDocument`、完整 `activities` 和仓库 `AGENTS.md`。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务定义、当前状态和已有证据恢复连续上下文。
 
-处理项目级任务选择或产品验收时运行：
+处理项目级任务选择时运行：
 
 ```text
 node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 ```
 
-根据返回的 `requestedAction` 执行任务选择或产品验收，并读取 `PROJECT.md`、全部任务文件、仓库规则和实际代码。
+根据返回的 `requestedAction` 执行任务选择，并读取 `PROJECT.md`、全部任务文件、仓库规则和实际代码。
 
 ## 连续任务工作区
 
@@ -127,35 +127,3 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 ```
 
 先完成仓库操作，再把汇报作为当前阶段的最后一个副作用。脚本拒绝报告时，根据返回的字段要求修正同一份报告并重新提交。发生无法继续的确定问题时使用 `blocked`。
-
-## 产品验收
-
-产品验收使用临时独立对话。检查产品完成标准、实际仓库行为和全部已完成任务：
-
-- 完成标准全部满足时汇报 `completed`。
-- 存在明确且可实施的缺口时汇报 `tasks_required`，提供具有业务结果、边界和验收标准的下一轮任务。
-- 缺少产品决策时汇报 `needs_input` 和一个明确问题。
-- 存在无法继续的确定障碍时汇报 `blocked`。
-
-通过标准输入提交产品验收 JSON：
-
-```text
-node <skill-directory>/scripts/codrive-task.mjs project-report <project-id>
-```
-
-下一轮任务报告格式：
-
-```json
-{
-  "attemptId": "evaluation-attempt-id",
-  "outcome": "tasks_required",
-  "summary": "仍需完成的产品缺口",
-  "tasks": [
-    {
-      "title": "任务名称",
-      "description": "任务结果和边界",
-      "acceptanceCriteria": ["可观察验收标准"]
-    }
-  ]
-}
-```

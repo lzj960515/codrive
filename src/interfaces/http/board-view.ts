@@ -66,7 +66,9 @@ function createPlanningView(
   return {
     revision: project.planning.revision,
     evaluatedRevision: project.planning.evaluatedRevision ?? null,
-    status: project.status === "cancelled" ? "cancelled" : status,
+    status: ["cancelled", "idle"].includes(project.status)
+      ? project.status
+      : status,
     outcome: result?.outcome ?? null,
     selectedTaskIds: result?.taskIds ?? [],
     blockingTaskIds: tasks
@@ -78,7 +80,7 @@ function createPlanningView(
 }
 
 function projectAttention(project: ProjectSnapshot["project"]) {
-  if (project.status === "cancelled") return null;
+  if (project.status !== "active") return null;
   const execution = project.currentExecution;
   const result = execution?.result;
   if (!execution || !result || !["needs_input", "blocked"].includes(result.outcome)) {

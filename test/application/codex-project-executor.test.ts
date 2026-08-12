@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CodexGateway } from "../../src/application/codex-gateway.js";
 import { CodexProjectExecutor } from "../../src/application/codex-project-executor.js";
-import type { Project, ProjectAction } from "../../src/domain/types.js";
+import type { Project } from "../../src/domain/types.js";
 
 class RecordingGateway implements CodexGateway {
   calls: Array<{ method: string; args: unknown[] }> = [];
@@ -44,25 +44,24 @@ class RecordingGateway implements CodexGateway {
 
 const timestamp = "2026-08-03T00:00:00.000Z";
 
-function project(action: ProjectAction): Project {
+function project(): Project {
   return {
     id: "project_1",
     name: "Tiny Game",
     repositoryPath: "/workspace/game",
     defaultBranch: "main",
-    status: action === "select_tasks" ? "active" : "evaluating",
+    status: "active",
     scheduling: "running",
-    requestedAction: action,
+    requestedAction: "select_tasks",
     planning: {
       revision: 1,
       changedAt: timestamp,
       changeReason: "project_registered",
       concurrencyLimit: 4,
     },
-    evaluation: { stagnantRounds: 0 },
     currentExecution: {
       attemptId: "project_attempt_1",
-      action,
+      action: "select_tasks",
       status: "pending",
       startedAt: timestamp,
       modelRouting: {
@@ -77,21 +76,10 @@ function project(action: ProjectAction): Project {
 }
 
 describe("CodexProjectExecutor", () => {
-  it.each([
-    {
-      action: "select_tasks" as const,
-      title: "[Codrive Selection] Tiny Game",
-      prompt: "请使用 $codrive-task 为项目 project_1 选择当前适合开始的任务。",
-    },
-    {
-      action: "evaluate_product" as const,
-      title: "[Codrive Evaluation] Tiny Game",
-      prompt: "请使用 $codrive-task 验收项目 project_1 的产品完成状态。",
-    },
-  ])("runs $action in a temporary Codex task", async ({ action, title, prompt }) => {
+  it("runs task selection in a temporary Codex task", async () => {
     const gateway = new RecordingGateway();
     const executor = new CodexProjectExecutor(gateway);
-    const current = project(action);
+    const current = project();
 
     const threadId = await executor.openThread(current);
     await executor.startTurn(current, threadId);
@@ -99,11 +87,11 @@ describe("CodexProjectExecutor", () => {
     expect(gateway.calls).toEqual([
       {
         method: "startThread",
-        args: ["/workspace/game", title, { ephemeral: true }],
+        args: ["/workspace/game", "[Codrive Selection] Tiny Game", { ephemeral: true }],
       },
       {
         method: "startTurn",
-        args: ["project_thread", "/workspace/game", prompt, "gpt-5.6-sol"],
+        args: ["project_thread", "/workspace/game", "请使用 $codrive-task 为项目 project_1 选择当前适合开始的任务。", "gpt-5.6-sol"],
       },
     ]);
   });

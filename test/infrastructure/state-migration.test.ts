@@ -23,7 +23,6 @@ describe("Codrive state migration", () => {
     const activities = await store.listTaskActivities("project_1", "task_1");
     expect(snapshot?.project).toMatchObject({
       planning: { revision: 1, evaluatedRevision: 1 },
-      evaluation: { stagnantRounds: 2, lastProgressFingerprint: "fingerprint_1" },
       currentExecution: {
         attemptId: "project_attempt_1",
         result: { outcome: "wait_for_active_tasks" },
@@ -168,8 +167,6 @@ async function legacyStateFixture(): Promise<string> {
       report: projectReport,
     },
     latestReport: projectReport,
-    lastEvaluationFingerprint: "fingerprint_1",
-    stagnantEvaluationRounds: 2,
     createdAt: timestamp,
     updatedAt: timestamp,
   };

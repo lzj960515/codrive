@@ -1,14 +1,7 @@
-export type ProjectStatus =
-  | "active"
-  | "evaluating"
-  | "waiting_for_input"
-  | "stalled"
-  | "completed"
-  | "blocked"
-  | "cancelled";
+export type ProjectStatus = "active" | "idle" | "cancelled";
 
 export type SchedulingStatus = "running" | "paused";
-export type ProjectAction = "select_tasks" | "evaluate_product";
+export type ProjectAction = "select_tasks";
 
 export interface ModelRoutingSettings {
   primary: string;
@@ -34,7 +27,6 @@ export interface ExecutionModelRouting {
 export type PlanningChangeReason =
   | "project_registered"
   | "work_added"
-  | "tasks_created"
   | "task_completed"
   | "task_cancelled"
   | "project_decision_recorded"
@@ -100,21 +92,13 @@ export interface Project {
   currentExecution?: ProjectExecution;
   cancellation?: Cancellation;
   contextNotes?: string[];
-  evaluation: ProjectEvaluationState;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface ProjectEvaluationState {
-  lastProgressFingerprint?: string;
-  stagnantRounds: number;
 }
 
 export type ProjectReportOutcome =
   | "selected"
   | "wait_for_active_tasks"
-  | "completed"
-  | "tasks_required"
   | "needs_input"
   | "blocked";
 
@@ -124,8 +108,6 @@ export interface ProjectReport {
   outcome: ProjectReportOutcome;
   summary: string;
   taskIds?: string[];
-  tasks?: CreateTaskInput[];
-  productDocument?: string;
   question?: string;
 }
 
@@ -141,7 +123,6 @@ export interface ProjectExecution {
   turnCompletedAt?: string;
   result?: ProjectReport;
   reportReminderCount?: number;
-  progressFingerprint?: string;
   planningRevision?: number;
   selectionCapacity?: number;
   leaseExpiresAt?: string;

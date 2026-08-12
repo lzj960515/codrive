@@ -70,15 +70,11 @@ const projectReportSchema = z.object({
   outcome: z.enum([
     "selected",
     "wait_for_active_tasks",
-    "completed",
-    "tasks_required",
     "needs_input",
     "blocked",
   ]),
   summary: z.string().min(1),
   taskIds: z.array(z.string().min(1)).optional(),
-  tasks: z.array(taskInputSchema).optional(),
-  productDocument: z.string().optional(),
   question: z.string().optional(),
 });
 

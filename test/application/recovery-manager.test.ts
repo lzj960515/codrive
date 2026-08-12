@@ -590,22 +590,22 @@ describe("RecoveryManager", () => {
       ]);
   });
 
-  it("routes completed temporary project turns to product evaluation", async () => {
-    const evaluationStore = new ProjectStore(
-      await mkdtemp(join(tmpdir(), "codrive-evaluation-recovery-")),
+  it("leaves an idle project without a temporary project execution", async () => {
+    const idleStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-idle-recovery-")),
     );
-    const created = await evaluationStore.createProject({
+    const created = await idleStore.createProject({
       name: "Game",
       repositoryPath: "/workspace/game",
       defaultBranch: "main",
       productDocument: "# Game\n",
       tasks: [{ title: "Loop", description: "Build loop", acceptanceCriteria: [] }],
     });
-    await evaluationStore.saveTask(created.project.id, {
+    await idleStore.saveTask(created.project.id, {
       ...created.tasks[0]!,
       status: "done",
     });
-    await evaluationStore.appendEvent({
+    await idleStore.appendEvent({
       eventId: "activity_event_integrated",
       type: "task.activity_recorded",
       projectId: created.project.id,
@@ -627,39 +627,18 @@ describe("RecoveryManager", () => {
       },
     });
     const projectExecutor = new RecordingProjectExecutor();
-    const evaluationWorkflow = new WorkflowEngine(
-      evaluationStore,
+    const idleWorkflow = new WorkflowEngine(
+      idleStore,
       new RecordingTaskDispatcher(),
       { maxConcurrentTasks: 4, models: testModels },
       projectExecutor,
     );
-    await evaluationWorkflow.reconcile();
-    const evaluating = (await evaluationStore.getProject(created.project.id))!.project;
-    await evaluationWorkflow.submitProjectReport({
-      projectId: created.project.id,
-      attemptId: evaluating.currentExecution!.attemptId,
-      outcome: "completed",
-      summary: "Product criteria satisfied",
-    });
-    const evaluationRecovery = new RecoveryManager(
-      evaluationStore,
-      evaluationWorkflow,
-      new StubNotifications(),
-    );
+    await idleWorkflow.reconcile();
 
-    await evaluationRecovery.handleNotification({
-      method: "turn/completed",
-      params: {
-        turn: {
-          id: evaluating.currentExecution!.turnId,
-          status: "completed",
-          error: null,
-        },
-      },
+    expect((await idleStore.getProject(created.project.id))?.project).toMatchObject({
+      status: "idle",
+      requestedAction: null,
     });
-
-    expect(
-      (await evaluationStore.getProject(created.project.id))?.project.status,
-    ).toBe("completed");
+    expect(projectExecutor.started).toHaveLength(0);
   });
 });

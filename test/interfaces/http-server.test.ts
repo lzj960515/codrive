@@ -466,7 +466,7 @@ describe("HTTP API", () => {
     const planningRevision = snapshotBeforeProjectCancellation!.project.planning.revision;
     await store.saveProject({
       ...snapshotBeforeProjectCancellation!.project,
-      status: "waiting_for_input",
+      status: "active",
       planning: {
         ...snapshotBeforeProjectCancellation!.project.planning,
         evaluatedRevision: planningRevision,
@@ -867,6 +867,40 @@ describe("HTTP API", () => {
       scheduling: "paused",
       displayStatus: "paused",
     });
+  });
+
+  it("projects an idle project as current work being empty", async () => {
+    const created = await store.createProject({
+      name: "Semantic Atlas",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Semantic Atlas\n",
+      tasks: [{ title: "Loop", description: "Build loop", acceptanceCriteria: [] }],
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "done",
+    });
+    await engine.reconcile();
+    await command({
+      type: "project.control",
+      payload: { projectId: created.project.id, action: "pause" },
+    });
+
+    const board = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const page = await server.inject({ method: "GET", url: "/" });
+
+    expect(board.json()[0].project).toMatchObject({
+      status: "idle",
+      scheduling: "paused",
+      displayStatus: "idle",
+      planning: { status: "idle" },
+    });
+    expect(page.body).toContain('idle: "当前无待办"');
   });
 
   it("exposes registered product information and the complete planning notice", async () => {

@@ -66,7 +66,6 @@ const project: Project = {
         changeReason: "project_registered",
         concurrencyLimit: 4,
       },
-      evaluation: { stagnantRounds: 0 },
       createdAt: timestamp,
   updatedAt: timestamp,
 };

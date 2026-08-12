@@ -1,6 +1,6 @@
 <div align="center">
   <h1>Codrive</h1>
-  <p><strong>Turn a product idea into a continuous stream of visible Codex tasks.</strong></p>
+  <p><strong>Turn product work into a continuous stream of visible Codex tasks.</strong></p>
   <p>Local-first orchestration for planning, development, independent review, rework, and integration.</p>
 
   <p>
@@ -21,7 +21,7 @@
 
 Codrive is a lightweight local service that connects Codex App conversations, a task board, filesystem-backed product state, and reusable Skills.
 
-Describe the product you want in Codex App. Codex turns the idea into a product plan, registers the work with Codrive, and then handles each task in its own visible conversation. Every review starts in a separate clean conversation. When review asks for changes, Codrive returns the work to the original development conversation; when review approves it, Codex integrates the result and Codrive starts the next useful work.
+Whether you are starting from an idea or adding a feature, refactoring code, or scheduling explicit acceptance work for an existing project, describe the product work you want completed in Codex App. Codex combines that goal with the current repository state, shapes a plan, registers it with Codrive, and then advances each task in its own visible conversation. Every review starts in a separate clean conversation. When review asks for changes, Codrive returns the work to the original development conversation; when review approves it, Codex integrates the result and Codrive starts the next useful work.
 
 Codrive is not another model or coding agent. It gives the regular Codex agent a small, reliable workflow around long-running product development.
 
@@ -57,11 +57,11 @@ npx codrive@latest upgrade
 Codrive prints the local board URL and log file location. Open it in your browser and follow the first-run prompt:
 
 1. Click **Install Skills** to add the four bundled Codrive Skills to your local agent library.
-2. For the usual local workflow, create the product folder and open it in Codex App.
-3. Describe the product naturally, for example:
+2. Open an existing project directory in Codex App, or create and open a new one when starting from scratch.
+3. Describe the product work naturally, for example:
 
 ```text
-Help me plan this snake game with Codrive, then start development after I confirm.
+Use Codrive to add a leaderboard to this project, then start development after I confirm the plan.
 ```
 
 Choosing **Later** keeps a small Skills setup button in the lower-left corner of the board. When a future Codrive release changes its bundled Skills, the board offers the update again.
@@ -74,11 +74,11 @@ The board includes a **Runtime settings** page for the per-project concurrency l
 
 [Open the editable draw.io source](https://github.com/lzj960515/codrive/blob/main/docs/architecture/codrive-orchestration.drawio)
 
-Codrive owns the deterministic parts: persisted lifecycle state, execution attempts, conversation IDs, each project's concurrency limit, and the rule that one repository integrates only one task at a time. Codex owns the judgment-heavy parts: selecting work, implementation, review, rework, Git operations, conflict resolution, integration, and product evaluation.
+Codrive owns the deterministic parts: persisted lifecycle state, execution attempts, conversation IDs, each project's concurrency limit, and the rule that one repository integrates only one task at a time. Codex owns the judgment-heavy parts: selecting work, implementation, review, rework, Git operations, conflict resolution, and integration.
 
 Task selection is dynamic rather than a fixed dependency graph. Project registration, a fully completed task, cancellation, added work, a product decision, a concurrency change, or manual replanning creates a new planning revision. One temporary Codex task reads the complete backlog together with active task, product, and repository facts, then can select several independent tasks within that project's capacity fixed for the attempt. Selecting fewer tasks still completes that revision; spare capacity alone never asks the model again.
 
-Codrive first advances existing task stages, then performs product evaluation, and only then plans an unevaluated backlog revision. Finishing development immediately creates an independent review; rework and integration continue the same task pipeline. A task that needs input or becomes blocked keeps the current planning revision, so already selected siblings can still start. Normal selection and waiting results remain invisible; only a project decision request or blocker creates a pinned attention notice. Each project can run four active tasks by default without consuming another project's capacity, while integration remains serial within each repository.
+Codrive first advances existing task stages, then plans an unevaluated backlog revision. Finishing development immediately creates an independent review; rework and integration continue the same task pipeline. A task that needs input or becomes blocked keeps the current planning revision, so already selected siblings can still start. When every task is done or cancelled and the project has no active execution, the project enters `idle`, shown on the board as **No current work**; adding work returns it to `active`. Final product acceptance appears only when the product plan includes it as an ordinary task, using the same development, review, and integration pipeline. Normal selection and waiting results remain invisible; only a project decision request or blocker creates a pinned attention notice. Each project can run four active tasks by default without consuming another project's capacity, while integration remains serial within each repository.
 
 Model capacity is a recoverable execution state rather than an immediate task blocker. Codrive keeps the same stage, attempt, and conversation, then retries the primary model after 5, 10, and 20 seconds. If capacity is still unavailable, it switches that execution to the configured fallback model, which receives the same retry budget. Only an exhausted fallback becomes blocked. Scheduled retries remain persisted across service restarts, count against that project's capacity, and wait while the project is paused.
 
@@ -92,7 +92,7 @@ Once a minute, Codrive also runs a narrow recovery check. It sends task messages
 | Rework | Continues the original development conversation |
 | Integration | Continues the original development conversation |
 | Review | Starts a fresh independent conversation for every round |
-| Task selection and product evaluation | Uses temporary conversations that do not crowd the recent-task list |
+| Task selection | Uses temporary conversations that do not crowd the recent-task list |
 
 Persistent task conversations stay attached to the product repository in Codex App. Codex reads the task's recorded worktree from `$codrive-task` and performs implementation, review, rework, and integration there, so App visibility and isolated code execution remain separate concerns.
 
@@ -107,7 +107,7 @@ A paused project is labeled **Paused**, or **Running · future scheduling paused
 | Skill | Purpose |
 | --- | --- |
 | `$codrive-forge` | Shape a product idea into a confirmed product plan and initial task set |
-| `$codrive-task` | Execute the current development, review, rework, integration, or evaluation stage |
+| `$codrive-task` | Select project work or execute the current development, review, rework, and integration stage |
 | `$codrive-work` | Add a requirement, milestone, or new round of work to an existing product |
 | `$codrive-control` | Inspect progress; pause, resume, retry, replan, or cancel; and record a product decision |
 

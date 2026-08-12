@@ -6,7 +6,7 @@ Codrive is a local, single-user orchestration service that connects filesystem-b
 
 - `src/domain` owns project, task, execution, report, and event contracts.
 - `src/application` owns deterministic workflow decisions and dispatch coordination.
-- `ProjectExecutionCoordinator` owns temporary task-selection and product-evaluation turns.
+- `ProjectExecutionCoordinator` owns temporary task-selection turns.
 - `model-routing.ts` owns capacity-failure classification, persisted retry state, exponential backoff, and fallback routing for every Codex turn.
 - `SystemSettingsService` owns validated runtime concurrency and model configuration changes.
 - `src/infrastructure` owns filesystem persistence, App Server transport, and Skill installation.

@@ -249,18 +249,7 @@ function migrateProjectRecord(raw: Record<string, unknown>): Project {
   };
 
   delete record.latestReport;
-  delete record.lastEvaluationFingerprint;
-  delete record.stagnantEvaluationRounds;
   record.planning = migratedPlanning;
-  record.evaluation = {
-    stagnantRounds: legacy.evaluation?.stagnantRounds ?? legacy.stagnantEvaluationRounds ?? 0,
-    ...(legacy.evaluation?.lastProgressFingerprint ?? legacy.lastEvaluationFingerprint
-      ? {
-          lastProgressFingerprint:
-            legacy.evaluation?.lastProgressFingerprint ?? legacy.lastEvaluationFingerprint,
-        }
-      : {}),
-  };
   if (execution) record.currentExecution = execution;
   return record as unknown as Project;
 }
@@ -409,8 +398,6 @@ type LegacyPlanning = ProjectPlanningState & {
 };
 type LegacyProject = Project & {
   latestReport?: ProjectReport;
-  lastEvaluationFingerprint?: string;
-  stagnantEvaluationRounds?: number;
   planning: LegacyPlanning;
   currentExecution?: LegacyProjectExecution;
 };

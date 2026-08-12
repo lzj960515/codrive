@@ -2,13 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 
 import { WorkflowConflictError } from "../domain/errors.js";
 import { markPlanningEvaluated } from "../domain/planning.js";
-import { projectTaskActivities } from "../domain/task-activity.js";
 import type {
   CodriveEvent,
   Project,
-  ProjectAction,
   ProjectReport,
-  Task,
   ModelRoutingSettings,
 } from "../domain/types.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
@@ -57,10 +54,8 @@ export class ProjectExecutionCoordinator {
 
   async start(
     project: Project,
-    tasks: Task[],
-    action: ProjectAction,
-    previous: Project = project,
     context: ProjectExecutionStartContext = {},
+    previous: Project = project,
   ): Promise<Project> {
     if (
       project.currentExecution &&
@@ -81,25 +76,22 @@ export class ProjectExecutionCoordinator {
     const now = this.options.now();
     const pending: Project = {
       ...project,
-      status: action === "select_tasks" ? "active" : "evaluating",
-      requestedAction: action,
+      status: "active",
+      requestedAction: "select_tasks",
       currentExecution: {
         attemptId: this.options.createId("project_attempt"),
-        action,
+        action: "select_tasks",
         status: "pending",
         startedAt: now,
         modelRouting: initialModelRouting(this.options.modelSettings()),
         leaseExpiresAt: this.options.leaseExpiration(),
-        ...(action === "evaluate_product"
-          ? { progressFingerprint: await evaluationFingerprint(this.store, project.id, tasks) }
-          : {}),
         ...context,
       },
       updatedAt: now,
     };
     await this.store.saveProject(pending);
     await this.options.recordEvent({
-      type: `project.${action}_started`,
+      type: "project.select_tasks_started",
       projectId: project.id,
       attemptId: pending.currentExecution!.attemptId,
       before: projectLifecycleState(previous),
@@ -130,7 +122,7 @@ export class ProjectExecutionCoordinator {
         `Report does not match the current project execution for ${project.id}`,
       );
     }
-    validateProjectReport(execution.action, report);
+    validateProjectReport(report);
     await validateBeforeSave(project, report);
 
     const reported: Project = {
@@ -289,7 +281,6 @@ export class ProjectExecutionCoordinator {
 
   async restart(
     project: Project,
-    tasks: Task[],
     expectedAttemptId?: string,
   ): Promise<Project> {
     if (
@@ -316,14 +307,14 @@ export class ProjectExecutionCoordinator {
             },
           }
         : project;
-    return this.start(restartable, tasks, project.requestedAction, project, {
+    return this.start(restartable, {
       ...(execution?.planningRevision === undefined
         ? {}
         : { planningRevision: execution.planningRevision }),
       ...(execution?.selectionCapacity === undefined
         ? {}
         : { selectionCapacity: execution.selectionCapacity }),
-    });
+    }, project);
   }
 
   async renewLease(projectId: string, attemptId: string): Promise<Project> {
@@ -507,7 +498,6 @@ export class ProjectExecutionCoordinator {
     const execution = project.currentExecution;
     if (!execution) throw new Error(`Project ${project.id} has no current execution`);
     const now = this.options.now();
-    const selectionFailed = execution.action === "select_tasks";
     const result: ProjectReport = {
       projectId: project.id,
       attemptId: execution.attemptId,
@@ -516,8 +506,8 @@ export class ProjectExecutionCoordinator {
     };
     const failed: Project = {
       ...project,
-      status: selectionFailed ? "active" : "blocked",
-      ...(selectionFailed ? { planning: markPlanningEvaluated(project.planning) } : {}),
+      status: "active",
+      planning: markPlanningEvaluated(project.planning),
       currentExecution: {
         ...execution,
         status: "failed",
@@ -572,14 +562,16 @@ export class ProjectExecutionCoordinator {
   }
 }
 
-function validateProjectReport(action: ProjectAction, report: ProjectReport): void {
-  const allowedOutcomes =
-    action === "select_tasks"
-      ? new Set(["selected", "wait_for_active_tasks", "needs_input", "blocked"])
-      : new Set(["completed", "tasks_required", "needs_input", "blocked"]);
+function validateProjectReport(report: ProjectReport): void {
+  const allowedOutcomes = new Set([
+    "selected",
+    "wait_for_active_tasks",
+    "needs_input",
+    "blocked",
+  ]);
   if (!allowedOutcomes.has(report.outcome)) {
     throw new WorkflowConflictError(
-      `Outcome ${report.outcome} is invalid for ${action}`,
+      `Outcome ${report.outcome} is invalid for select_tasks`,
     );
   }
   if (report.outcome === "selected" && !report.taskIds?.length) {
@@ -587,32 +579,9 @@ function validateProjectReport(action: ProjectAction, report: ProjectReport): vo
       `Project execution ${report.attemptId} requires taskIds for selected`,
     );
   }
-  if (report.outcome === "tasks_required" && !report.tasks?.length) {
-    throw new WorkflowConflictError(
-      `Project execution ${report.attemptId} requires tasks for tasks_required`,
-    );
-  }
   if (report.outcome === "needs_input" && !report.question) {
     throw new WorkflowConflictError(
       `Project execution ${report.attemptId} requires a question for needs_input`,
     );
   }
-}
-
-async function evaluationFingerprint(
-  store: ProjectStore,
-  projectId: string,
-  tasks: Task[],
-): Promise<string> {
-  const integrated = await Promise.all(
-    tasks
-      .filter(({ status }) => status === "done")
-      .map(async ({ id }) => {
-        const projection = projectTaskActivities(
-          await store.listTaskActivities(projectId, id),
-        );
-        return `${id}:${projection.mergedCommit ?? "no-commit"}`;
-      }),
-  );
-  return integrated.sort().join("|");
 }

@@ -8,8 +8,8 @@ export function renderBoardClient(accessToken: string): string {
     const boardLayout = ${layout};
     const columns = boardLayout.columns;
     const statusLabels = {
-      active: "进行中", selecting_tasks: "安排任务中", evaluating: "产品验收中",
-      waiting_for_input: "等待决定", stalled: "暂无进展", completed: "已完成",
+      active: "进行中", selecting_tasks: "安排任务中", idle: "当前无待办",
+      waiting_for_input: "等待决定",
       blocked: "已阻塞", cancelled: "已取消", backlog: "待安排", developing: "开发中",
       reviewing: "审查中", changes_requested: "返工中", integrating: "合入中", done: "已完成",
       running: "自动推进", paused: "已暂停", develop: "开发", rework: "返工", review: "审查",
@@ -190,7 +190,7 @@ export function renderBoardClient(accessToken: string): string {
       const active = tasks.filter(task => ["developing", "reviewing", "changes_requested", "integrating"].includes(task.status)).length;
       const waiting = tasks.filter(task => ["waiting_for_input", "blocked"].includes(task.status)).length;
       const done = tasks.filter(task => task.status === "done").length;
-      const terminal = ["completed", "cancelled"].includes(project.status);
+      const terminal = project.status === "cancelled";
       const actions = terminal ? [] : [project.scheduling === "paused"
         ? '<button class="action-button" data-project-action="resume">继续</button>'
         : '<button class="action-button" data-project-action="pause">暂停</button>'];

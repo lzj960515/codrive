@@ -50,7 +50,6 @@ export class ProjectStore {
       scheduling: "running",
       requestedAction: null,
       planning: createPlanningState(now),
-      evaluation: { stagnantRounds: 0 },
       createdAt: now,
       updatedAt: now,
     };
