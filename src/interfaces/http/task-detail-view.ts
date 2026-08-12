@@ -9,6 +9,23 @@ export async function createTaskDetailView(
 ) {
   const activities = await store.listTaskActivities(project.id, task.id);
   const projection = projectTaskActivities(activities);
+  const currentExecution = task.currentExecution
+    ? {
+        action: task.currentExecution.action,
+        status: task.currentExecution.status,
+        threadId: task.currentExecution.threadId ?? null,
+      }
+    : null;
+  const currentDecisionRequest =
+    task.currentExecution?.status === "waiting_for_input" &&
+    task.currentExecution.submittedActivityId
+      ? (activities.find(
+          ({ id, type }) =>
+            id === task.currentExecution?.submittedActivityId &&
+            type === "decision_requested",
+        ) ?? null)
+      : null;
+
   return {
     task: {
       id: task.id,
@@ -20,6 +37,7 @@ export async function createTaskDetailView(
       status: task.status,
       requestedAction: task.requestedAction,
       executionStatus: task.currentExecution?.status ?? null,
+      currentExecution,
       modelRouting: task.currentExecution?.modelRouting ?? null,
       cancellation: task.cancellation ?? null,
       reviewCount: projection.reviewCount,
@@ -27,15 +45,6 @@ export async function createTaskDetailView(
       updatedAt: task.updatedAt,
     },
     activities,
-    conversations: {
-      developmentThreadId:
-        task.currentExecution?.action !== "review"
-          ? (task.currentExecution?.threadId ?? projection.developmentThreadId ?? null)
-          : (projection.developmentThreadId ?? null),
-      reviewThreadId:
-        task.currentExecution?.action === "review"
-          ? (task.currentExecution.threadId ?? projection.reviewThreadId ?? null)
-          : (projection.reviewThreadId ?? null),
-    },
+    currentDecisionRequest,
   };
 }

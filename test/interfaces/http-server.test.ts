@@ -129,7 +129,7 @@ describe("HTTP API", () => {
     projectId: string,
     action: TaskAction,
     report: TaskReport,
-    threadId: string,
+    threadId?: string,
     occurredAt = "2026-08-03T00:00:00.000Z",
   ) {
     const activity = createTaskReportActivity({
@@ -137,7 +137,7 @@ describe("HTTP API", () => {
       projectId,
       action,
       report,
-      threadId,
+      ...(threadId ? { threadId } : {}),
       occurredAt,
     });
     await store.appendEvent({
@@ -146,7 +146,7 @@ describe("HTTP API", () => {
       projectId,
       taskId: report.taskId,
       attemptId: report.attemptId,
-      threadId,
+      ...(threadId ? { threadId } : {}),
       occurredAt,
       data: { activity },
     });
@@ -1012,7 +1012,15 @@ describe("HTTP API", () => {
     expect(board.json()[0].tasks[0]).not.toHaveProperty("report");
     expect(taskDetail.statusCode).toBe(200);
     expect(taskDetail.json()).toMatchObject({
-      task: { id: created.tasks[0]!.id, status: "waiting_for_input" },
+      task: {
+        id: created.tasks[0]!.id,
+        status: "waiting_for_input",
+        currentExecution: {
+          action: "develop",
+          status: "waiting_for_input",
+          threadId: "development_thread",
+        },
+      },
       activities: [
         expect.objectContaining({
           type: "development_completed",
@@ -1025,7 +1033,7 @@ describe("HTTP API", () => {
           evidence: expect.objectContaining({ question: "Arrows or WASD?" }),
         }),
       ],
-      conversations: { developmentThreadId: "development_thread" },
+      currentDecisionRequest: null,
     });
     expect(page.body).toContain('lang="zh-CN"');
     expect(page.body).toContain("产品工作台");
@@ -1033,7 +1041,14 @@ describe("HTTP API", () => {
     expect(page.body).toContain("用 Codrive 的方式帮我做一个经营太空货运公司的游戏");
     expect(page.body).toContain("连接 Codex");
     expect(page.body).toContain("数据保存在本机");
-    expect(page.body).toContain("请在对应的 Codex App 对话中回复");
+    expect(page.body).toContain("当前对话");
+    expect(page.body).toContain("打开当前对话");
+    expect(page.body).toContain("前往当前对话回复");
+    expect(page.body).toContain("前往对应对话回复");
+    expect(page.body).toContain("data-activity-thread");
+    expect(page.body).toContain("历史决定请求");
+    expect(page.body).not.toContain("任务对话</span>");
+    expect(page.body).not.toContain("审查对话</span>");
     expect(page.body).toContain('id="project-sidebar"');
     expect(page.body).toContain('id="task-detail"');
     expect(page.body).toContain("data-copy-task-id");
@@ -1075,5 +1090,143 @@ describe("HTTP API", () => {
     expect(page.body).not.toContain("Product workbench");
     expect(page.body).not.toContain("data-context");
     expect(page.body).not.toContain("<textarea");
+  });
+
+  it("keeps current and historical task conversations attached to their lifecycle owners", async () => {
+    const created = await registerProject();
+    const task = created.tasks[0]!;
+
+    await appendTaskReportActivity(
+      created.project.id,
+      "develop",
+      {
+        taskId: task.id,
+        attemptId: "attempt_develop",
+        outcome: "completed",
+        summary: "Development completed",
+      },
+      "development_thread",
+      "2026-08-03T00:00:00.000Z",
+    );
+    await appendTaskReportActivity(
+      created.project.id,
+      "review",
+      {
+        taskId: task.id,
+        attemptId: "attempt_review_1",
+        outcome: "changes_requested",
+        summary: "First review requested changes",
+        findings: ["Keep the first review attached to its own conversation"],
+      },
+      "review_thread_1",
+      "2026-08-03T01:00:00.000Z",
+    );
+    await appendTaskReportActivity(
+      created.project.id,
+      "review",
+      {
+        taskId: task.id,
+        attemptId: "attempt_review_2",
+        outcome: "approved",
+        summary: "Second review approved",
+        reviewedMainCommit: "main_commit",
+      },
+      "review_thread_2",
+      "2026-08-03T02:00:00.000Z",
+    );
+    await appendTaskReportActivity(
+      created.project.id,
+      "integrate",
+      {
+        taskId: task.id,
+        attemptId: "attempt_historical_decision",
+        outcome: "needs_input",
+        summary: "An earlier decision was requested",
+        question: "Keep the old branch?",
+      },
+      "development_thread",
+      "2026-08-03T03:00:00.000Z",
+    );
+    await appendTaskReportActivity(
+      created.project.id,
+      "integrate",
+      {
+        taskId: task.id,
+        attemptId: "attempt_historical_decision",
+        outcome: "completed",
+        summary: "The earlier decision was resolved",
+        mergedCommit: "merged_commit",
+      },
+      "development_thread",
+      "2026-08-03T04:00:00.000Z",
+    );
+    await appendTaskReportActivity(
+      created.project.id,
+      "develop",
+      {
+        taskId: task.id,
+        attemptId: "attempt_without_thread",
+        outcome: "blocked",
+        summary: "A historical activity has no source conversation",
+      },
+      undefined,
+      "2026-08-03T05:00:00.000Z",
+    );
+    await appendTaskReportActivity(
+      created.project.id,
+      "integrate",
+      {
+        taskId: task.id,
+        attemptId: "attempt_current_decision",
+        outcome: "needs_input",
+        summary: "The current decision needs a reply",
+        question: "Merge the compatibility layer?",
+      },
+      "development_thread",
+      "2026-08-03T06:00:00.000Z",
+    );
+    await store.saveTask(created.project.id, {
+      ...task,
+      status: "waiting_for_input",
+      requestedAction: "integrate",
+      currentExecution: {
+        attemptId: "attempt_current_decision",
+        action: "integrate",
+        status: "waiting_for_input",
+        threadId: "development_thread",
+        submittedActivityId: "activity_attempt_current_decision_needs_input",
+        startedAt: "2026-08-03T06:00:00.000Z",
+        modelRouting: testModelRouting(),
+      },
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/tasks/${task.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const detail = response.json();
+
+    expect(response.statusCode).toBe(200);
+    expect(detail.task.currentExecution).toMatchObject({
+      action: "integrate",
+      status: "waiting_for_input",
+      threadId: "development_thread",
+    });
+    expect(detail.activities.map(({ threadId }: { threadId?: string }) => threadId)).toEqual([
+      "development_thread",
+      "review_thread_1",
+      "review_thread_2",
+      "development_thread",
+      "development_thread",
+      undefined,
+      "development_thread",
+    ]);
+    expect(detail.currentDecisionRequest).toMatchObject({
+      id: "activity_attempt_current_decision_needs_input",
+      threadId: "development_thread",
+      evidence: { question: "Merge the compatibility layer?" },
+    });
+    expect(detail).not.toHaveProperty("conversations");
   });
 });

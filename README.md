@@ -98,7 +98,9 @@ Persistent task conversations stay attached to the product repository in Codex A
 
 Each task conversation runs one Codex turn at a time. Before development, rework, integration, recovery, or a report reminder continues an existing conversation, Codrive waits until that conversation is idle; an idle event resumes it immediately, with the minute recovery check as a fallback.
 
-The board links directly to development and review conversations. A paused project is labeled **Paused**, or **Running · future scheduling paused** while an already-started turn is still active. Task details show one immutable, chronological progress timeline: development, rework, review, integration, decision requests, blockers, failures, and cancellations all use the same record shape, with tests, findings, and Git facts kept as evidence on that record. Decision requests send you back to the relevant Codex App conversation; the board has no reply form or decision controls.
+Task details keep conversation navigation with the lifecycle fact it belongs to. The current execution appears at the top with its stage, status, and current Codex App conversation. Every persisted activity that has a source conversation links to that exact thread, so separate review rounds keep separate destinations. The active decision request is matched through the current execution's submitted activity and provides a direct reply action; resolved requests remain historical records. There is no reply form or temporary activity on the board.
+
+A paused project is labeled **Paused**, or **Running · future scheduling paused** while an already-started turn is still active. Task details show one immutable, chronological progress timeline: development, rework, review, integration, decision requests, blockers, failures, and cancellations all use the same record shape, with tests, findings, and Git facts kept as evidence on that record.
 
 ## Built-in Skills
 

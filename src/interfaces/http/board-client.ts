@@ -355,7 +355,7 @@ export function renderBoardClient(accessToken: string): string {
         host.innerHTML = "";
         return;
       }
-      const { task, activities, conversations } = taskDetail;
+      const { task, activities, currentDecisionRequest } = taskDetail;
       detail.setAttribute("aria-hidden", "false");
       const criteria = task.acceptanceCriteria.length
         ? '<ul class="criteria-list '+(task.status === "done" ? "complete" : "")+'">'+task.acceptanceCriteria.map(item => '<li><i>'+(task.status === "done" ? "✓" : "")+'</i><span>'+escapeHtml(item)+'</span></li>').join("")+'</ul>'
@@ -363,13 +363,15 @@ export function renderBoardClient(accessToken: string): string {
       const cancellation = task.status === "cancelled"
         ? '<div class="cancellation-card"><b>取消理由</b><p>'+escapeHtml(task.cancellation?.reason || "历史取消记录未保存理由。")+'</p>'+(task.cancellation ? '<small>'+escapeHtml(label(task.cancellation.decisionBasis))+' · '+escapeHtml(label(task.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(task.cancellation.cancelledAt))+'</small>' : '<small>该任务在取消理由成为必填项之前结束。</small>')+'</div>'
         : '';
+      const currentConversation = task.currentExecution
+        ? '<section class="current-conversation">'+
+            '<div class="current-conversation-copy"><span>当前对话</span><div><b>'+escapeHtml(label(task.currentExecution.action))+'</b><i aria-hidden="true">·</i><strong>'+escapeHtml(label(task.currentExecution.status))+'</strong></div></div>'+
+            (task.currentExecution.threadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(task.currentExecution.threadId)+'">'+(task.currentExecution.status === "waiting_for_input" ? "前往当前对话回复" : "打开当前对话")+' <span>↗</span></a>' : '')+
+          '</section>'
+        : '';
       const activityTimeline = activities.length
-        ? '<ol class="activity-timeline">'+activities.map(activityCard).join("")+'</ol>'
+        ? '<ol class="activity-timeline">'+activities.map((activity, index, all) => activityCard(activity, index, all, currentDecisionRequest?.id)).join("")+'</ol>'
         : '<div class="activity-empty"><b>尚无进展记录</b><span>节点完成汇报后会按时间出现在这里。</span></div>';
-      const links = [
-        conversations.developmentThreadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(conversations.developmentThreadId)+'"><span>任务对话</span><span>打开 ↗</span></a>' : '',
-        conversations.reviewThreadId ? '<a class="detail-link" href="codex://threads/'+escapeHtml(conversations.reviewThreadId)+'"><span>审查对话</span><span>打开 ↗</span></a>' : ''
-      ].filter(Boolean).join("");
       const controls = [
         task.status === "blocked" ? '<button class="action-button" data-retry>重试</button>' : ''
       ].filter(Boolean).join("");
@@ -379,10 +381,9 @@ export function renderBoardClient(accessToken: string): string {
           '<div class="detail-status"><span></span>'+escapeHtml(label(task.status))+'</div>'+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
-          (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+
+          (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+currentConversation+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+
-          (links ? '<section class="detail-section"><h3>Codex 对话</h3><div class="conversation-list">'+links+'</div></section>' : '')+
           '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.requestedAction || task.status))+'</dd>'+
             (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd><dt>容量重试</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+
             '<dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
@@ -410,8 +411,9 @@ export function renderBoardClient(accessToken: string): string {
       });
     }
 
-    function activityCard(activity, index, all) {
+    function activityCard(activity, index, all, currentDecisionActivityId) {
       const evidence = activity.evidence || {};
+      const isCurrentDecision = activity.id === currentDecisionActivityId;
       const rows = [
         ["工作树", evidence.workspacePath],
         ["基础提交", evidence.baseCommit],
@@ -420,7 +422,7 @@ export function renderBoardClient(accessToken: string): string {
         ["合入提交", evidence.mergedCommit]
       ].filter(([, value]) => value);
       const question = evidence.question
-        ? '<div class="activity-question"><b>需要决定</b><p>'+escapeHtml(evidence.question)+'</p><small>请在对应的 Codex App 对话中回复。</small></div>'
+        ? '<div class="activity-question '+(isCurrentDecision ? "current" : "historical")+'"><b>'+(isCurrentDecision ? "当前需要决定" : "历史决定请求")+'</b><p>'+escapeHtml(evidence.question)+'</p>'+(isCurrentDecision && activity.threadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(activity.threadId)+'">前往对应对话回复 <span>↗</span></a>' : '<small>'+(isCurrentDecision ? "当前执行未关联 Codex 对话。" : "此问题保留为历史活动。")+'</small>')+'</div>'
         : '';
       const findings = evidence.findings?.length
         ? '<div class="activity-evidence-block"><b>审查发现</b><ul>'+evidence.findings.map(finding => '<li>'+escapeHtml(finding)+'</li>').join("")+'</ul></div>'
@@ -432,7 +434,10 @@ export function renderBoardClient(accessToken: string): string {
         ? '<dl class="activity-git">'+rows.map(([name, value]) => '<dt>'+name+'</dt><dd><code>'+escapeHtml(value)+'</code></dd>').join("")+'</dl>'
         : '';
       const hasEvidence = question || findings || tests || git;
-      return '<li class="activity-item '+escapeHtml(activity.type)+'" '+(index === all.length - 1 ? 'data-latest-activity' : '')+'><span class="activity-node"></span><article class="activity-card"><header><b>'+escapeHtml(label(activity.type))+'</b><time>'+escapeHtml(formatTime(activity.occurredAt))+'</time></header><p class="activity-summary">'+escapeHtml(activity.summary)+'</p>'+(hasEvidence ? '<div class="activity-evidence">'+question+findings+tests+git+'</div>' : '')+'</article></li>';
+      const conversation = activity.threadId
+        ? '<a class="activity-conversation-link" data-activity-thread href="codex://threads/'+escapeHtml(activity.threadId)+'">打开对话 <span>↗</span></a>'
+        : '';
+      return '<li class="activity-item '+escapeHtml(activity.type)+'" '+(index === all.length - 1 ? 'data-latest-activity' : '')+'><span class="activity-node"></span><article class="activity-card"><header><b>'+escapeHtml(label(activity.type))+'</b><div class="activity-card-actions">'+conversation+'<time>'+escapeHtml(formatTime(activity.occurredAt))+'</time></div></header><p class="activity-summary">'+escapeHtml(activity.summary)+'</p>'+(hasEvidence ? '<div class="activity-evidence">'+question+findings+tests+git+'</div>' : '')+'</article></li>';
     }
 
     function closeDetail() {
