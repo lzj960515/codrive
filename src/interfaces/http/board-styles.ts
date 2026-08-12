@@ -278,12 +278,12 @@ export const boardStyles = `
     transition: opacity .18s ease;
   }
   .detail-open .task-detail { opacity: 1; pointer-events: auto; }
-  .task-detail-content { width: 420px; height: 100%; overflow-y: auto; }
+  .task-detail-content { width: 100%; max-width: 100%; height: 100%; overflow-x: hidden; overflow-y: auto; }
   .detail-head { position: sticky; z-index: 2; top: 0; display: flex; justify-content: space-between; align-items: center; height: 58px; padding: 0 20px; background: rgba(255,255,255,.93); border-bottom: 1px solid var(--line); backdrop-filter: blur(14px); }
   .detail-head strong { font-size: 12px; }
   .icon-button { display: grid; width: 32px; height: 32px; place-items: center; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: 18px; }
   .icon-button:hover { color: var(--ink); border-color: #aeb6af; }
-  .detail-body { padding: 22px 22px 42px; }
+  .detail-body { min-width: 0; max-width: 100%; padding: 22px 22px 42px; }
   .detail-status { display: flex; gap: 7px; align-items: center; margin-bottom: 11px; color: var(--signal); font: 900 10px/1 var(--condensed); letter-spacing: .1em; text-transform: uppercase; }
   .detail-status span { width: 8px; height: 8px; background: currentColor; border-radius: 50%; }
   .task-id-row { display: flex; gap: 8px; align-items: center; margin-bottom: 13px; }
@@ -294,7 +294,7 @@ export const boardStyles = `
   .detail-body h2 { margin: 0; font-size: 24px; line-height: 1.2; letter-spacing: -.035em; }
   .detail-description { margin: 13px 0 0; color: #56615b; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
   .detail-actions { display: flex; gap: 8px; margin-top: 19px; }
-  .detail-section { margin-top: 27px; padding-top: 22px; border-top: 1px solid var(--line); }
+  .detail-section { min-width: 0; max-width: 100%; margin-top: 27px; padding-top: 22px; border-top: 1px solid var(--line); }
   .detail-section h3 { display: flex; justify-content: space-between; margin: 0 0 13px; font: 900 10px/1 var(--condensed); letter-spacing: .12em; }
   .detail-section h3 span { color: #9aa19d; }
   .criteria-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
@@ -309,24 +309,24 @@ export const boardStyles = `
   .cancellation-card small, .cancellation-meta { display: block; margin-top: 9px; color: #9d655c; font-size: 10px; }
   .planning-notice.cancellation, .planning-panel.cancellation { color: #71342b; background: #fff0ed; border-color: #e9b8af; }
   .planning-notice.blocked, .planning-panel.blocked { color: #71342b; background: #fff0ed; border-color: #e9b8af; }
-  .activity-section { margin-left: -4px; margin-right: -4px; }
-  .activity-timeline { position: relative; display: grid; gap: 14px; margin: 0; padding: 2px 0 2px 24px; list-style: none; }
+  .activity-section { margin-inline: 0; }
+  .activity-timeline { position: relative; display: grid; min-width: 0; max-width: 100%; gap: 14px; margin: 0; padding: 2px 0 2px 24px; list-style: none; }
   .activity-timeline::before { content: ""; position: absolute; top: 5px; bottom: 5px; left: 7px; width: 1px; background: linear-gradient(#cfd6d1, #e3e7e3 90%, transparent); }
-  .activity-item { position: relative; animation: column-arrive .28s both; }
+  .activity-item { position: relative; min-width: 0; max-width: 100%; animation: column-arrive .28s both; }
   .activity-node { position: absolute; z-index: 1; top: 17px; left: -21px; width: 9px; height: 9px; background: #fff; border: 2px solid #9ca9a2; border-radius: 50%; box-shadow: 0 0 0 4px var(--surface); }
-  .activity-card { overflow: hidden; background: #fbfcf9; border: 1px solid #dfe4df; border-radius: 13px; box-shadow: 0 5px 16px rgba(25,39,33,.045); }
-  .activity-card header { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 11px 13px 9px; border-bottom: 1px solid #e7ebe7; }
+  .activity-card { min-width: 0; max-width: 100%; overflow: hidden; background: #fbfcf9; border: 1px solid #dfe4df; border-radius: 13px; box-shadow: 0 5px 16px rgba(25,39,33,.045); }
+  .activity-card header { display: flex; min-width: 0; justify-content: space-between; gap: 12px; align-items: center; padding: 11px 13px 9px; border-bottom: 1px solid #e7ebe7; }
   .activity-card header b { color: #44514b; font: 900 9px/1 var(--condensed); letter-spacing: .09em; text-transform: uppercase; }
-  .activity-card time { color: #929b96; font-size: 9px; }
-  .activity-summary { margin: 0; padding: 12px 13px 13px; color: #39463f; font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
-  .activity-evidence { display: grid; gap: 9px; padding: 0 13px 13px; }
+  .activity-card time { flex: none; color: #929b96; font-size: 9px; }
+  .activity-summary { min-width: 0; margin: 0; padding: 12px 13px 13px; overflow-wrap: anywhere; color: #39463f; font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
+  .activity-evidence { display: grid; min-width: 0; gap: 9px; padding: 0 13px 13px; }
   .activity-evidence-block, .activity-question { padding: 10px 11px; background: #f0f3ef; border-radius: 9px; }
   .activity-evidence-block b, .activity-question b { display: block; margin-bottom: 6px; color: #68736d; font: 900 8px/1 var(--condensed); letter-spacing: .1em; text-transform: uppercase; }
-  .activity-evidence-block p, .activity-question p { margin: 0; color: #445049; font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
+  .activity-evidence-block p, .activity-question p { margin: 0; overflow-wrap: anywhere; color: #445049; font-size: 10px; line-height: 1.6; white-space: pre-wrap; }
   .activity-evidence-block ul { display: grid; gap: 6px; margin: 0; padding-left: 16px; color: #554840; font-size: 10px; line-height: 1.55; }
   .activity-question { color: #6d4819; background: #fff3d5; border: 1px solid #ecd08f; }
   .activity-question small { display: block; margin-top: 7px; color: #8e6d3d; font-size: 9px; }
-  .activity-git { display: grid; grid-template-columns: 68px minmax(0,1fr); gap: 7px 9px; margin: 0; padding: 10px 11px; background: #eef3f0; border-radius: 9px; font-size: 9px; }
+  .activity-git { display: grid; min-width: 0; max-width: 100%; grid-template-columns: minmax(0,68px) minmax(0,1fr); gap: 7px 9px; margin: 0; padding: 10px 11px; background: #eef3f0; border-radius: 9px; font-size: 9px; }
   .activity-git dt { color: #7d8882; }
   .activity-git dd { min-width: 0; margin: 0; overflow: hidden; color: #34463e; text-overflow: ellipsis; white-space: nowrap; }
   .activity-git code { font: 600 9px/1.3 ui-monospace, "SFMono-Regular", monospace; }
@@ -351,7 +351,11 @@ export const boardStyles = `
   .page-kicker { margin-top: 24px; color: var(--signal); font: 900 10px/1 var(--condensed); letter-spacing: .17em; text-transform: uppercase; }
   .eyebrow-link { color: #51605a; font-size: 11px; font-weight: 800; text-decoration: none; }
   .eyebrow-link:hover { color: var(--signal); }
-  .settings-form { display: grid; max-width: 980px; margin: 0 auto; overflow: hidden; background: rgba(255,255,255,.92); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); animation: column-arrive .45s .06s both; }
+  .settings-screen { padding-top: clamp(24px, 3vw, 36px); }
+  .settings-header { display: grid; gap: 11px; max-width: 980px; margin: 0 auto 18px; animation: column-arrive .35s both; }
+  .settings-header h1 { margin: 0; font: 750 clamp(27px, 3vw, 36px)/1.1 var(--ui); letter-spacing: -.045em; }
+  .settings-header p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .settings-form { display: grid; max-width: 980px; margin: 0 auto; overflow: hidden; background: rgba(255,255,255,.92); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 20px rgba(18,31,26,.04); animation: column-arrive .45s .06s both; }
   .setting-field { display: grid; grid-template-columns: minmax(260px,1fr) minmax(240px,360px); gap: 28px; align-items: center; padding: 24px 28px; border-bottom: 1px solid var(--line); }
   .setting-field b, .setting-field small { display: block; }
   .setting-field b { margin-bottom: 6px; font-size: 14px; }

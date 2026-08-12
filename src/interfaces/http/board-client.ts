@@ -257,15 +257,15 @@ export function renderBoardClient(accessToken: string): string {
       if (!systemSettings) return;
       const { settings, availableModels } = systemSettings;
       const options = selected => availableModels.map(model =>
-        '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+' · '+escapeHtml(model.id)+'</option>'
+        '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
       ).join("");
       host.innerHTML =
         '<div class="page-screen settings-screen">'+
-          '<header class="page-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Runtime controls</div><h1>运行设置</h1><p>这些设置立即作用于后续调度；正在运行的 turn 会使用启动时已经保存的模型。</p></header>'+
-          '<form id="settings-form" class="settings-form">'+
+          '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数和模型路由。</p></div></header>'+
+          '<form id="settings-form" class="settings-form settings-panel">'+
             '<label class="setting-field"><span><b>每个项目的并发任务数</b><small>每个项目独立计算容量，不同项目互不占用槽位。</small></span><input name="maxConcurrentTasks" type="number" min="1" max="32" required value="'+settings.maxConcurrentTasks+'"></label>'+
             '<label class="setting-field"><span><b>默认模型</b><small>新任务、审查、合入与项目规划优先使用这个模型。</small></span><select name="primary">'+options(settings.models.primary)+'</select></label>'+
-            '<label class="setting-field"><span><b>Fallback 模型</b><small>默认模型容量重试三次后，在同一任务对话中切换到这里。</small></span><select name="fallback">'+options(settings.models.fallback)+'</select></label>'+
+            '<label class="setting-field"><span><b>备用模型</b><small>默认模型容量重试三次后，在同一任务对话中切换到这里。</small></span><select name="fallback">'+options(settings.models.fallback)+'</select></label>'+
             '<div class="settings-actions"><button class="primary-button" type="submit">保存并应用</button><span id="settings-status" role="status"></span></div>'+
           '</form>'+
         '</div>';
@@ -387,7 +387,7 @@ export function renderBoardClient(accessToken: string): string {
             (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd><dt>容量重试</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+
             '<dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
         '</div>';
-      host.querySelector("[data-latest-activity]")?.scrollIntoView({ block: "end" });
+      host.querySelector("[data-latest-activity]")?.scrollIntoView({ block: "end", inline: "nearest" });
       document.getElementById("close-detail").onclick = closeDetail;
       const copyTaskId = host.querySelector("[data-copy-task-id]");
       copyTaskId?.addEventListener("click", async () => {

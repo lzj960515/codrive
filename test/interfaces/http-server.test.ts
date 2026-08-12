@@ -278,7 +278,13 @@ describe("HTTP API", () => {
     expect(page.body).toContain("运行设置");
     expect(page.body).toContain("每个项目的并发任务数");
     expect(page.body).toContain("默认模型");
-    expect(page.body).toContain("Fallback 模型");
+    expect(page.body).toContain("备用模型");
+    expect(page.body).toContain(
+      "'+escapeHtml(model.displayName)+'</option>'",
+    );
+    expect(page.body).not.toContain(
+      "'+escapeHtml(model.displayName)+' · '+escapeHtml(model.id)+'</option>'",
+    );
     const clientScript = page.body.match(/<script>([\s\S]+)<\/script>/)?.[1];
     expect(clientScript).toBeDefined();
     expect(() => new Function(clientScript!)).not.toThrow();
@@ -1040,6 +1046,16 @@ describe("HTTP API", () => {
     expect(page.body).toContain("验收标准");
     expect(page.body).toContain("进展记录");
     expect(page.body).toContain("请求决定");
+    expect(page.body).toContain('class="settings-header"');
+    expect(page.body).not.toContain("Runtime controls");
+    expect(page.body).not.toContain("本机运行时");
+    expect(page.body).toContain(
+      ".task-detail-content { width: 100%; max-width: 100%;",
+    );
+    expect(page.body).toContain("overflow-x: hidden; overflow-y: auto;");
+    expect(page.body).toContain(
+      'scrollIntoView({ block: "end", inline: "nearest" })',
+    );
     expect(page.body).not.toContain("最新进展");
     expect(page.body).not.toContain("当前进展");
     expect(page.body).toContain("selectedTaskId");
