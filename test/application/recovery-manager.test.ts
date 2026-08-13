@@ -366,6 +366,24 @@ describe("RecoveryManager", () => {
       }),
       new StubNotifications(),
     );
+    type RetryScheduler = {
+      scheduleRetryWakeup(now?: Date): Promise<void>;
+    };
+    const retryScheduler = restartedRecovery as unknown as RetryScheduler;
+    const scheduleRetryWakeup =
+      retryScheduler.scheduleRetryWakeup.bind(retryScheduler);
+    let completedSchedules = 0;
+    let resolveNextSegmentScheduled!: () => void;
+    const nextSegmentScheduled = new Promise<void>((resolve) => {
+      resolveNextSegmentScheduled = resolve;
+    });
+    const scheduleRetryWakeupSpy = vi
+      .spyOn(retryScheduler, "scheduleRetryWakeup")
+      .mockImplementation(async (now?: Date) => {
+        await scheduleRetryWakeup(now);
+        completedSchedules += 1;
+        if (completedSchedules === 2) resolveNextSegmentScheduled();
+      });
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     try {
@@ -376,10 +394,12 @@ describe("RecoveryManager", () => {
         2_147_483_647,
       );
       await vi.advanceTimersByTimeAsync(2_147_483_647);
+      await nextSegmentScheduled;
       expect(dispatcher.scheduledResumes).toHaveLength(0);
       expect(vi.getTimerCount()).toBe(2);
     } finally {
       restartedRecovery.stop();
+      scheduleRetryWakeupSpy.mockRestore();
       setTimeoutSpy.mockRestore();
       vi.useRealTimers();
     }
