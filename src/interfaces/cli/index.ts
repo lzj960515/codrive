@@ -9,6 +9,10 @@ import { ConfigStore } from "../../infrastructure/config-store.js";
 import { LocalServiceManager } from "../../infrastructure/local-service-manager.js";
 import { NpmPackageUpgrader } from "../../infrastructure/npm-package-upgrader.js";
 import { readPackageVersion } from "../../infrastructure/package-metadata.js";
+import {
+  MINIMUM_NODE_MAJOR,
+  supportsNodeVersion,
+} from "../../infrastructure/runtime-requirements.js";
 import { SkillInstaller } from "../../infrastructure/skill-installer.js";
 
 const [command = "start", ...args] = process.argv.slice(2);
@@ -140,7 +144,6 @@ async function status(): Promise<void> {
 }
 
 async function doctor(): Promise<void> {
-  const major = Number.parseInt(process.versions.node.split(".")[0]!, 10);
   const require = createRequire(import.meta.url);
   const script = require.resolve("@openai/codex/bin/codex.js");
   const codex = spawnSync(process.execPath, [script, "--version"], { encoding: "utf8" });
@@ -148,7 +151,11 @@ async function doctor(): Promise<void> {
     encoding: "utf8",
   });
   const checks = [
-    { name: "Node.js 20+", ok: major >= 20, detail: process.version },
+    {
+      name: `Node.js ${MINIMUM_NODE_MAJOR}+`,
+      ok: supportsNodeVersion(process.versions.node),
+      detail: process.version,
+    },
     {
       name: "Codex executable",
       ok: codex.status === 0,

@@ -1,7 +1,7 @@
 ---
 name: codrive-work
 description: 为已有 Codrive 项目增加需求、里程碑或后续任务，并在用户确认后更新产品文档和任务计划。用户要求给现有产品加功能、追加工作或开启下一阶段时使用。
-compatibility: Requires Node.js 20+ and a running local Codrive service.
+compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
 # Codrive Work

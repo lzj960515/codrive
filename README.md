@@ -37,7 +37,7 @@ Codrive is not another model or coding agent. It gives the regular Codex agent a
 
 ## Quick start
 
-You need Node.js 20 or newer, Git, and a Codex login available in `~/.codex`.
+You need Node.js 24 or newer, Git, and a Codex login available in `~/.codex`.
 
 Install Codrive as a global command for the active Node.js version, then start
 the background service:
@@ -140,7 +140,7 @@ Only register repositories and product instructions you trust. Codrive does not 
 
 ## Development
 
-Codrive uses Node.js 24 and pnpm 11.5.1 for development while keeping the published package compatible with Node.js 20 and newer.
+Codrive uses Node.js 24 or newer and pnpm 11.5.1 for development and runtime.
 
 ```bash
 corepack enable

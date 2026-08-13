@@ -1,7 +1,7 @@
 ---
 name: codrive-forge
 description: 在用户当前打开的产品目录中，把新的产品或游戏想法整理为 Codrive 产品目标和初始任务，并在确认后注册和启动自动开发。用户在项目目录里描述产品想法、要求用 Codrive 推进当前项目或创建初始计划时使用。
-compatibility: Requires Node.js 20+ and a running local Codrive service.
+compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
 # Codrive Forge

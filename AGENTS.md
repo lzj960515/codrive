@@ -32,4 +32,4 @@ pnpm build
 pnpm dev
 ```
 
-Use Node.js 24 for development. Keep the published package compatible with Node.js 20 or newer.
+Use Node.js 24 for development and runtime. Keep the published package, CI, documentation, CLI diagnostics, and bundled Skills aligned with this baseline.

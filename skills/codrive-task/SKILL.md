@@ -1,7 +1,7 @@
 ---
 name: codrive-task
 description: 读取并执行 Codrive 的项目任务选择或看板任务当前阶段，包括开发、返工、独立审查、同步合入和结果汇报。用户或 Codrive 要求选择、领取、处理、审查、继续、验收或汇报 Codrive 工作时使用。
-compatibility: Requires Node.js 20+, Git, and a running local Codrive service.
+compatibility: Requires Node.js 24+, Git, and a running local Codrive service.
 ---
 
 # Codrive Task

@@ -37,7 +37,7 @@ Codrive 不是另一个大模型，也没有重新实现编码智能体。它只
 
 ## 快速开始
 
-你需要 Node.js 20 或更高版本、Git，以及 `~/.codex` 中可用的 Codex 登录状态。
+你需要 Node.js 24 或更高版本、Git，以及 `~/.codex` 中可用的 Codex 登录状态。
 
 先把 Codrive 安装为当前 Node.js 版本下的全局命令，然后启动后台服务：
 
@@ -138,7 +138,7 @@ Codrive 的 HTTP API 只监听 `127.0.0.1`，本地 API 请求使用随机访问
 
 ## 参与开发
 
-Codrive 使用 Node.js 24 和 pnpm 11.5.1 进行开发，发布包兼容 Node.js 20 及以上版本。
+Codrive 使用 Node.js 24 或更高版本和 pnpm 11.5.1 进行开发与运行。
 
 ```bash
 corepack enable

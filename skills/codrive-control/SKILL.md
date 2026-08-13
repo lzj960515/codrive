@@ -1,7 +1,7 @@
 ---
 name: codrive-control
 description: 查询和控制本地 Codrive 项目、任务与运行设置，包括产品详情、看板状态、暂停、恢复、取消、重试、重新规划、模型路由和补充上下文。用户询问 Codrive 进度、阻塞原因、模型容量恢复或要求干预自动流程时使用。
-compatibility: Requires Node.js 20+ and a running local Codrive service.
+compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
 # Codrive Control
