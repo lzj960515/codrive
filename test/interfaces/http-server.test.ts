@@ -26,6 +26,7 @@ import {
 describe("HTTP API", () => {
   let store: ProjectStore;
   let engine: WorkflowEngine;
+  let taskDispatcher: RecordingTaskDispatcher;
   let server: ReturnType<typeof createHttpServer>;
   let skillInstaller: SkillInstaller;
   let settingsService: SystemSettingsService;
@@ -36,9 +37,10 @@ describe("HTTP API", () => {
     const configStore = new ConfigStore(stateDirectory);
     await configStore.loadOrCreate();
     store = new ProjectStore(stateDirectory);
+    taskDispatcher = new RecordingTaskDispatcher();
     engine = new WorkflowEngine(
       store,
-      new RecordingTaskDispatcher(),
+      taskDispatcher,
       { maxConcurrentTasks: 2, models: testModels },
       new RecordingProjectExecutor(),
     );
@@ -759,6 +761,83 @@ describe("HTTP API", () => {
     expect(continued.json().currentExecution).toMatchObject({
       attemptId: execution.attemptId,
       status: "running",
+    });
+  });
+
+  it("projects a failed planned resume as an ordinary retryable blocker", async () => {
+    const created = await registerProject();
+    const task = created.tasks[0]!;
+    const execution = {
+      attemptId: "attempt_scheduled_failure",
+      action: "develop" as const,
+      status: "running" as const,
+      startedAt: new Date().toISOString(),
+      threadId: "thread_scheduled_failure",
+      turnId: "turn_scheduled_failure",
+      modelRouting: testModelRouting(),
+    };
+    await store.saveTask(created.project.id, {
+      ...task,
+      status: "developing",
+      requestedAction: "develop",
+      currentExecution: execution,
+    });
+    const resumeAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    await engine.submitReport({
+      taskId: task.id,
+      attemptId: execution.attemptId,
+      outcome: "blocked",
+      summary: "Wait for the remote build",
+      resumeAt,
+      resumePrompt: "Inspect the remote build and continue.",
+    });
+    await engine.completeTurn(task.id, execution.attemptId, execution.turnId);
+    taskDispatcher.beforeResumeScheduledTurn = async () => {
+      throw new Error("Codex scheduled turn failed to start");
+    };
+
+    const continued = await command({
+      type: "task.control",
+      payload: { taskId: task.id, action: "continue" },
+    });
+    const detail = await server.inject({
+      method: "GET",
+      url: `/api/tasks/${task.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const board = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+
+    expect(continued.statusCode).toBe(200);
+    expect(continued.json()).toMatchObject({
+      status: "blocked",
+      currentExecution: { status: "failed" },
+    });
+    expect(continued.json().currentExecution).not.toHaveProperty("scheduledResume");
+    expect(detail.json()).toMatchObject({
+      task: {
+        status: "blocked",
+        executionStatus: "failed",
+        currentExecution: { status: "failed", scheduledResume: null },
+      },
+    });
+    expect(board.json()[0].tasks[0]).toMatchObject({
+      status: "blocked",
+      executionStatus: "failed",
+      scheduledResume: null,
+    });
+
+    const retried = await command({
+      type: "task.control",
+      payload: { taskId: task.id, action: "retry" },
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json()).toMatchObject({
+      status: "developing",
+      currentExecution: { status: "running" },
     });
   });
 

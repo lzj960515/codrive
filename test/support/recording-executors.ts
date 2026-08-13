@@ -30,6 +30,11 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
   readonly interrupted: DispatchRequest[] = [];
   beforeStartTurn?: (request: DispatchRequest, threadId: string) => Promise<void>;
   beforeResumeThread?: (request: DispatchRequest, threadId: string) => Promise<void>;
+  beforeResumeScheduledTurn?: (
+    request: DispatchRequest,
+    threadId: string,
+    resumePrompt: string,
+  ) => Promise<void>;
   conversationActive = false;
 
   async openThread(request: DispatchRequest): Promise<string> {
@@ -78,6 +83,7 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
     resumePrompt: string,
   ): Promise<TurnDispatchResult> {
     if (this.conversationActive) return { status: "conversation_active" };
+    await this.beforeResumeScheduledTurn?.(request, threadId, resumePrompt);
     this.scheduledResumes.push({
       ...request,
       threadId,

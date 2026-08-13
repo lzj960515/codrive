@@ -1419,6 +1419,134 @@ describe("WorkflowEngine", () => {
     ]);
   });
 
+  it("clears a planned resume when its turn cannot be dispatched", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+
+    await workflow.submitReport({
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "blocked",
+      summary: "Wait for the remote build",
+      resumeAt: "2026-08-03T01:00:00.000Z",
+      resumePrompt: "Inspect the remote build and continue.",
+    });
+    await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+    taskDispatcher.beforeResumeScheduledTurn = async () => {
+      throw new Error("Codex scheduled turn failed to start");
+    };
+
+    now = new Date("2026-08-03T01:00:00.000Z");
+    await workflow.resumeScheduledTasks(now);
+
+    const failed = (await store.findTask(taskId))!.task;
+    expect(failed).toMatchObject({
+      status: "blocked",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: execution.attemptId,
+        status: "failed",
+      },
+    });
+    expect(failed.currentExecution).not.toHaveProperty("scheduledResume");
+  });
+
+  it("uses an expired fallback cooldown for a scheduled primary probe", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+
+    await workflow.submitReport({
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "blocked",
+      summary: "Wait beyond the primary cooldown",
+      resumeAt: "2026-08-03T01:00:00.000Z",
+      resumePrompt: "Recheck the blocker and continue.",
+    });
+    await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+    const waiting = (await store.findTask(taskId))!.task;
+    await store.saveTask(created.project.id, {
+      ...waiting,
+      currentExecution: {
+        ...waiting.currentExecution!,
+        modelRouting: {
+          model: models.fallback,
+          route: "fallback",
+          retryCount: 2,
+          circuitBreaker: {
+            state: "open",
+            primaryProbeAt: "2026-08-03T00:30:00.000Z",
+          },
+        },
+      },
+    });
+    taskDispatcher.beforeResumeScheduledTurn = async (request) => {
+      expect(request.task.currentExecution?.modelRouting).toMatchObject({
+        model: models.primary,
+        route: "primary",
+        circuitBreaker: { state: "half_open", fallbackRetryCount: 2 },
+      });
+      expect(
+        (await store.findTask(taskId))!.task.currentExecution?.modelRouting,
+      ).toEqual(request.task.currentExecution?.modelRouting);
+    };
+
+    now = new Date("2026-08-03T01:00:00.000Z");
+    await workflow.resumeScheduledTasks(now);
+
+    const probe = (await store.findTask(taskId))!.task.currentExecution!;
+    expect(probe).toMatchObject({
+      attemptId: execution.attemptId,
+      status: "running",
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 0,
+        circuitBreaker: {
+          state: "half_open",
+          fallbackRetryCount: 2,
+          probeStartedAt: now.toISOString(),
+        },
+      },
+    });
+    expect(taskDispatcher.scheduledResumes.at(-1)?.model).toBe(models.primary);
+
+    await workflow.failTurn(
+      taskId,
+      probe.attemptId,
+      capacityFailure(probe.turnId!),
+    );
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      status: "running",
+      modelRouting: {
+        model: models.fallback,
+        route: "fallback",
+        retryCount: 2,
+        circuitBreaker: {
+          state: "open",
+          primaryProbeAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
+        },
+      },
+    });
+    expect(taskDispatcher.started.at(-1)?.model).toBe(models.fallback);
+  });
+
   it("keeps a due planned blocker paused and resumes it after the project continues", async () => {
     const created = await registerProject(1);
     await finishProjectExecution({
@@ -1535,6 +1663,9 @@ describe("WorkflowEngine", () => {
     expect((await store.findTask(created.tasks[0]!.id))!.task.status).toBe(
       "cancelled",
     );
+    expect(
+      (await store.findTask(created.tasks[0]!.id))!.task.currentExecution,
+    ).not.toHaveProperty("scheduledResume");
     expect(taskDispatcher.scheduledResumes).toHaveLength(0);
 
     now = new Date("2026-08-03T00:10:00.000Z");

@@ -1291,27 +1291,33 @@ export class WorkflowEngine {
     project: Project,
     task: Task,
   ): Promise<Task> {
-    const execution = task.currentExecution!;
-    const schedule = execution.scheduledResume!;
-    if (!execution.threadId) {
+    const waitingExecution = task.currentExecution!;
+    const schedule = waitingExecution.scheduledResume!;
+    if (!waitingExecution.threadId) {
       return this.blockTaskAfterRecoveryFailure(
         project,
         task,
         "计划恢复缺少可继续的原任务对话。",
       );
     }
+    const threadId = waitingExecution.threadId;
 
     try {
-      const request = await this.taskDispatchRequest(project, task);
-      await this.dispatcher.resumeThread(request, execution.threadId);
+      const taskForTurn = this.prepareTaskForTurn(task);
+      const execution = taskForTurn.currentExecution!;
+      if (taskForTurn !== task) {
+        await this.store.saveTask(project.id, taskForTurn);
+      }
+      const request = await this.taskDispatchRequest(project, taskForTurn);
+      await this.dispatcher.resumeThread(request, threadId);
       const dispatch = await this.dispatcher.resumeScheduledTurn(
         request,
-        execution.threadId,
+        threadId,
         schedule.resumePrompt,
       );
       if (dispatch.status === "conversation_active") {
         const deferred: Task = {
-          ...task,
+          ...taskForTurn,
           currentExecution: {
             ...execution,
             scheduledResume: { ...schedule, wakeAttemptedAt: this.now() },
@@ -1324,7 +1330,7 @@ export class WorkflowEngine {
           projectId: project.id,
           taskId: task.id,
           attemptId: execution.attemptId,
-          threadId: execution.threadId,
+          threadId,
           decision: "wait_for_conversation_idle",
           before: taskLifecycleState(task),
           after: taskLifecycleState(deferred),
@@ -1334,18 +1340,17 @@ export class WorkflowEngine {
 
       const turnStartedAt = this.now();
       const running: Task = {
-        ...task,
+        ...taskForTurn,
         status: statusForTaskAction(execution.action),
-        currentExecution: {
+        currentExecution: executionWithoutScheduledResume({
           ...execution,
           status: "running",
           turnId: dispatch.turnId,
           turnStartedAt,
           leaseExpiresAt: this.leaseExpiration(),
-        },
+        }),
         updatedAt: turnStartedAt,
       };
-      delete running.currentExecution?.scheduledResume;
       delete running.currentExecution?.submittedActivityId;
       delete running.currentExecution?.turnCompletedAt;
       delete running.currentExecution?.finishedAt;
@@ -1355,7 +1360,7 @@ export class WorkflowEngine {
         projectId: project.id,
         taskId: task.id,
         attemptId: execution.attemptId,
-        threadId: execution.threadId,
+        threadId,
         turnId: dispatch.turnId,
         before: taskLifecycleState(task),
         after: taskLifecycleState(running),
@@ -1646,20 +1651,7 @@ export class WorkflowEngine {
     recovery?: { resumePersistedThread: true; recoveredTurnId?: string },
   ): Promise<Task> {
     const execution = task.currentExecution!;
-    const modelRouting = prepareModelRoutingForTurn(
-      execution.modelRouting,
-      this.models,
-      new Date(this.now()),
-      this.modelPrimaryProbeAfterMs,
-    );
-    const taskForTurn =
-      modelRouting === execution.modelRouting
-        ? task
-        : {
-            ...task,
-            currentExecution: { ...execution, modelRouting },
-            updatedAt: this.now(),
-          };
+    const taskForTurn = this.prepareTaskForTurn(task);
     const request = await this.taskDispatchRequest(project, taskForTurn);
     const { activity } = request;
     try {
@@ -1786,20 +1778,7 @@ export class WorkflowEngine {
   ): Promise<Task> {
     const execution = task.currentExecution!;
     try {
-      const modelRouting = prepareModelRoutingForTurn(
-        execution.modelRouting,
-        this.models,
-        new Date(this.now()),
-        this.modelPrimaryProbeAfterMs,
-      );
-      const taskForTurn =
-        modelRouting === execution.modelRouting
-          ? task
-          : {
-              ...task,
-              currentExecution: { ...execution, modelRouting },
-              updatedAt: this.now(),
-            };
+      const taskForTurn = this.prepareTaskForTurn(task);
       const request = await this.taskDispatchRequest(project, taskForTurn);
       if (recovery?.resumePersistedThread) {
         await this.dispatcher.resumeThread(request, execution.threadId!);
@@ -2092,11 +2071,11 @@ export class WorkflowEngine {
     const blocked: Task = {
       ...task,
       status: "blocked",
-      currentExecution: {
+      currentExecution: executionWithoutScheduledResume({
         ...task.currentExecution!,
         status: "failed",
         finishedAt: now,
-      },
+      }),
       updatedAt: now,
     };
     await this.store.saveTask(project.id, blocked);
@@ -2127,11 +2106,11 @@ export class WorkflowEngine {
     const restartable: Task = execution
       ? {
           ...current,
-          currentExecution: {
+          currentExecution: executionWithoutScheduledResume({
             ...execution,
             status: "interrupted",
             finishedAt: this.now(),
-          },
+          }),
         }
       : current;
     const dispatched = await this.dispatchTask(project, restartable, current);
@@ -2156,11 +2135,11 @@ export class WorkflowEngine {
       cancellation,
       ...(execution
         ? {
-            currentExecution: {
+            currentExecution: executionWithoutScheduledResume({
               ...execution,
               status: "interrupted" as const,
               finishedAt: now,
-            },
+            }),
           }
         : {}),
       updatedAt: cancellation.cancelledAt,
@@ -2219,6 +2198,24 @@ export class WorkflowEngine {
         await this.store.listTaskActivities(project.id, task.id),
       ),
     };
+  }
+
+  private prepareTaskForTurn(task: Task): Task {
+    const execution = task.currentExecution!;
+    const now = this.now();
+    const modelRouting = prepareModelRoutingForTurn(
+      execution.modelRouting,
+      this.models,
+      new Date(now),
+      this.modelPrimaryProbeAfterMs,
+    );
+    return modelRouting === execution.modelRouting
+      ? task
+      : {
+          ...task,
+          currentExecution: { ...execution, modelRouting },
+          updatedAt: now,
+        };
   }
 
   private async recordTaskLifecycleActivity(
@@ -2637,6 +2634,13 @@ function resetScheduledWakeAttempt(
 ) {
   const { wakeAttemptedAt: _wakeAttemptedAt, ...waiting } = schedule;
   return { ...waiting, resumeAt };
+}
+
+function executionWithoutScheduledResume(
+  execution: NonNullable<Task["currentExecution"]>,
+): NonNullable<Task["currentExecution"]> {
+  const { scheduledResume: _scheduledResume, ...withoutSchedule } = execution;
+  return withoutSchedule;
 }
 
 function commandResultTarget(result: unknown): {
