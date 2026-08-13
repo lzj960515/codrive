@@ -54,9 +54,9 @@ command can install the global command, upgrade, and restart the service:
 npx codrive@latest upgrade
 ```
 
-Codrive prints the local board URL and log file location. Open it in your browser and follow the first-run prompt:
+Codrive prints the local board URL and log file location. Open it in your browser and use the **Codrive update** window in the lower-left corner:
 
-1. Click **Install Skills** to add the four bundled Codrive Skills to your local agent library.
+1. Click **Complete managed Skills** to add the four bundled Codrive Skills to your local agent library.
 2. Open an existing project directory in Codex App, or create and open a new one when starting from scratch.
 3. Describe the product work naturally, for example:
 
@@ -64,7 +64,15 @@ Codrive prints the local board URL and log file location. Open it in your browse
 Use Codrive to add a leaderboard to this project, then start development after I confirm the plan.
 ```
 
-Choosing **Later** keeps a small Skills setup button in the lower-left corner of the board. When a future Codrive release changes its bundled Skills, the board offers the update again.
+The same window shows the running version, npm's latest stable version, the complete check time in your browser's local time zone, and all four managed Skills. It reads a cached result on page load and only waits for npm when you explicitly check again, so an npm timeout or offline connection never blocks the board or task scheduling.
+
+When a stable release is available, one confirmation fixes that target version and starts an independent local update process. The window keeps one continuous progress record while npm installs the exact package, the new CLI restarts the same `CODEDRIVE_HOME`, and the bundled Skills are synchronized. A short disconnect during restart is expected; the page reconnects automatically. Codrive reports success only after `/api/health` returns the target version and all four managed Skills match that release. Missing Skills from a first install or interrupted historical update can be completed in the same window. An unmanaged local Skill with the same name is never overwritten; the window shows its path so you can move it first.
+
+If an update cannot finish, the window preserves an actionable failure and offers a retry. The manual fallback uses the same update core:
+
+```bash
+codrive upgrade
+```
 
 The board includes a **Runtime settings** page for the per-project concurrency limit, primary model, and fallback model. Each product title opens a detail page with its registered repository, complete `PROJECT.md`, minimal planning state, product context, task list, and current execution information.
 
@@ -125,10 +133,10 @@ Codex classifies each cancellation before executing it. When cancellation depend
 codrive                         Start Codrive and the local board in the background
 codrive restart                 Restart Codrive
 codrive stop                    Stop Codrive
-codrive upgrade                 Install the latest global release and restart with it
+codrive upgrade                 Update Codrive and managed Skills, then verify health
 codrive status                  Show local service status
 codrive doctor                  Check Node.js, Codex, and login readiness
-codrive setup                   Install Skills without using the Web prompt
+codrive setup                   Complete managed Skills without using the Web window
 codrive serve                   Run in the foreground for development or supervision
 ```
 

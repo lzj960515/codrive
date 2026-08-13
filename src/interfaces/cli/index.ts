@@ -2,18 +2,31 @@
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CodriveServer } from "../../codrive-server.js";
+import { SystemUpgradeRunner } from "../../application/system-upgrade-runner.js";
+import {
+  UpgradeCoordinator,
+  type UpgradeRequest,
+} from "../../application/upgrade-coordinator.js";
 import { ConfigStore } from "../../infrastructure/config-store.js";
 import { LocalServiceManager } from "../../infrastructure/local-service-manager.js";
 import { NpmPackageUpgrader } from "../../infrastructure/npm-package-upgrader.js";
+import { PackageVersionService } from "../../infrastructure/package-version-service.js";
 import { readPackageVersion } from "../../infrastructure/package-metadata.js";
 import {
   MINIMUM_NODE_MAJOR,
   supportsNodeVersion,
 } from "../../infrastructure/runtime-requirements.js";
 import { SkillInstaller } from "../../infrastructure/skill-installer.js";
+import { UpgradeStateStore } from "../../infrastructure/upgrade-state-store.js";
+import type {
+  PackageVersionStatus,
+  UpgradeState,
+} from "../../domain/system-update.js";
 
 const [command = "start", ...args] = process.argv.slice(2);
 
@@ -32,7 +45,10 @@ try {
       await restartService();
       break;
     case "upgrade":
-      upgrade();
+      await upgrade();
+      break;
+    case "_upgrade-worker":
+      await runDetachedUpgradeWorker(args);
       break;
     case "setup":
       await setup();
@@ -91,10 +107,226 @@ async function restartService(): Promise<void> {
   process.stdout.write(`Codrive restarted at ${result.url}\n`);
 }
 
-function upgrade(): void {
-  process.stdout.write("Installing the latest Codrive release...\n");
-  new NpmPackageUpgrader().upgrade();
-  process.stdout.write("Codrive was upgraded and restarted.\n");
+async function upgrade(): Promise<void> {
+  const configStore = new ConfigStore();
+  const config = await configStore.loadOrCreate();
+  const service = localService();
+  const serviceStatus = await service.status();
+  if (serviceStatus.state !== "stopped") {
+    const running = await service.start();
+    if (await supportsUnifiedUpdateApi(running.url, config.accessToken)) {
+      await upgradeThroughRunningService(config, running.url);
+      return;
+    }
+    process.stdout.write(
+      "The running Codrive predates unified updates; continuing with the compatible local updater.\n",
+    );
+  }
+
+  const currentVersion = await readPackageVersion();
+  const versions = new PackageVersionService({
+    currentVersion,
+    stateDirectory: config.stateDirectory,
+  });
+  process.stdout.write("Checking the latest stable Codrive release...\n");
+  const checked = await versions.refresh({ force: true });
+  if (checked.checkError || !checked.latestVersion) {
+    throw new Error(checked.checkError?.summary ?? "npm did not return a version");
+  }
+  if (!checked.updateAvailable) {
+    process.stdout.write(`Codrive ${currentVersion} is already current.\n`);
+    await new SkillInstaller().install();
+    process.stdout.write("Managed Codrive Skills are synchronized.\n");
+    return;
+  }
+
+  const store = new UpgradeStateStore(config.stateDirectory);
+  const coordinator = new UpgradeCoordinator({
+    store,
+    versions,
+    launcher: { launch: async () => process.pid },
+    stateDirectory: config.stateDirectory,
+  });
+  const operation = await coordinator.start(checked.latestVersion);
+  if (operation.workerPid !== process.pid) {
+    throw new Error(
+      `Codrive is already updating to ${operation.targetVersion} in process ${operation.workerPid ?? "unknown"}`,
+    );
+  }
+  const request: UpgradeRequest = {
+    operationId: operation.operationId,
+    targetVersion: operation.targetVersion,
+    stateDirectory: config.stateDirectory,
+  };
+  process.stdout.write(`Updating Codrive to ${request.targetVersion}...\n`);
+  await createUpgradeRunner(store).run(request);
+  process.stdout.write(
+    `Codrive ${request.targetVersion} and its managed Skills are ready.\n`,
+  );
+}
+
+async function supportsUnifiedUpdateApi(
+  serviceUrl: string,
+  accessToken: string,
+): Promise<boolean> {
+  const response = await fetch(`${serviceUrl}/api/system`, {
+    headers: { "x-codrive-token": accessToken },
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const system = (await response.json()) as { version?: unknown };
+  return typeof system.version === "object" && system.version !== null;
+}
+
+async function upgradeThroughRunningService(
+  config: Awaited<ReturnType<ConfigStore["read"]>>,
+  serviceUrl: string,
+): Promise<void> {
+  process.stdout.write("Checking the latest stable Codrive release...\n");
+  const checked = await sendSystemCommand(serviceUrl, config.accessToken, {
+    type: "system.check_for_updates",
+    payload: {},
+  });
+  if (checked.version.checkError || !checked.version.latestVersion) {
+    throw new Error(
+      checked.version.checkError?.summary ?? "npm did not return a version",
+    );
+  }
+  if (!checked.version.updateAvailable) {
+    process.stdout.write(
+      `Codrive ${checked.version.currentVersion} is already current.\n`,
+    );
+    await sendSystemCommand(serviceUrl, config.accessToken, {
+      type: "system.install_skills",
+      payload: {},
+    });
+    process.stdout.write("Managed Codrive Skills are synchronized.\n");
+    return;
+  }
+
+  const accepted = await sendSystemCommand(serviceUrl, config.accessToken, {
+    type: "system.start_upgrade",
+    payload: { targetVersion: checked.version.latestVersion },
+  });
+  if (!accepted.upgrade) throw new Error("Codrive did not accept the update");
+  process.stdout.write(`Updating Codrive to ${accepted.upgrade.targetVersion}...\n`);
+  const completed = await waitForUpgradeCompletion(
+    new UpgradeStateStore(config.stateDirectory),
+    accepted.upgrade.operationId,
+  );
+  if (completed.phase === "failed") {
+    throw new Error(completed.error?.summary ?? "Codrive update failed");
+  }
+  process.stdout.write(
+    `Codrive ${completed.targetVersion} and its managed Skills are ready.\n`,
+  );
+}
+
+interface SystemUpdateResponse {
+  version: PackageVersionStatus;
+  upgrade: UpgradeState | null;
+}
+
+async function sendSystemCommand(
+  serviceUrl: string,
+  accessToken: string,
+  command: Record<string, unknown>,
+): Promise<SystemUpdateResponse> {
+  const response = await fetch(`${serviceUrl}/api/commands`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-codrive-token": accessToken,
+    },
+    body: JSON.stringify(command),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return (await response.json()) as SystemUpdateResponse;
+}
+
+async function waitForUpgradeCompletion(
+  store: UpgradeStateStore,
+  operationId: string,
+): Promise<UpgradeState> {
+  while (true) {
+    const state = await store.read();
+    if (state?.operationId === operationId && ["succeeded", "failed"].includes(state.phase)) {
+      return state;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+async function runDetachedUpgradeWorker(args: string[]): Promise<void> {
+  const [operationId, targetVersion] = args;
+  if (!operationId || !targetVersion) {
+    throw new Error("Invalid detached update request");
+  }
+  const config = await new ConfigStore().read();
+  const request = {
+    operationId,
+    targetVersion,
+    stateDirectory: config.stateDirectory,
+  };
+  const store = new UpgradeStateStore(config.stateDirectory);
+  await waitForWorkerOwnership(store, operationId);
+  await createUpgradeRunner(store).run(request);
+}
+
+function createUpgradeRunner(store: UpgradeStateStore): SystemUpgradeRunner {
+  return new SystemUpgradeRunner({
+    store,
+    packageUpgrader: new NpmPackageUpgrader(),
+    installSkills: async (packageRoot, targetVersion) => {
+      const installer = new SkillInstaller(
+        join(packageRoot, "skills"),
+        join(homedir(), ".agents", "skills"),
+        targetVersion,
+      );
+      await installer.install();
+      return installer.getStatus();
+    },
+    verifyHealth: verifyUpdatedService,
+  });
+}
+
+async function waitForWorkerOwnership(
+  store: UpgradeStateStore,
+  operationId: string,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() <= deadline) {
+    const state = await store.read();
+    if (state?.operationId === operationId && state.workerPid === process.pid) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("The update worker was not recorded as the active operation");
+}
+
+async function verifyUpdatedService(targetVersion: string): Promise<void> {
+  const config = await new ConfigStore().read();
+  const url = `http://${config.host}:${config.port}/api/health`;
+  const deadline = Date.now() + 60_000;
+  while (Date.now() <= deadline) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(1_000) });
+      if (response.ok) {
+        const health = (await response.json()) as {
+          status?: string;
+          version?: string;
+        };
+        if (health.status === "ok" && health.version === targetVersion) return;
+        if (health.status === "ok" && health.version !== targetVersion) {
+          throw new Error(
+            `Codrive restarted with version ${health.version ?? "unknown"}, expected ${targetVersion}`,
+          );
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && /expected/.test(error.message)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for Codrive ${targetVersion} to become healthy`);
 }
 
 async function serveForeground(): Promise<void> {

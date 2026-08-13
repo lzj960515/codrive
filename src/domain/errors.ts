@@ -9,3 +9,7 @@ export class InvalidTaskReportError extends Error {
 export class ServiceNotReadyError extends Error {
   override readonly name = "ServiceNotReadyError";
 }
+
+export class SystemUpdateConflictError extends Error {
+  override readonly name = "SystemUpdateConflictError";
+}

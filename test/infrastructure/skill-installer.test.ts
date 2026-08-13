@@ -78,6 +78,29 @@ describe("SkillInstaller", () => {
       installedVersion: "0.2.0",
     });
   });
+
+  it("reports every unmanaged conflict path and leaves all Skills untouched", async () => {
+    const source = await mkdtemp(join(tmpdir(), "codrive-skill-source-"));
+    const target = await mkdtemp(join(tmpdir(), "codrive-skill-target-"));
+    await createSkillBundle(source, "managed content");
+    const conflictingPath = join(target, "codrive-task");
+    await mkdir(conflictingPath, { recursive: true });
+    await writeFile(join(conflictingPath, "SKILL.md"), "LOCAL CONTENT\n", "utf8");
+    const installer = new SkillInstaller(source, target, "0.7.0");
+
+    await expect(installer.getStatus()).resolves.toMatchObject({
+      state: "conflict",
+      managedSkillCount: 4,
+      conflictPaths: [conflictingPath],
+    });
+    await expect(installer.install()).rejects.toThrow(conflictingPath);
+    await expect(
+      readFile(join(conflictingPath, "SKILL.md"), "utf8"),
+    ).resolves.toBe("LOCAL CONTENT\n");
+    await expect(
+      readFile(join(target, "codrive-forge", "SKILL.md"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
 
 async function createSkillBundle(root: string, content: string): Promise<void> {

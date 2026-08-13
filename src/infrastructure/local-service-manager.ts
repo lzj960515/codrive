@@ -40,7 +40,7 @@ export interface LocalServiceManagerOptions {
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
-const defaultTimeoutMs = 10_000;
+const defaultTimeoutMs = 60_000;
 const defaultPollIntervalMs = 100;
 
 export class LocalServiceManager {

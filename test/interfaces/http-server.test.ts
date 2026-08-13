@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
 import { SystemSettingsService } from "../../src/application/system-settings-service.js";
+import { SystemUpdateService } from "../../src/application/system-update-service.js";
+import { UpgradeCoordinator } from "../../src/application/upgrade-coordinator.js";
 import { createTaskReportActivity } from "../../src/domain/task-activity.js";
 import type {
   ProjectSnapshot,
@@ -14,7 +16,9 @@ import type {
 } from "../../src/domain/types.js";
 import { ConfigStore } from "../../src/infrastructure/config-store.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
+import { PackageVersionService } from "../../src/infrastructure/package-version-service.js";
 import { SkillInstaller } from "../../src/infrastructure/skill-installer.js";
+import { UpgradeStateStore } from "../../src/infrastructure/upgrade-state-store.js";
 import { createHttpServer } from "../../src/interfaces/http/server.js";
 import {
   RecordingProjectExecutor,
@@ -31,6 +35,7 @@ describe("HTTP API", () => {
   let skillInstaller: SkillInstaller;
   let settingsService: SystemSettingsService;
   let errors: string[];
+  let upgradeLaunches: unknown[];
 
   beforeEach(async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-http-"));
@@ -49,6 +54,23 @@ describe("HTTP API", () => {
       join(stateDirectory, "installed-skills"),
       "0.2.0",
     );
+    const versions = new PackageVersionService({
+      currentVersion: "0.6.0",
+      stateDirectory,
+      resolveLatestVersion: async () => "0.7.0",
+    });
+    const upgrades = new UpgradeCoordinator({
+      store: new UpgradeStateStore(stateDirectory),
+      versions,
+      stateDirectory,
+      launcher: {
+        launch: async (request) => {
+          upgradeLaunches.push(request);
+          return 8123;
+        },
+      },
+      isProcessRunning: () => true,
+    });
     settingsService = new SystemSettingsService(configStore, engine, {
       listModels: async () => [
         {
@@ -66,11 +88,18 @@ describe("HTTP API", () => {
       ],
     });
     errors = [];
+    upgradeLaunches = [];
     server = createHttpServer({
       store,
       workflow: engine,
       skillInstaller,
       settingsService,
+      systemUpdateService: new SystemUpdateService(
+        versions,
+        upgrades,
+        skillInstaller,
+      ),
+      currentVersion: "0.6.0",
       accessToken: "secret",
       onError: (message) => errors.push(message),
     });
@@ -211,6 +240,7 @@ describe("HTTP API", () => {
 
     expect(board.statusCode).toBe(401);
     expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({ status: "ok", version: "0.6.0" });
     expect(page.statusCode).toBe(200);
   });
 
@@ -238,6 +268,43 @@ describe("HTTP API", () => {
     expect(installed.statusCode).toBe(200);
     expect(installed.json().skills.state).toBe("current");
     expect(current.json().skills.state).toBe("current");
+  });
+
+  it("checks npm on demand and accepts one fixed-version update operation", async () => {
+    const checked = await command({
+      type: "system.check_for_updates",
+      payload: {},
+    });
+    const accepted = await command({
+      type: "system.start_upgrade",
+      payload: { targetVersion: "0.7.0" },
+    });
+    const repeated = await command({
+      type: "system.start_upgrade",
+      payload: { targetVersion: "0.7.0" },
+    });
+    const concurrentSkillRepair = await command({
+      type: "system.install_skills",
+      payload: {},
+    });
+
+    expect(checked.statusCode).toBe(200);
+    expect(checked.json()).toMatchObject({
+      version: {
+        currentVersion: "0.6.0",
+        latestVersion: "0.7.0",
+        updateAvailable: true,
+      },
+      upgrade: null,
+      skills: { managedSkillCount: 4 },
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(repeated.statusCode).toBe(202);
+    expect(concurrentSkillRepair.statusCode).toBe(409);
+    expect(repeated.json().upgrade.operationId).toBe(
+      accepted.json().upgrade.operationId,
+    );
+    expect(upgradeLaunches).toHaveLength(1);
   });
 
   it("reads and updates concurrency and model routing through the settings boundary", async () => {
@@ -1241,7 +1308,7 @@ describe("HTTP API", () => {
     expect(page.body).toContain("产品工作台");
     expect(page.body).toContain("告诉 Codex 你的想法");
     expect(page.body).toContain("用 Codrive 的方式帮我做一个经营太空货运公司的游戏");
-    expect(page.body).toContain("连接 Codex");
+    expect(page.body).toContain("Codrive 更新");
     expect(page.body).toContain("数据保存在本机");
     expect(page.body).toContain("当前对话");
     expect(page.body).toContain("打开当前对话");
@@ -1281,14 +1348,18 @@ describe("HTTP API", () => {
     expect(page.body).not.toContain("当前进展");
     expect(page.body).toContain("selectedTaskId");
     expect(page.body).toContain("data-task");
-    expect(page.body).toContain('id="setup-dialog"');
-    expect(page.body).toContain('id="setup-later"');
-    expect(page.body).toContain('id="setup-trigger"');
+    expect(page.body).toContain('id="update-dialog"');
+    expect(page.body).toContain('id="update-primary"');
+    expect(page.body).toContain('id="update-trigger"');
     expect(page.body).toContain('/api/system');
     expect(page.body).toContain('system.install_skills');
-    expect(page.body).toContain('codrive:skills-dismissed');
-    expect(page.body).toContain("Codrive 设置有更新，可以立即升级。");
-    expect(page.body).toContain("完成一次设置即可使用");
+    expect(page.body).toContain('system.start_upgrade');
+    expect(page.body).toContain('system.check_for_updates');
+    expect(page.body).toContain("Codrive 与 Skills 已对齐");
+    expect(page.body).toContain("Codrive 正在重启，页面会自动恢复连接");
+    expect(page.body).toContain('id="update-timeline"');
+    expect(page.body).not.toContain('codrive:skills-dismissed');
+    expect(page.body).not.toContain("Codrive 设置有更新");
     expect(page.body).not.toContain("project-strip");
     expect(page.body).not.toContain("$codrive-forge");
     expect(page.body).not.toContain("No projects yet");

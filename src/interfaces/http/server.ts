@@ -3,9 +3,11 @@ import { z } from "zod";
 
 import type { WorkflowEngine } from "../../application/workflow-engine.js";
 import type { SystemSettingsService } from "../../application/system-settings-service.js";
+import type { SystemUpdateService } from "../../application/system-update-service.js";
 import {
   InvalidTaskReportError,
   ServiceNotReadyError,
+  SystemUpdateConflictError,
   WorkflowConflictError,
 } from "../../domain/errors.js";
 import type { CodriveCommand, Project, Task } from "../../domain/types.js";
@@ -22,6 +24,11 @@ export interface HttpServerDependencies {
   workflow: WorkflowEngine;
   skillInstaller: SkillInstaller;
   settingsService: Pick<SystemSettingsService, "read" | "update">;
+  systemUpdateService?: Pick<
+    SystemUpdateService,
+    "read" | "refresh" | "start" | "installSkills"
+  >;
+  currentVersion?: string;
   accessToken: string;
   isReady?: () => boolean;
   onError?: (message: string) => void;
@@ -89,6 +96,16 @@ const commandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("system.install_skills"),
     payload: z.object({}),
+  }),
+  z.object({
+    type: z.literal("system.check_for_updates"),
+    payload: z.object({}),
+  }),
+  z.object({
+    type: z.literal("system.start_upgrade"),
+    payload: z.object({
+      targetVersion: z.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/),
+    }),
   }),
   z.object({
     type: z.literal("system.update_settings"),
@@ -175,6 +192,8 @@ export function createHttpServer(
         ? 400
         : error instanceof WorkflowConflictError
           ? 409
+          : error instanceof SystemUpdateConflictError
+            ? 409
           : error instanceof InvalidTaskReportError
             ? 422
             : error instanceof ServiceNotReadyError
@@ -188,6 +207,7 @@ export function createHttpServer(
 
   server.get("/api/health", async () => ({
     status: dependencies.isReady?.() === false ? "starting" : "ok",
+    ...(dependencies.currentVersion ? { version: dependencies.currentVersion } : {}),
   }));
   server.get("/", async (_request, reply) =>
     reply.type("text/html; charset=utf-8").send(renderBoardPage(dependencies.accessToken)),
@@ -218,9 +238,11 @@ export function createHttpServer(
     },
   );
 
-  server.get("/api/system", async () => ({
-    skills: await dependencies.skillInstaller.getStatus(),
-  }));
+  server.get("/api/system", async () =>
+    dependencies.systemUpdateService
+      ? dependencies.systemUpdateService.read()
+      : { skills: await dependencies.skillInstaller.getStatus() },
+  );
   server.get("/api/system/settings", async () => dependencies.settingsService.read());
 
   server.get<{ Params: { taskId: string } }>(
@@ -295,7 +317,7 @@ export function createHttpServer(
     },
   );
 
-  server.post("/api/commands", async (request) => {
+  server.post("/api/commands", async (request, reply) => {
     if (dependencies.isReady?.() === false) {
       throw new ServiceNotReadyError(
         "Codrive is still recovering persisted executions",
@@ -303,8 +325,26 @@ export function createHttpServer(
     }
     const command = commandSchema.parse(request.body);
     if (command.type === "system.install_skills") {
+      if (dependencies.systemUpdateService) {
+        return dependencies.systemUpdateService.installSkills();
+      }
       await dependencies.skillInstaller.install();
       return { skills: await dependencies.skillInstaller.getStatus() };
+    }
+    if (command.type === "system.check_for_updates") {
+      if (!dependencies.systemUpdateService) {
+        throw new Error("System updates are unavailable");
+      }
+      return dependencies.systemUpdateService.refresh();
+    }
+    if (command.type === "system.start_upgrade") {
+      if (!dependencies.systemUpdateService) {
+        throw new Error("System updates are unavailable");
+      }
+      const update = await dependencies.systemUpdateService.start(
+        command.payload.targetVersion,
+      );
+      return reply.code(202).send(update);
     }
     if (command.type === "system.update_settings") {
       return dependencies.settingsService.update(command.payload);

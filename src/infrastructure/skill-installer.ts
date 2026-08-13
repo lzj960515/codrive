@@ -32,6 +32,8 @@ export interface SkillInstallationStatus {
   state: SkillInstallationState;
   bundledVersion: string;
   installedVersion: string | null;
+  managedSkillCount: number;
+  conflictPaths: string[];
 }
 
 interface InstallationMarker {
@@ -49,16 +51,15 @@ export class SkillInstaller {
   async install(): Promise<string[]> {
     await mkdir(this.targetDirectory, { recursive: true });
     const installationMarker = await this.createMarker();
+    const conflicts = await this.findConflicts();
+    if (conflicts.length > 0) {
+      throw new Error(
+        `Refusing to replace unmanaged Skill at ${conflicts.join(", ")}. Move it before running setup.`,
+      );
+    }
     for (const skill of managedSkills) {
       const source = join(this.sourceDirectory, skill);
       const target = join(this.targetDirectory, skill);
-      const markerPath = join(target, ".codrive-managed");
-      if ((await exists(target)) && !(await exists(markerPath))) {
-        throw new Error(
-          `Refusing to replace unmanaged Skill at ${target}. Move it before running setup.`,
-        );
-      }
-
       const temporary = `${target}.installing-${process.pid}`;
       await rm(temporary, { recursive: true, force: true });
       await cp(source, temporary, { recursive: true });
@@ -86,19 +87,31 @@ export class SkillInstaller {
     );
     const installedVersion =
       targetStates.find(({ marker }) => marker?.version)?.marker?.version ?? null;
+    const conflictPaths = targetStates.flatMap(
+      ({ exists: targetExists, marker }, index) =>
+        targetExists && marker === undefined
+          ? [join(this.targetDirectory, managedSkills[index]!)]
+          : [],
+    );
+    const common = {
+      bundledVersion,
+      installedVersion,
+      managedSkillCount: managedSkills.length,
+      conflictPaths,
+    };
 
     if (targetStates.every(({ exists: targetExists }) => !targetExists)) {
-      return { state: "missing", bundledVersion, installedVersion };
+      return { state: "missing", ...common };
     }
     if (
       targetStates.some(
         ({ exists: targetExists, marker }) => targetExists && marker === undefined,
       )
     ) {
-      return { state: "conflict", bundledVersion, installedVersion };
+      return { state: "conflict", ...common };
     }
     if (targetStates.some(({ exists: targetExists }) => !targetExists)) {
-      return { state: "missing", bundledVersion, installedVersion };
+      return { state: "missing", ...common };
     }
 
     const bundledFingerprint = await fingerprintBundle(this.sourceDirectory);
@@ -111,9 +124,22 @@ export class SkillInstaller {
         markerFingerprintsMatch && installedFingerprint === bundledFingerprint
           ? "current"
           : "outdated",
-      bundledVersion,
-      installedVersion,
+      ...common,
     };
+  }
+
+  private async findConflicts(): Promise<string[]> {
+    const conflicts: string[] = [];
+    for (const skill of managedSkills) {
+      const target = join(this.targetDirectory, skill);
+      if (
+        (await exists(target)) &&
+        !(await exists(join(target, ".codrive-managed")))
+      ) {
+        conflicts.push(target);
+      }
+    }
+    return conflicts;
   }
 
   private async createMarker(): Promise<InstallationMarker> {

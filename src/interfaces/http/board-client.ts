@@ -22,6 +22,7 @@ export function renderBoardClient(accessToken: string): string {
       primary: "默认", fallback: "备用", user_confirmed: "用户确认",
       closed: "正常", open: "已熔断", half_open: "主模型探测",
       agent_decision: "Codex 判断", codex: "Codex", user: "用户",
+      missing: "待补齐", outdated: "待同步", current: "已对齐", conflict: "存在冲突",
       development_completed: "开发完成", rework_completed: "返工完成",
       review_approved: "审查通过", review_changes_requested: "审查退回",
       review_requested: "请求审查", integration_completed: "合入完成",
@@ -37,10 +38,12 @@ export function renderBoardClient(accessToken: string): string {
     let snapshots = [];
     let selectedProjectId = null;
     let selectedTaskId = null;
-    let skillStatus = null;
+    let systemUpdate = null;
+    let updatePoll = null;
     let productDetail = null;
     let taskDetail = null;
     let systemSettings = null;
+    let updateActionError = null;
     const headers = { "x-codrive-token": TOKEN, "content-type": "application/json" };
     const escapeHtml = value => String(value ?? "").replace(/[&<>\"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[character]));
     const bucket = status => boardLayout.statusColumns[status] || status;
@@ -50,7 +53,12 @@ export function renderBoardClient(accessToken: string): string {
 
     async function api(path, options = {}) {
       const response = await fetch(path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) {
+        const body = await response.text();
+        let message = body;
+        try { message = JSON.parse(body).error || body; } catch {}
+        throw new Error(message);
+      }
       return response.json();
     }
 
@@ -59,60 +67,159 @@ export function renderBoardClient(accessToken: string): string {
       body: JSON.stringify({ type, payload })
     });
 
-    async function refreshSetup() {
-      const system = await api("/api/system");
-      skillStatus = system.skills;
-      renderSetup();
-    }
+    const activeUpdatePhases = ["checking", "installing", "restarting", "syncing_skills"];
+    const updatePhaseCopy = {
+      checking: ["正在固定目标版本", 8],
+      installing: ["正在安装 Codrive", 38],
+      restarting: ["正在重启本机服务", 66],
+      syncing_skills: ["正在同步 4 个托管 Skills", 86],
+      succeeded: ["更新完成", 100],
+      failed: ["更新未完成", 100]
+    };
 
-    function renderSetup() {
-      const dialog = document.getElementById("setup-dialog");
-      const trigger = document.getElementById("setup-trigger");
-      if (!skillStatus || skillStatus.state === "current") {
-        dialog.hidden = true;
-        trigger.hidden = true;
-        return;
-      }
-      const copy = {
-        missing: {
-          dialog: "完成一次本机设置后，就可以在 Codex 中使用 Codrive。",
-          trigger: "完成一次设置即可使用"
-        },
-        outdated: {
-          dialog: "Codrive 设置有更新，可以立即升级。",
-          trigger: "有新版本可以升级"
-        },
-        conflict: {
-          dialog: "检测到同名的本地扩展，请先处理后再继续。",
-          trigger: "同名扩展需要处理"
-        }
-      }[skillStatus.state];
-      document.getElementById("setup-copy").textContent = copy.dialog;
-      document.getElementById("setup-trigger-copy").textContent = copy.trigger;
-      const install = document.getElementById("setup-install");
-      install.textContent = skillStatus.state === "missing" ? "立即设置" : "立即升级";
-      install.disabled = skillStatus.state === "conflict";
-      trigger.hidden = false;
-      const dismissedVersion = localStorage.getItem("codrive:skills-dismissed");
-      dialog.hidden = dismissedVersion === skillStatus.bundledVersion;
-    }
-
-    async function installSkills() {
-      const button = document.getElementById("setup-install");
-      const status = document.getElementById("setup-status");
-      button.disabled = true;
-      status.textContent = "正在完成设置...";
+    async function refreshSystem() {
       try {
-        const result = await command("system.install_skills", {});
-        skillStatus = result.skills;
-        localStorage.removeItem("codrive:skills-dismissed");
-        status.textContent = "设置完成，可以在 Codex 中开始了。";
-        renderSetup();
+        systemUpdate = await api("/api/system");
+        renderSystemUpdate();
       } catch (error) {
-        status.textContent = error.message;
-      } finally {
-        button.disabled = false;
+        if (systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase)) {
+          document.getElementById("update-status").textContent = "本机服务正在重启，恢复连接后会继续显示进度。";
+          scheduleUpdatePoll();
+          return;
+        }
+        document.getElementById("update-status").textContent = "暂时无法读取更新状态。";
       }
+    }
+
+    function renderSystemUpdate() {
+      if (!systemUpdate) return;
+      const { version, upgrade, skills } = systemUpdate;
+      const active = upgrade && activeUpdatePhases.includes(upgrade.phase);
+      const triggerCopy = active
+        ? updatePhaseCopy[upgrade.phase][0]
+        : version?.updateAvailable
+          ? "新版本 "+version.latestVersion+" 可用"
+          : skills.state === "conflict"
+            ? "本地 Skill 冲突待处理"
+          : version?.latestVersion && skills.state === "current"
+              ? "Codrive 与 Skills 已对齐"
+              : skills.state === "current" ? "等待稳定版检查" : "托管 Skills 需要补齐";
+      document.getElementById("update-trigger-copy").textContent = triggerCopy;
+      document.getElementById("update-trigger-icon").textContent = active ? "↻" : version?.updateAvailable ? "↑" : skills.state === "current" ? "✓" : "+";
+      document.getElementById("update-trigger").dataset.state = active ? "active" : version?.updateAvailable || skills.state !== "current" ? "attention" : "current";
+
+      document.getElementById("update-current-version").textContent = version?.currentVersion || skills.bundledVersion;
+      document.getElementById("update-latest-version").textContent = version?.latestVersion || "待检查";
+      document.getElementById("update-skills").textContent = skills.state === "current" ? skills.managedSkillCount+" / "+skills.managedSkillCount+" 已对齐" : label(skills.state);
+      document.getElementById("update-checked-at").textContent = formatTime(version?.lastCheckedAt);
+      document.getElementById("update-check-result").textContent = version?.checkError?.summary || (version?.latestVersion ? "npm latest 稳定版已读取" : "等待首次检查");
+
+      const progress = document.getElementById("update-progress");
+      progress.hidden = !upgrade;
+      if (upgrade) {
+        const phase = updatePhaseCopy[upgrade.phase] || [upgrade.phase, 0];
+        document.getElementById("update-phase").textContent = phase[0];
+        document.getElementById("update-progress-bar").style.width = phase[1]+"%";
+        document.getElementById("update-phase-time").textContent = formatTime(upgrade.updatedAt);
+        progress.dataset.phase = upgrade.phase;
+      }
+      const timeline = document.getElementById("update-timeline");
+      const timelinePhases = Object.entries(upgrade?.phaseStartedAt || {});
+      timeline.hidden = timelinePhases.length === 0;
+      timeline.innerHTML = timelinePhases.map(([phase, occurredAt]) =>
+        '<div><span>'+escapeHtml((updatePhaseCopy[phase] || [phase])[0])+'</span><time>'+escapeHtml(formatTime(occurredAt))+'</time></div>'
+      ).join("");
+
+      const conflict = document.getElementById("update-conflict");
+      conflict.hidden = skills.state !== "conflict";
+      conflict.innerHTML = skills.state === "conflict"
+        ? '<b>保留了本地同名 Skill</b><p>Codrive 不会覆盖未托管文件。请先移动以下路径，再重新同步：</p><code>'+escapeHtml(skills.conflictPaths.join("\\n"))+'</code>'
+        : "";
+
+      const summary = upgrade?.phase === "failed"
+        ? upgrade.error?.summary || "更新未完成，可以安全重试。"
+        : active
+          ? "目标版本 "+upgrade.targetVersion+" 已固定。页面断线时，独立进程仍会继续。"
+          : version?.updateAvailable
+            ? "Codrive "+version.latestVersion+" 与该版本随附的 4 个托管 Skills 将在一次操作中更新。"
+            : version?.checkError
+              ? "无法确认 npm latest 稳定版；看板与任务调度不受影响，可以重新检查。"
+              : version?.latestVersion && skills.state === "current"
+              ? "当前已是最新稳定版，Codrive 与随包托管 Skills 保持一致。"
+              : "Codrive 已安装；需要从当前包补齐 4 个托管 Skills。";
+      document.getElementById("update-summary").textContent = summary;
+
+      const primary = document.getElementById("update-primary");
+      primary.disabled = Boolean(active) || skills.state === "conflict" || Boolean(version?.checking);
+      primary.textContent = active
+        ? "更新进行中"
+        : version?.updateAvailable
+          ? upgrade?.phase === "failed" ? "重试更新" : "更新 Codrive 与 Skills"
+          : version?.latestVersion && skills.state === "current"
+            ? "已是最新版"
+            : skills.state === "current" ? "等待版本检查" : "补齐托管 Skills";
+      if (upgrade?.phase === "failed" && upgrade.targetVersion === version?.currentVersion && skills.state !== "current") {
+        primary.textContent = "补齐托管 Skills";
+      }
+      if (!version?.updateAvailable && skills.state === "current") primary.disabled = true;
+      document.getElementById("update-check").disabled = Boolean(active) || Boolean(version?.checking);
+      document.getElementById("update-status").textContent = updateActionError || upgrade?.error?.summary || version?.checkError?.summary || "";
+      document.getElementById("update-fallback").hidden = upgrade?.phase !== "failed" && !version?.checkError;
+      if (active || version?.checking || !version?.lastCheckedAt) scheduleUpdatePoll();
+      else if (updatePoll) {
+        window.clearTimeout(updatePoll);
+        updatePoll = null;
+      }
+    }
+
+    function scheduleUpdatePoll() {
+      if (updatePoll) window.clearTimeout(updatePoll);
+      updatePoll = window.setTimeout(refreshSystem, 1000);
+    }
+
+    async function checkForUpdates() {
+      const status = document.getElementById("update-status");
+      updateActionError = null;
+      status.textContent = "正在检查 npm latest 稳定版...";
+      document.getElementById("update-check").disabled = true;
+      try {
+        systemUpdate = await command("system.check_for_updates", {});
+      } catch (error) {
+        updateActionError = error.message;
+      }
+      renderSystemUpdate();
+    }
+
+    async function runPrimaryUpdateAction() {
+      const status = document.getElementById("update-status");
+      updateActionError = null;
+      try {
+        const repairCurrentVersion =
+          systemUpdate.upgrade?.phase === "failed" &&
+          systemUpdate.upgrade.targetVersion === systemUpdate.version?.currentVersion &&
+          systemUpdate.skills.state !== "current";
+        if (systemUpdate.version?.updateAvailable && !repairCurrentVersion) {
+          status.textContent = "正在启动独立更新进程...";
+          systemUpdate = await command("system.start_upgrade", { targetVersion: systemUpdate.version.latestVersion });
+        } else {
+          status.textContent = "正在同步托管 Skills...";
+          systemUpdate = await command("system.install_skills", {});
+        }
+      } catch (error) {
+        updateActionError = error.message;
+      }
+      renderSystemUpdate();
+    }
+
+    function openUpdateDialog() {
+      const dialog = document.getElementById("update-dialog");
+      dialog.hidden = false;
+      document.getElementById("update-close").focus();
+    }
+
+    function closeUpdateDialog() {
+      document.getElementById("update-dialog").hidden = true;
+      document.getElementById("update-trigger").focus();
     }
 
     async function refresh() {
@@ -140,7 +247,10 @@ export function renderBoardClient(accessToken: string): string {
         }
         render();
       } catch {
-        document.getElementById("offline").style.display = "block";
+        const activeUpgrade = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase);
+        const offline = document.getElementById("offline");
+        offline.textContent = activeUpgrade ? "Codrive 正在重启，页面会自动恢复连接..." : "正在重新连接本机服务...";
+        offline.style.display = "block";
       }
     }
 
@@ -467,24 +577,35 @@ export function renderBoardClient(accessToken: string): string {
       render();
     }
 
-    document.getElementById("setup-install").onclick = installSkills;
-    document.getElementById("setup-later").onclick = () => {
-      localStorage.setItem("codrive:skills-dismissed", skillStatus.bundledVersion);
-      document.getElementById("setup-dialog").hidden = true;
-      document.getElementById("setup-trigger").hidden = false;
+    document.getElementById("update-trigger").onclick = openUpdateDialog;
+    document.getElementById("update-close").onclick = closeUpdateDialog;
+    document.getElementById("update-check").onclick = checkForUpdates;
+    document.getElementById("update-primary").onclick = runPrimaryUpdateAction;
+    document.getElementById("update-copy-command").onclick = async event => {
+      try {
+        await navigator.clipboard.writeText("codrive upgrade");
+        event.currentTarget.textContent = "已复制";
+      } catch {
+        event.currentTarget.textContent = "复制失败";
+      }
     };
-    document.getElementById("setup-trigger").onclick = () => document.getElementById("setup-dialog").hidden = false;
     document.getElementById("nav-backdrop").onclick = () => document.body.classList.remove("nav-open");
     document.addEventListener("keydown", event => {
       if (event.key !== "Escape") return;
       if (selectedTaskId) closeDetail();
       else if (document.body.classList.contains("nav-open")) document.body.classList.remove("nav-open");
-      else if (skillStatus?.state !== "current") document.getElementById("setup-later").click();
+      else if (!document.getElementById("update-dialog").hidden) closeUpdateDialog();
     });
     const events = new EventSource("/api/events?token="+encodeURIComponent(TOKEN));
-    events.onmessage = refresh;
-    events.onerror = () => document.getElementById("offline").style.display = "block";
-    refreshSetup();
+    events.onmessage = () => { refresh(); refreshSystem(); };
+    events.onerror = () => {
+      const offline = document.getElementById("offline");
+      offline.textContent = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase)
+        ? "Codrive 正在重启，页面会自动恢复连接..."
+        : "正在重新连接本机服务...";
+      offline.style.display = "block";
+    };
+    refreshSystem();
     refresh();
   </script>`;
 }

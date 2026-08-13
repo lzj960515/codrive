@@ -25,9 +25,9 @@ export function renderBoardPage(accessToken: string): string {
         <a class="sidebar-settings" href="/settings">
           <span>⚙</span><span>运行设置<small>并发与模型路由</small></span>
         </a>
-        <button id="setup-trigger" class="setup-trigger" type="button" hidden>
-          <span class="setup-icon">↻</span>
-          <span>连接 Codex<small id="setup-trigger-copy">完成一次设置即可使用</small></span>
+        <button id="update-trigger" class="update-trigger" type="button" aria-haspopup="dialog">
+          <span id="update-trigger-icon" class="update-icon" aria-hidden="true">↑</span>
+          <span>Codrive 更新<small id="update-trigger-copy">正在读取本机状态</small></span>
         </button>
         <div class="local-note">数据保存在本机</div>
       </div>
@@ -45,21 +45,34 @@ export function renderBoardPage(accessToken: string): string {
 
   <button id="nav-backdrop" class="nav-backdrop" type="button" aria-label="关闭项目列表"></button>
 
-  <div id="setup-dialog" class="setup-backdrop" role="dialog" aria-modal="true" aria-labelledby="setup-title" hidden>
-    <section class="setup-panel">
-      <div class="setup-kicker">首次设置</div>
-      <h2 id="setup-title">让 Codex 连接到 Codrive</h2>
-      <p id="setup-copy">完成一次本机设置后，就可以在 Codex 中用自然语言创建和推进项目。</p>
-      <div class="setup-steps" aria-label="设置步骤">
-        <div><b>01</b><span>连接 Codex</span></div>
-        <div><b>02</b><span>直接说出想法</span></div>
-        <div><b>03</b><span>自动推进任务</span></div>
+  <div id="update-dialog" class="update-backdrop" role="dialog" aria-modal="true" aria-labelledby="update-title" hidden>
+    <section class="update-panel" tabindex="-1">
+      <header class="update-head">
+        <div><div class="update-kicker">LOCAL RELEASE CONTROL</div><h2 id="update-title">Codrive 更新</h2></div>
+        <button id="update-close" class="icon-button" type="button" aria-label="关闭 Codrive 更新">×</button>
+      </header>
+      <p id="update-summary" class="update-summary">正在读取当前版本与托管 Skills。</p>
+      <div class="version-ledger" aria-label="版本状态">
+        <div><span>当前运行</span><strong id="update-current-version">—</strong></div>
+        <div><span>最新稳定版</span><strong id="update-latest-version">—</strong></div>
+        <div><span>托管 Skills</span><strong id="update-skills">—</strong></div>
       </div>
-      <div class="setup-actions">
-        <button id="setup-install" class="primary-button" type="button">立即设置</button>
-        <button id="setup-later" class="quiet-button" type="button">稍后</button>
+      <div id="update-progress" class="update-progress" hidden>
+        <div class="update-progress-track"><span id="update-progress-bar"></span></div>
+        <div class="update-progress-meta"><b id="update-phase">准备更新</b><time id="update-phase-time">—</time></div>
       </div>
-      <p id="setup-status" class="setup-status" role="status"></p>
+      <div id="update-timeline" class="update-timeline" aria-label="更新阶段时间" hidden></div>
+      <div id="update-conflict" class="update-conflict" hidden></div>
+      <dl class="update-meta">
+        <dt>最后检查</dt><dd id="update-checked-at">—</dd>
+        <dt>检查结果</dt><dd id="update-check-result">尚未检查</dd>
+      </dl>
+      <div class="update-actions">
+        <button id="update-primary" class="primary-button" type="button" disabled>正在读取</button>
+        <button id="update-check" class="quiet-button" type="button">重新检查</button>
+      </div>
+      <p id="update-status" class="update-status" role="status" aria-live="polite"></p>
+      <div id="update-fallback" class="update-fallback" hidden>也可以在终端运行 <code>codrive upgrade</code><button id="update-copy-command" class="copy-id-button" type="button">复制命令</button></div>
     </section>
   </div>
 

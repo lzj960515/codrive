@@ -52,9 +52,9 @@ codrive
 npx codrive@latest upgrade
 ```
 
-Codrive 会输出本地看板地址和日志文件位置。用浏览器打开后，按照首次运行提示完成初始化：
+Codrive 会输出本地看板地址和日志文件位置。用浏览器打开后，使用左下角的 **Codrive 更新**窗口完成初始化：
 
-1. 点击 **安装 Skills**，把四个 Codrive Skills 安装到本机智能体技能目录。
+1. 点击 **补齐托管 Skills**，把四个 Codrive Skills 安装到本机智能体技能目录。
 2. 用 Codex App 打开现有项目目录；从零开始时，先创建并打开新的项目目录。
 3. 直接用自然语言描述要推进的产品工作，例如：
 
@@ -62,7 +62,15 @@ Codrive 会输出本地看板地址和日志文件位置。用浏览器打开后
 用 Codrive 的方式给这个项目增加排行榜功能，我确认计划后开始开发。
 ```
 
-选择 **Later** 后，看板左下角会保留一个 Skills 初始化按钮。未来版本内置的 Skills 发生变化时，看板也会再次提示更新。
+同一个窗口会展示当前运行版本、npm latest 稳定版、按浏览器本地时区显示的完整检查时间，以及四个托管 Skills 的对齐状态。页面加载只读取缓存；只有手动重新检查才等待 npm，因此 npm 超时、离线或返回无效响应不会阻塞看板和任务调度。
+
+发现稳定版更新后，一次确认会固定本次目标版本，并启动独立的本机升级进程。窗口使用一条连续进度展示精确版本安装、新版 CLI 使用同一个 `CODEDRIVE_HOME` 重启服务和随包 Skills 同步；重启期间短暂断线是正常现象，页面会自动重连。只有 `/api/health` 回读到目标版本，并且四个托管 Skills 都与新包一致时，Codrive 才会报告整体成功。首次安装或历史升级中断造成 Skills 缺失时，也在这个窗口补齐。未托管的本地同名 Skill 永远不会被覆盖；窗口会显示具体冲突路径，供你先移动处理。
+
+升级失败时，窗口保留可操作的失败原因和重试入口。也可以用同一套升级核心执行手动回退命令：
+
+```bash
+codrive upgrade
+```
 
 看板提供**运行设置**页面，可以配置每个项目的并发上限、默认模型和 fallback 模型。点击产品标题可以进入产品详情页，查看注册仓库、完整 `PROJECT.md`、最小规划状态、产品上下文、任务清单和当前执行信息。
 
@@ -123,10 +131,10 @@ Codex 会在执行取消前判断取消依据。取消涉及产品取舍、停�
 codrive                         在后台启动 Codrive 和本地看板
 codrive restart                 重启 Codrive
 codrive stop                    停止 Codrive
-codrive upgrade                 全局安装最新版本并用新版本重启
+codrive upgrade                 更新 Codrive 与托管 Skills，并验证健康状态
 codrive status                  查看本地服务状态
 codrive doctor                  检查 Node.js、Codex 和登录状态
-codrive setup                   不经过 Web 提示，直接安装 Skills
+codrive setup                   不经过 Web 窗口，直接补齐托管 Skills
 codrive serve                   在前台运行，供开发和进程托管器使用
 ```
 

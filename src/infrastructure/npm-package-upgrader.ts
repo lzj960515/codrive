@@ -13,6 +13,7 @@ export interface PackageCommandRunner {
     command: string,
     args: string[],
     captureOutput: boolean,
+    environment?: NodeJS.ProcessEnv,
   ): PackageCommandResult;
 }
 
@@ -35,9 +36,15 @@ export class NpmPackageUpgrader {
   }
 
   upgrade(): { cliPath: string } {
+    const installed = this.install("latest");
+    this.restart(installed.cliPath);
+    return installed;
+  }
+
+  install(targetVersion: string): { cliPath: string } {
     this.runChecked(
       this.npmExecutable,
-      ["install", "--global", "codrive@latest"],
+      ["install", "--global", `codrive@${targetVersion}`],
       false,
     );
     const globalRoot = this.runChecked(
@@ -51,16 +58,27 @@ export class NpmPackageUpgrader {
       "codrive",
       "dist/interfaces/cli/index.js",
     );
-    this.runChecked(this.nodeExecutable, [cliPath, "restart"], false);
     return { cliPath };
+  }
+
+  restart(cliPath: string, stateDirectory?: string): void {
+    this.runChecked(
+      this.nodeExecutable,
+      [cliPath, "restart"],
+      false,
+      stateDirectory
+        ? { ...process.env, CODEDRIVE_HOME: stateDirectory }
+        : process.env,
+    );
   }
 
   private runChecked(
     command: string,
     args: string[],
     captureOutput: boolean,
+    environment?: NodeJS.ProcessEnv,
   ): PackageCommandResult {
-    const result = this.runner.run(command, args, captureOutput);
+    const result = this.runner.run(command, args, captureOutput, environment);
     if (result.error) throw result.error;
     if (result.exitCode !== 0) {
       const detail = result.stderr.trim();
@@ -77,10 +95,12 @@ class SpawnPackageCommandRunner implements PackageCommandRunner {
     command: string,
     args: string[],
     captureOutput: boolean,
+    environment?: NodeJS.ProcessEnv,
   ): PackageCommandResult {
     const result = spawnSync(command, args, {
       encoding: "utf8",
       stdio: captureOutput ? "pipe" : "inherit",
+      env: environment,
     });
     return {
       exitCode: result.status,

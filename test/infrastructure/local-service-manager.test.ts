@@ -8,6 +8,34 @@ import { ConfigStore } from "../../src/infrastructure/config-store.js";
 import { LocalServiceManager } from "../../src/infrastructure/local-service-manager.js";
 
 describe("LocalServiceManager", () => {
+  it("allows persisted task recovery to run longer than the old ten-second limit", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-service-"));
+    await new ConfigStore(stateDirectory).loadOrCreate();
+    let clock = 0;
+    let running = false;
+    const service = new LocalServiceManager({
+      stateDirectory,
+      entryPath: "/package/codrive.js",
+      healthCheck: async () => running && clock >= 15_000,
+      readOwnerPid: async () => (running ? 7200 : null),
+      isProcessRunning: () => running,
+      spawnService: () => {
+        running = true;
+        return { exitCode: null };
+      },
+      now: () => clock,
+      sleep: async (milliseconds) => {
+        clock += milliseconds;
+      },
+    });
+
+    await expect(service.start()).resolves.toMatchObject({
+      outcome: "started",
+      pid: 7200,
+    });
+    expect(clock).toBeGreaterThanOrEqual(15_000);
+  });
+
   it("starts idempotently and restarts the detached Codrive service", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-service-"));
     const configStore = new ConfigStore(stateDirectory);
