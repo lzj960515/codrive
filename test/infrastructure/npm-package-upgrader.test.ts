@@ -22,10 +22,10 @@ describe("NpmPackageUpgrader", () => {
     expect(cli).toContain("supportsUnifiedUpdateApi");
   });
 
-  it("installs the latest global package and restarts through the upgraded CLI", () => {
+  it("installs the latest global package and restarts through the upgraded CLI", async () => {
     const calls: Array<{ command: string; args: string[]; capture: boolean }> = [];
     const runner: PackageCommandRunner = {
-      run(command, args, captureOutput) {
+      async run(command, args, captureOutput) {
         calls.push({ command, args, capture: captureOutput });
         return {
           exitCode: 0,
@@ -39,7 +39,7 @@ describe("NpmPackageUpgrader", () => {
       nodeExecutable: "/node-test",
     });
 
-    expect(upgrader.upgrade()).toEqual({
+    await expect(upgrader.upgrade()).resolves.toEqual({
       cliPath: join(
         "/global/node_modules",
         "codrive",
@@ -72,14 +72,14 @@ describe("NpmPackageUpgrader", () => {
     ]);
   });
 
-  it("installs a fixed target and restarts the same state directory", () => {
+  it("installs a fixed target and restarts the same state directory", async () => {
     const calls: Array<{
       command: string;
       args: string[];
       environment?: NodeJS.ProcessEnv;
     }> = [];
     const runner: PackageCommandRunner = {
-      run(command, args, _captureOutput, environment) {
+      async run(command, args, _captureOutput, environment) {
         calls.push({ command, args, ...(environment ? { environment } : {}) });
         return {
           exitCode: 0,
@@ -93,8 +93,8 @@ describe("NpmPackageUpgrader", () => {
       nodeExecutable: "/node-test",
     });
 
-    const installed = upgrader.install("0.7.0");
-    upgrader.restart(installed.cliPath, "/state/codrive");
+    const installed = await upgrader.install("0.7.0");
+    await upgrader.restart(installed.cliPath, "/state/codrive");
 
     expect(calls[0]?.args).toEqual([
       "install",

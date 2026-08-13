@@ -34,7 +34,6 @@ export class UpgradeCoordinator {
   private readonly now: () => Date;
   private readonly createOperationId: () => string;
   private readonly isProcessRunning: (pid: number) => boolean;
-  private startQueue = Promise.resolve();
 
   constructor(private readonly options: UpgradeCoordinatorOptions) {
     this.now = options.now ?? (() => new Date());
@@ -77,12 +76,9 @@ export class UpgradeCoordinator {
   }
 
   async start(targetVersion: string): Promise<UpgradeState> {
-    const pending = this.startQueue.then(() => this.startExclusive(targetVersion));
-    this.startQueue = pending.then(
-      () => undefined,
-      () => undefined,
+    return this.options.store.withStartLock(() =>
+      this.startExclusive(targetVersion),
     );
-    return pending;
   }
 
   async completeAfterSkillRepair(currentVersion: string): Promise<UpgradeState | null> {

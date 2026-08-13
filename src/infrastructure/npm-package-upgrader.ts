@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 
 export interface PackageCommandResult {
@@ -14,12 +14,32 @@ export interface PackageCommandRunner {
     args: string[],
     captureOutput: boolean,
     environment?: NodeJS.ProcessEnv,
-  ): PackageCommandResult;
+  ): Promise<PackageCommandResult>;
 }
 
 export interface NpmPackageUpgraderOptions {
   npmExecutable?: string;
   nodeExecutable?: string;
+}
+
+const maximumCapturedOutputLength = 256 * 1_024;
+
+export type PackageUpgradeStep = "install" | "locate" | "restart";
+export type PackageCommandFailureKind = "permission_denied" | "command_failed";
+
+export class PackageCommandError extends Error {
+  override readonly name = "PackageCommandError";
+
+  constructor(
+    readonly step: PackageUpgradeStep,
+    readonly kind: PackageCommandFailureKind,
+  ) {
+    super(
+      kind === "permission_denied"
+        ? `The Codrive ${step} command was denied by local permissions`
+        : `The Codrive ${step} command failed`,
+    );
+  }
 }
 
 export class NpmPackageUpgrader {
@@ -35,23 +55,25 @@ export class NpmPackageUpgrader {
     this.nodeExecutable = options.nodeExecutable ?? process.execPath;
   }
 
-  upgrade(): { cliPath: string } {
-    const installed = this.install("latest");
-    this.restart(installed.cliPath);
+  async upgrade(): Promise<{ cliPath: string }> {
+    const installed = await this.install("latest");
+    await this.restart(installed.cliPath);
     return installed;
   }
 
-  install(targetVersion: string): { cliPath: string } {
-    this.runChecked(
+  async install(targetVersion: string): Promise<{ cliPath: string }> {
+    await this.runChecked(
+      "install",
       this.npmExecutable,
       ["install", "--global", `codrive@${targetVersion}`],
       false,
     );
-    const globalRoot = this.runChecked(
+    const globalRoot = (await this.runChecked(
+      "locate",
       this.npmExecutable,
       ["root", "--global"],
       true,
-    ).stdout.trim();
+    )).stdout.trim();
     if (!globalRoot) throw new Error("npm did not return its global package root");
     const cliPath = join(
       globalRoot,
@@ -61,8 +83,9 @@ export class NpmPackageUpgrader {
     return { cliPath };
   }
 
-  restart(cliPath: string, stateDirectory?: string): void {
-    this.runChecked(
+  async restart(cliPath: string, stateDirectory?: string): Promise<void> {
+    await this.runChecked(
+      "restart",
       this.nodeExecutable,
       [cliPath, "restart"],
       false,
@@ -72,18 +95,25 @@ export class NpmPackageUpgrader {
     );
   }
 
-  private runChecked(
+  private async runChecked(
+    step: PackageUpgradeStep,
     command: string,
     args: string[],
     captureOutput: boolean,
     environment?: NodeJS.ProcessEnv,
-  ): PackageCommandResult {
-    const result = this.runner.run(command, args, captureOutput, environment);
-    if (result.error) throw result.error;
-    if (result.exitCode !== 0) {
-      const detail = result.stderr.trim();
-      throw new Error(
-        `${command} ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`,
+  ): Promise<PackageCommandResult> {
+    const result = await this.runner.run(command, args, captureOutput, environment);
+    if (result.error || result.exitCode !== 0) {
+      const diagnostic = [
+        result.error?.message,
+        result.stderr,
+        result.stdout,
+      ].filter(Boolean).join("\n");
+      throw new PackageCommandError(
+        step,
+        /EACCES|EPERM|permission denied/i.test(diagnostic)
+          ? "permission_denied"
+          : "command_failed",
       );
     }
     return result;
@@ -91,22 +121,42 @@ export class NpmPackageUpgrader {
 }
 
 class SpawnPackageCommandRunner implements PackageCommandRunner {
-  run(
+  async run(
     command: string,
     args: string[],
     captureOutput: boolean,
     environment?: NodeJS.ProcessEnv,
-  ): PackageCommandResult {
-    const result = spawnSync(command, args, {
-      encoding: "utf8",
-      stdio: captureOutput ? "pipe" : "inherit",
-      env: environment,
+  ): Promise<PackageCommandResult> {
+    return new Promise((resolve) => {
+      const child = spawn(command, args, {
+        stdio: ["inherit", "pipe", "pipe"],
+        env: environment,
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        stdout = appendCapturedOutput(stdout, chunk);
+        if (!captureOutput) process.stdout.write(chunk);
+      });
+      child.stderr.on("data", (chunk: string) => {
+        stderr = appendCapturedOutput(stderr, chunk);
+        if (!captureOutput) process.stderr.write(chunk);
+      });
+      child.once("error", (error) => {
+        resolve({ exitCode: null, stdout, stderr, error });
+      });
+      child.once("close", (exitCode) => {
+        resolve({ exitCode, stdout, stderr });
+      });
     });
-    return {
-      exitCode: result.status,
-      stdout: result.stdout ?? "",
-      stderr: result.stderr ?? "",
-      ...(result.error ? { error: result.error } : {}),
-    };
   }
+}
+
+function appendCapturedOutput(current: string, chunk: string): string {
+  const combined = current + chunk;
+  return combined.length <= maximumCapturedOutputLength
+    ? combined
+    : combined.slice(-maximumCapturedOutputLength);
 }

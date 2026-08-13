@@ -1,7 +1,10 @@
 import { dirname } from "node:path";
 
 import type { SkillInstallationStatus } from "../infrastructure/skill-installer.js";
-import type { NpmPackageUpgrader } from "../infrastructure/npm-package-upgrader.js";
+import {
+  PackageCommandError,
+  type NpmPackageUpgrader,
+} from "../infrastructure/npm-package-upgrader.js";
 import type { UpgradeStateStore } from "../infrastructure/upgrade-state-store.js";
 import type { UpgradeRequest } from "./upgrade-coordinator.js";
 import {
@@ -31,11 +34,14 @@ export class SystemUpgradeRunner {
   async run(request: UpgradeRequest): Promise<void> {
     try {
       await this.transition(request, "installing");
-      const installed = this.options.packageUpgrader.install(request.targetVersion);
+      const installed = await this.options.packageUpgrader.install(request.targetVersion);
       const packageRoot = dirname(dirname(dirname(dirname(installed.cliPath))));
 
       await this.transition(request, "restarting");
-      this.options.packageUpgrader.restart(installed.cliPath, request.stateDirectory);
+      await this.options.packageUpgrader.restart(
+        installed.cliPath,
+        request.stateDirectory,
+      );
 
       await this.transition(request, "syncing_skills");
       const skills = await this.options.installSkills(packageRoot, request.targetVersion);
@@ -92,6 +98,27 @@ function classifyUpgradeError(
   phase?: UpgradePhase,
 ): SystemUpdateError {
   if (error instanceof UpgradeFailure) return error.detail;
+  if (error instanceof PackageCommandError) {
+    if (error.kind === "permission_denied") {
+      return {
+        code: "permission_denied",
+        summary:
+          error.step === "restart"
+            ? "Codrive was installed, but the service could not restart with the current permissions. Repair local service access, then retry."
+            : "Codrive could not install the package with the current npm permissions. Repair npm access, then retry.",
+      };
+    }
+    if (error.step === "restart") {
+      return {
+        code: "service_restart_failed",
+        summary: "Codrive was installed, but the service could not restart. Run codrive upgrade to retry.",
+      };
+    }
+    return {
+      code: "package_install_failed",
+      summary: "The Codrive package could not be installed. Check npm access and run codrive upgrade to retry.",
+    };
+  }
   const message = error instanceof Error ? error.message : String(error);
   if (/EACCES|EPERM|permission/i.test(message)) {
     return {
