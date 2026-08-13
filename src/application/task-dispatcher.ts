@@ -13,6 +13,7 @@ export type TurnDispatchResult =
 
 export interface TaskDispatcher {
   openThread(request: DispatchRequest): Promise<string>;
+  resumeThread(request: DispatchRequest, threadId: string): Promise<void>;
   startTurn(
     request: DispatchRequest,
     threadId: string,

@@ -199,6 +199,7 @@ export class RecoveryManager {
   }
 
   async recoverUnattendedWork(now = new Date()): Promise<void> {
+    await this.workflow.resetStableModelCapacityFailures(now);
     await this.recoverDeferredTaskTurns();
     await this.recoverExpiredExecutions(now);
     await this.workflow.lifecycle.run(
@@ -323,6 +324,11 @@ export class RecoveryManager {
                 taskExecution.attemptId,
                 turnId,
               )
+            : params.turn?.status === "interrupted"
+              ? this.workflow.resumeTaskAfterInterruption(
+                  found.task.id,
+                  taskExecution.attemptId,
+                )
             : this.workflow.failTurn(
                 found.task.id,
                 taskExecution.attemptId,
@@ -479,7 +485,7 @@ export class RecoveryManager {
         } else if (decision === "keep_running" || decision === "defer") {
           await this.workflow.renewTaskLease(taskId, execution.attemptId);
         } else {
-          await this.workflow.restartTaskAfterInterruption(
+          await this.workflow.resumeTaskAfterInterruption(
             taskId,
             execution.attemptId,
           );
@@ -543,17 +549,17 @@ function isDeferredTaskTurn(execution: TaskExecution): boolean {
   return (
     execution.status === "pending" ||
     (execution.status === "awaiting_report" &&
-      execution.turnCompletedAt !== undefined)
+      (execution.turnCompletedAt !== undefined || execution.turnId === undefined))
   );
 }
 
 function recoveryDecision(
   observation: TurnObservation,
-): "complete" | "keep_running" | "defer" | "restart" {
+): "complete" | "keep_running" | "defer" | "recover" {
   if (observation.status === "completed") return "complete";
   if (observation.status === "inProgress") return "keep_running";
   if (observation.error) return "defer";
-  return "restart";
+  return "recover";
 }
 
 function changesRetrySchedule(type: string): boolean {

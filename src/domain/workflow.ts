@@ -64,6 +64,7 @@ export function applyTaskReport(
     ...taskWithoutExecution,
     status: transition.status,
     requestedAction: transition.action,
+    modelRouting: execution.modelRouting,
     updatedAt: now,
   };
   return nextTask;

@@ -30,6 +30,10 @@ export class CodexTaskDispatcher implements TaskDispatcher {
     return this.codex.startThread(cwd, threadTitle(request.project, request.task));
   }
 
+  async resumeThread(request: DispatchRequest, threadId: string): Promise<void> {
+    await this.codex.resumeThread(threadId, conversationDirectory(request));
+  }
+
   startTurn(
     request: DispatchRequest,
     threadId: string,

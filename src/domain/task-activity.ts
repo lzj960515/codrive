@@ -32,7 +32,7 @@ export interface CreateTaskLifecycleActivityInput {
   activityId: string;
   projectId: string;
   taskId: string;
-  type: "execution_failed" | "cancelled";
+  type: "execution_recovered" | "execution_failed" | "cancelled";
   summary: string;
   occurredAt: string;
   attemptId?: string;

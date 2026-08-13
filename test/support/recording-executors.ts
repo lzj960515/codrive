@@ -21,15 +21,22 @@ export function testModelRouting() {
 
 export class RecordingTaskDispatcher implements TaskDispatcher {
   readonly opened: DispatchRequest[] = [];
+  readonly resumed: Array<DispatchRequest & { threadId: string }> = [];
   readonly started: Array<DispatchRequest & { threadId: string; model: string }> = [];
   readonly reminders: Array<DispatchRequest & { threadId: string; model: string }> = [];
   readonly interrupted: DispatchRequest[] = [];
   beforeStartTurn?: (request: DispatchRequest, threadId: string) => Promise<void>;
+  beforeResumeThread?: (request: DispatchRequest, threadId: string) => Promise<void>;
   conversationActive = false;
 
   async openThread(request: DispatchRequest): Promise<string> {
     this.opened.push(request);
     return `task_thread_${this.opened.length}`;
+  }
+
+  async resumeThread(request: DispatchRequest, threadId: string): Promise<void> {
+    await this.beforeResumeThread?.(request, threadId);
+    this.resumed.push({ ...request, threadId });
   }
 
   async startTurn(

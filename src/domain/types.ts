@@ -16,10 +16,20 @@ export interface ModelCapacityError {
   failedAt: string;
 }
 
+export type ModelCircuitBreaker =
+  | { state: "closed" }
+  | { state: "open"; primaryProbeAt: string }
+  | {
+      state: "half_open";
+      fallbackRetryCount: number;
+      probeStartedAt: string;
+    };
+
 export interface ExecutionModelRouting {
   model: string;
   route: ModelRoute;
   retryCount: number;
+  circuitBreaker?: ModelCircuitBreaker;
   nextRetryAt?: string;
   lastError?: ModelCapacityError;
 }
@@ -90,6 +100,7 @@ export interface Project {
   requestedAction: ProjectAction | null;
   planning: ProjectPlanningState;
   currentExecution?: ProjectExecution;
+  modelRouting?: ExecutionModelRouting;
   cancellation?: Cancellation;
   contextNotes?: string[];
   createdAt: string;
@@ -117,6 +128,7 @@ export interface ProjectExecution {
   status: ExecutionStatus;
   threadId?: string;
   turnId?: string;
+  turnStartedAt?: string;
   startedAt: string;
   modelRouting: ExecutionModelRouting;
   finishedAt?: string;
@@ -156,6 +168,7 @@ export interface TaskExecution {
   action: TaskAction;
   threadId?: string;
   turnId?: string;
+  turnStartedAt?: string;
   status: ExecutionStatus;
   startedAt: string;
   modelRouting: ExecutionModelRouting;
@@ -198,6 +211,7 @@ export type TaskActivityType =
   | "integration_completed"
   | "decision_requested"
   | "blocked"
+  | "execution_recovered"
   | "execution_failed"
   | "cancelled";
 
@@ -238,6 +252,7 @@ export interface Task {
   status: TaskStatus;
   requestedAction: TaskAction | null;
   currentExecution?: TaskExecution;
+  modelRouting?: ExecutionModelRouting;
   cancellation?: Cancellation;
   createdAt: string;
   updatedAt: string;

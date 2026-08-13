@@ -19,11 +19,12 @@ export function renderBoardClient(accessToken: string): string {
       selected: "已完成本轮安排", waiting_for_task: "等待任务完成",
       retry_scheduled: "等待模型重试", active_paused: "执行中 · 后续已暂停",
       primary: "默认", fallback: "备用", user_confirmed: "用户确认",
+      closed: "正常", open: "已熔断", half_open: "主模型探测",
       agent_decision: "Codex 判断", codex: "Codex", user: "用户",
       development_completed: "开发完成", rework_completed: "返工完成",
       review_approved: "审查通过", review_changes_requested: "审查退回",
       review_requested: "请求审查", integration_completed: "合入完成",
-      decision_requested: "请求决定", execution_failed: "执行失败"
+      decision_requested: "请求决定", execution_recovered: "中断恢复", execution_failed: "执行失败"
     };
     const path = window.location.pathname;
     const route = path === "/settings"
@@ -265,7 +266,7 @@ export function renderBoardClient(accessToken: string): string {
           '<form id="settings-form" class="settings-form settings-panel">'+
             '<label class="setting-field"><span><b>每个项目的并发任务数</b><small>每个项目独立计算容量，不同项目互不占用槽位。</small></span><input name="maxConcurrentTasks" type="number" min="1" max="32" required value="'+settings.maxConcurrentTasks+'"></label>'+
             '<label class="setting-field"><span><b>默认模型</b><small>新任务、审查、合入与项目规划优先使用这个模型。</small></span><select name="primary">'+options(settings.models.primary)+'</select></label>'+
-            '<label class="setting-field"><span><b>备用模型</b><small>默认模型容量重试三次后，在同一任务对话中切换到这里。</small></span><select name="fallback">'+options(settings.models.fallback)+'</select></label>'+
+            '<label class="setting-field"><span><b>备用模型</b><small>默认模型容量重试三次后切换到这里；冷却后会在下一次自然 turn 探测默认模型。</small></span><select name="fallback">'+options(settings.models.fallback)+'</select></label>'+
             '<div class="settings-actions"><button class="primary-button" type="submit">保存并应用</button><span id="settings-status" role="status"></span></div>'+
           '</form>'+
         '</div>';
@@ -315,7 +316,7 @@ export function renderBoardClient(accessToken: string): string {
             '</div>'+
             '<aside class="product-rail">'+
               '<section class="product-panel compact"><div class="panel-heading"><span>注册信息</span></div><dl class="detail-meta"><dt>项目 ID</dt><dd>'+escapeHtml(project.id)+'</dd><dt>仓库</dt><dd>'+escapeHtml(project.repositoryPath)+'</dd><dt>默认分支</dt><dd>'+escapeHtml(project.defaultBranch)+'</dd><dt>注册时间</dt><dd>'+escapeHtml(formatTime(project.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(project.updatedAt))+'</dd></dl></section>'+
-              '<section class="product-panel compact"><div class="panel-heading"><span>当前执行</span><b>'+escapeHtml(label(project.executionStatus || "pending"))+'</b></div><dl class="detail-meta"><dt>动作</dt><dd>'+escapeHtml(label(project.requestedAction || "pending"))+'</dd>'+(model ? '<dt>模型</dt><dd>'+escapeHtml(model.model)+'</dd><dt>路由</dt><dd>'+escapeHtml(label(model.route))+'</dd><dt>容量重试</dt><dd>'+model.retryCount+'</dd>' : '')+'</dl></section>'+
+              '<section class="product-panel compact"><div class="panel-heading"><span>当前执行</span><b>'+escapeHtml(label(project.executionStatus || "pending"))+'</b></div><dl class="detail-meta"><dt>动作</dt><dd>'+escapeHtml(label(project.requestedAction || "pending"))+'</dd>'+(model ? '<dt>模型</dt><dd>'+escapeHtml(model.model)+'</dd><dt>路由</dt><dd>'+escapeHtml(label(model.route))+'</dd>'+(model.circuitBreaker ? '<dt>主模型熔断</dt><dd>'+escapeHtml(label(model.circuitBreaker.state))+(model.circuitBreaker.primaryProbeAt ? ' · '+escapeHtml(formatTime(model.circuitBreaker.primaryProbeAt)) : '')+'</dd>' : '')+'<dt>容量重试</dt><dd>'+model.retryCount+'</dd>' : '')+'</dl></section>'+
               '<section class="product-panel compact"><div class="panel-heading"><span>产品上下文</span><b>'+project.contextNotes.length+'</b></div>'+notes+'</section>'+
             '</aside>'+
           '</div>'+
@@ -385,7 +386,7 @@ export function renderBoardClient(accessToken: string): string {
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+
           '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.requestedAction || task.status))+'</dd>'+
-            (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd><dt>容量重试</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+
+            (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd>'+(task.modelRouting.circuitBreaker ? '<dt>主模型熔断</dt><dd>'+escapeHtml(label(task.modelRouting.circuitBreaker.state))+(task.modelRouting.circuitBreaker.primaryProbeAt ? ' · '+escapeHtml(formatTime(task.modelRouting.circuitBreaker.primaryProbeAt)) : '')+'</dd>' : '')+'<dt>容量重试</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+
             '<dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
         '</div>';
       host.querySelector("[data-latest-activity]")?.scrollIntoView({ block: "end", inline: "nearest" });

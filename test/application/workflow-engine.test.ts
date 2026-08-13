@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
 import type {
+  Project,
   ProjectReport,
   Task,
   TaskReport,
@@ -85,6 +86,39 @@ async function finishTaskExecution(
     attemptId: execution.attemptId,
   });
   return workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+}
+
+function capacityFailure(turnId: string) {
+  return {
+    turnId,
+    message: "Selected model is at capacity. Please try a different model.",
+    codexErrorInfo: "serverOverloaded",
+  };
+}
+
+function primaryProbeAt(task: Task): string {
+  const circuit = task.currentExecution!.modelRouting.circuitBreaker;
+  expect(circuit?.state).toBe("open");
+  if (!circuit || circuit.state !== "open") {
+    throw new Error("Expected an open model circuit");
+  }
+  return circuit.primaryProbeAt;
+}
+
+function projectPrimaryProbeAt(project: Project): string {
+  const circuit = project.currentExecution!.modelRouting.circuitBreaker;
+  expect(circuit?.state).toBe("open");
+  if (!circuit || circuit.state !== "open") {
+    throw new Error("Expected an open project model circuit");
+  }
+  return circuit.primaryProbeAt;
+}
+
+async function failCapacityAndStartRetry(taskId: string, delayMs: number) {
+  const running = (await store.findTask(taskId))!.task.currentExecution!;
+  await workflow.failTurn(taskId, running.attemptId, capacityFailure(running.turnId!));
+  now = new Date(now.getTime() + delayMs);
+  await workflow.retryScheduledExecutions(now);
 }
 
 describe("WorkflowEngine", () => {
@@ -1384,6 +1418,165 @@ describe("WorkflowEngine", () => {
     expect(projectExecutor.started).toHaveLength(2);
   });
 
+  it("starts a new project capacity failure window after a stable turn", async () => {
+    const created = await registerProject(1);
+    let execution = created.project.currentExecution!;
+    await workflow.failProjectTurn(
+      created.project.id,
+      execution.attemptId,
+      capacityFailure(execution.turnId!),
+    );
+    now = new Date(now.getTime() + 5_000);
+    await workflow.retryScheduledExecutions(now);
+
+    execution = (await store.getProject(created.project.id))!.project.currentExecution!;
+    now = new Date(now.getTime() + 5 * 60_000);
+    await workflow.failProjectTurn(
+      created.project.id,
+      execution.attemptId,
+      capacityFailure(execution.turnId!),
+    );
+
+    expect(
+      (await store.getProject(created.project.id))!.project.currentExecution,
+    ).toMatchObject({
+      status: "retry_scheduled",
+      attemptId: execution.attemptId,
+      threadId: execution.threadId,
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 1,
+        nextRetryAt: new Date(now.getTime() + 5_000).toISOString(),
+      },
+    });
+  });
+
+  it("persists a cleared retry count after a project turn stays stable", async () => {
+    const created = await registerProject(1);
+    let execution = created.project.currentExecution!;
+    await workflow.failProjectTurn(
+      created.project.id,
+      execution.attemptId,
+      capacityFailure(execution.turnId!),
+    );
+    now = new Date(now.getTime() + 5_000);
+    await workflow.retryScheduledExecutions(now);
+
+    now = new Date(now.getTime() + 5 * 60_000);
+    await workflow.resetStableModelCapacityFailures(now);
+
+    execution = (await store.getProject(created.project.id))!.project.currentExecution!;
+    expect(execution).toMatchObject({
+      status: "running",
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 0,
+      },
+    });
+  });
+
+  it("probes the primary model on a project report turn after fallback cooldown", async () => {
+    const created = await registerProject(1);
+
+    for (const delay of [5_000, 10_000, 20_000]) {
+      const running = (await store.getProject(created.project.id))!.project
+        .currentExecution!;
+      await workflow.failProjectTurn(
+        created.project.id,
+        running.attemptId,
+        capacityFailure(running.turnId!),
+      );
+      now = new Date(now.getTime() + delay);
+      await workflow.retryScheduledExecutions(now);
+    }
+    const exhaustedPrimary = (await store.getProject(created.project.id))!.project
+      .currentExecution!;
+    await workflow.failProjectTurn(
+      created.project.id,
+      exhaustedPrimary.attemptId,
+      capacityFailure(exhaustedPrimary.turnId!),
+    );
+
+    const fallbackProject = (await store.getProject(created.project.id))!.project;
+    const fallback = fallbackProject.currentExecution!;
+    now = new Date(Date.parse(projectPrimaryProbeAt(fallbackProject)));
+    await workflow.completeProjectTurn(
+      created.project.id,
+      fallback.attemptId,
+      fallback.turnId!,
+    );
+
+    expect(
+      (await store.getProject(created.project.id))!.project.currentExecution,
+    ).toMatchObject({
+      status: "awaiting_report",
+      attemptId: fallback.attemptId,
+      threadId: fallback.threadId,
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 0,
+        circuitBreaker: { state: "half_open", fallbackRetryCount: 0 },
+      },
+    });
+    expect(
+      projectExecutor.reminders.at(-1)?.project.currentExecution?.modelRouting.model,
+    ).toBe(models.primary);
+  });
+
+  it("carries an open primary circuit into the next project planning revision", async () => {
+    const created = await registerProject(1);
+
+    for (const delay of [5_000, 10_000, 20_000]) {
+      const running = (await store.getProject(created.project.id))!.project
+        .currentExecution!;
+      await workflow.failProjectTurn(
+        created.project.id,
+        running.attemptId,
+        capacityFailure(running.turnId!),
+      );
+      now = new Date(now.getTime() + delay);
+      await workflow.retryScheduledExecutions(now);
+    }
+    const exhaustedPrimary = (await store.getProject(created.project.id))!.project
+      .currentExecution!;
+    await workflow.failProjectTurn(
+      created.project.id,
+      exhaustedPrimary.attemptId,
+      capacityFailure(exhaustedPrimary.turnId!),
+    );
+    const fallbackProject = (await store.getProject(created.project.id))!.project;
+    const probeAt = projectPrimaryProbeAt(fallbackProject);
+
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the first task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    await workflow.addProjectWork(created.project.id, [
+      { title: "Follow-up", description: "Build follow-up", acceptanceCriteria: [] },
+    ]);
+
+    expect((await store.getProject(created.project.id))!.project).toMatchObject({
+      requestedAction: "select_tasks",
+      currentExecution: {
+        status: "running",
+        modelRouting: {
+          model: models.fallback,
+          route: "fallback",
+          retryCount: 0,
+          circuitBreaker: { state: "open", primaryProbeAt: probeAt },
+        },
+      },
+    });
+    expect(
+      projectExecutor.started.at(-1)?.project.currentExecution?.modelRouting.model,
+    ).toBe(models.fallback);
+  });
+
   it("retries model capacity failures three times before routing the same task attempt to the fallback model", async () => {
     const created = await registerProject(1);
     await finishProjectExecution({
@@ -1447,6 +1640,7 @@ describe("WorkflowEngine", () => {
     }
 
     const finalPrimary = (await store.findTask(taskId))!.task.currentExecution!;
+    const circuitOpenedAt = now;
     await workflow.failTurn(taskId, finalPrimary.attemptId, {
       turnId: finalPrimary.turnId!,
       message: "Selected model is at capacity. Please try a different model.",
@@ -1463,11 +1657,419 @@ describe("WorkflowEngine", () => {
           model: models.fallback,
           route: "fallback",
           retryCount: 0,
+          circuitBreaker: {
+            state: "open",
+            primaryProbeAt: new Date(
+              circuitOpenedAt.getTime() + 5 * 60_000,
+            ).toISOString(),
+          },
         },
       },
     });
     expect(taskDispatcher.started).toHaveLength(5);
     expect(taskDispatcher.started.at(-1)?.model).toBe(models.fallback);
+  });
+
+  it("keeps counting capacity failures when the latest turn is shorter than the stable window", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+
+    await failCapacityAndStartRetry(taskId, 5_000);
+    await failCapacityAndStartRetry(taskId, 10_000);
+    now = new Date(now.getTime() + 5 * 60_000 - 1);
+    const running = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(taskId, running.attemptId, capacityFailure(running.turnId!));
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "retry_scheduled",
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 3,
+      },
+    });
+  });
+
+  it("starts a new capacity failure window after the latest turn stays stable", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+
+    await failCapacityAndStartRetry(taskId, 5_000);
+    await failCapacityAndStartRetry(taskId, 10_000);
+    now = new Date(now.getTime() + 5 * 60_000);
+    const running = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(taskId, running.attemptId, capacityFailure(running.turnId!));
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "retry_scheduled",
+      attemptId: running.attemptId,
+      threadId: running.threadId,
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 1,
+        nextRetryAt: new Date(now.getTime() + 5_000).toISOString(),
+      },
+    });
+  });
+
+  it("persists a cleared retry count after a task turn stays stable", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+    await failCapacityAndStartRetry(taskId, 5_000);
+
+    now = new Date(now.getTime() + 5 * 60_000);
+    await workflow.resetStableModelCapacityFailures(now);
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "running",
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 0,
+      },
+    });
+  });
+
+  it("does not clear capacity failures while their retry is still scheduled", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+    const running = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(taskId, running.attemptId, capacityFailure(running.turnId!));
+
+    now = new Date(now.getTime() + 5 * 60_000);
+    await workflow.resetStableModelCapacityFailures(now);
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "retry_scheduled",
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 1,
+      },
+    });
+  });
+
+  it("keeps an active fallback turn running when the primary probe cooldown expires", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+
+    for (const delay of [5_000, 10_000, 20_000]) {
+      await failCapacityAndStartRetry(taskId, delay);
+    }
+    const exhaustedPrimary = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(
+      taskId,
+      exhaustedPrimary.attemptId,
+      capacityFailure(exhaustedPrimary.turnId!),
+    );
+    now = new Date(now.getTime() + 5 * 60_000);
+    await workflow.resetStableModelCapacityFailures(now);
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "running",
+      attemptId: exhaustedPrimary.attemptId,
+      threadId: exhaustedPrimary.threadId,
+      modelRouting: {
+        model: models.fallback,
+        route: "fallback",
+        retryCount: 0,
+        circuitBreaker: {
+          state: "open",
+          primaryProbeAt: now.toISOString(),
+        },
+      },
+    });
+    expect(taskDispatcher.started).toHaveLength(5);
+  });
+
+  it("probes the primary model on the next natural turn after fallback cooldown", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+
+    for (const delay of [5_000, 10_000, 20_000]) {
+      await failCapacityAndStartRetry(taskId, delay);
+    }
+    const exhaustedPrimary = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(
+      taskId,
+      exhaustedPrimary.attemptId,
+      capacityFailure(exhaustedPrimary.turnId!),
+    );
+
+    const fallback = (await store.findTask(taskId))!.task.currentExecution!;
+    now = new Date(Date.parse(primaryProbeAt((await store.findTask(taskId))!.task)));
+    await workflow.completeTurn(taskId, fallback.attemptId, fallback.turnId!);
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "awaiting_report",
+      attemptId: fallback.attemptId,
+      threadId: fallback.threadId,
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 0,
+        circuitBreaker: { state: "half_open", fallbackRetryCount: 0 },
+      },
+    });
+    expect(taskDispatcher.reminders.at(-1)?.model).toBe(models.primary);
+  });
+
+  it("carries an open primary circuit into the next task stage", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+
+    for (const delay of [5_000, 10_000, 20_000]) {
+      await failCapacityAndStartRetry(taskId, delay);
+    }
+    const exhaustedPrimary = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(
+      taskId,
+      exhaustedPrimary.attemptId,
+      capacityFailure(exhaustedPrimary.turnId!),
+    );
+    const fallbackTask = (await store.findTask(taskId))!.task;
+    const fallback = fallbackTask.currentExecution!;
+    const probeAt = primaryProbeAt(fallbackTask);
+
+    await workflow.submitReport({
+      taskId,
+      attemptId: fallback.attemptId,
+      outcome: "completed",
+      summary: "Development completed on fallback",
+      workspacePath: "/workspace/game/.worktrees/task",
+      candidateCommit: "candidate_fallback",
+    });
+    await workflow.completeTurn(taskId, fallback.attemptId, fallback.turnId!);
+
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        action: "review",
+        status: "running",
+        modelRouting: {
+          model: models.fallback,
+          route: "fallback",
+          retryCount: 0,
+          circuitBreaker: { state: "open", primaryProbeAt: probeAt },
+        },
+      },
+    });
+    expect(taskDispatcher.started.at(-1)?.model).toBe(models.fallback);
+  });
+
+  it("reopens the circuit immediately when a primary probe reaches capacity", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+
+    for (const delay of [5_000, 10_000, 20_000]) {
+      await failCapacityAndStartRetry(taskId, delay);
+    }
+    const exhaustedPrimary = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(
+      taskId,
+      exhaustedPrimary.attemptId,
+      capacityFailure(exhaustedPrimary.turnId!),
+    );
+    const fallback = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(
+      taskId,
+      fallback.attemptId,
+      capacityFailure(fallback.turnId!),
+    );
+
+    const scheduledFallback = (await store.findTask(taskId))!.task.currentExecution!;
+    now = new Date(Date.parse(primaryProbeAt((await store.findTask(taskId))!.task)));
+    await workflow.retryScheduledExecutions(now);
+    const probe = (await store.findTask(taskId))!.task.currentExecution!;
+    expect(probe.modelRouting).toMatchObject({
+      model: models.primary,
+      route: "primary",
+      retryCount: 0,
+      circuitBreaker: { state: "half_open", fallbackRetryCount: 1 },
+    });
+
+    await workflow.failTurn(
+      taskId,
+      probe.attemptId,
+      capacityFailure(probe.turnId!),
+    );
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "running",
+      attemptId: probe.attemptId,
+      threadId: probe.threadId,
+      modelRouting: {
+        model: models.fallback,
+        route: "fallback",
+        retryCount: 1,
+        circuitBreaker: {
+          state: "open",
+          primaryProbeAt: new Date(now.getTime() + 5 * 60_000).toISOString(),
+        },
+      },
+    });
+    expect(taskDispatcher.started.slice(-2).map(({ model }) => model)).toEqual([
+      models.primary,
+      models.fallback,
+    ]);
+  });
+
+  it("keeps the fallback failure budget when a probe follows a scheduled fallback retry", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+
+    for (const delay of [5_000, 10_000, 20_000]) {
+      await failCapacityAndStartRetry(taskId, delay);
+    }
+    const exhaustedPrimary = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(
+      taskId,
+      exhaustedPrimary.attemptId,
+      capacityFailure(exhaustedPrimary.turnId!),
+    );
+    for (const delay of [5_000, 10_000, 20_000]) {
+      const fallback = (await store.findTask(taskId))!.task.currentExecution!;
+      await workflow.failTurn(
+        taskId,
+        fallback.attemptId,
+        capacityFailure(fallback.turnId!),
+      );
+      now = new Date(now.getTime() + delay);
+      await workflow.retryScheduledExecutions(now);
+    }
+
+    const fallback = (await store.findTask(taskId))!.task;
+    const probeAt = new Date(Date.parse(primaryProbeAt(fallback)));
+    now = probeAt;
+    await workflow.completeTurn(
+      taskId,
+      fallback.currentExecution!.attemptId,
+      fallback.currentExecution!.turnId!,
+    );
+    const probe = (await store.findTask(taskId))!.task.currentExecution!;
+    expect(probe.modelRouting.circuitBreaker).toMatchObject({
+      state: "half_open",
+      fallbackRetryCount: 3,
+    });
+
+    await workflow.failTurn(
+      taskId,
+      probe.attemptId,
+      capacityFailure(probe.turnId!),
+    );
+    const resumedFallback = (await store.findTask(taskId))!.task.currentExecution!;
+    expect(resumedFallback.modelRouting).toMatchObject({
+      model: models.fallback,
+      route: "fallback",
+      retryCount: 3,
+      circuitBreaker: { state: "open" },
+    });
+
+    await workflow.failTurn(
+      taskId,
+      resumedFallback.attemptId,
+      capacityFailure(resumedFallback.turnId!),
+    );
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "blocked",
+      currentExecution: {
+        status: "failed",
+        modelRouting: { model: models.fallback, route: "fallback", retryCount: 3 },
+      },
+    });
+  });
+
+  it("closes the circuit after a primary probe stays stable", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+
+    for (const delay of [5_000, 10_000, 20_000]) {
+      await failCapacityAndStartRetry(taskId, delay);
+    }
+    const exhaustedPrimary = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(
+      taskId,
+      exhaustedPrimary.attemptId,
+      capacityFailure(exhaustedPrimary.turnId!),
+    );
+    const fallback = (await store.findTask(taskId))!.task.currentExecution!;
+    now = new Date(Date.parse(primaryProbeAt((await store.findTask(taskId))!.task)));
+    await workflow.completeTurn(taskId, fallback.attemptId, fallback.turnId!);
+
+    now = new Date(now.getTime() + 5 * 60_000);
+    await workflow.resetStableModelCapacityFailures(now);
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "awaiting_report",
+      modelRouting: {
+        model: models.primary,
+        route: "primary",
+        retryCount: 0,
+        circuitBreaker: { state: "closed" },
+      },
+    });
   });
 
   it("blocks only after fallback capacity retries are exhausted", async () => {

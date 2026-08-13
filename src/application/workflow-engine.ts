@@ -42,17 +42,23 @@ import type { DispatchRequest, TaskDispatcher } from "./task-dispatcher.js";
 import {
   type CodexTurnFailure,
   defaultModelCapacityRetryDelaysMs,
+  defaultModelCapacityRetryResetAfterMs,
+  defaultModelPrimaryProbeAfterMs,
   initialModelRouting,
   isModelCapacityFailure,
   isRetryDue,
   markRetryStarted,
   planModelCapacityRecovery,
+  prepareModelRoutingForTurn,
+  resetCapacityFailuresAfterStableTurn,
 } from "./model-routing.js";
 
 export interface WorkflowEngineOptions {
   maxConcurrentTasks: number;
   models: ModelRoutingSettings;
   modelCapacityRetryDelaysMs?: readonly number[];
+  modelCapacityRetryResetAfterMs?: number;
+  modelPrimaryProbeAfterMs?: number;
   executionLeaseMs?: number;
   now?: () => string;
   createId?: (prefix: string) => string;
@@ -86,6 +92,8 @@ export class WorkflowEngine {
   private readonly createId: (prefix: string) => string;
   private readonly executionLeaseMs: number;
   private readonly modelCapacityRetryDelaysMs: readonly number[];
+  private readonly modelCapacityRetryResetAfterMs: number;
+  private readonly modelPrimaryProbeAfterMs: number;
   private maxConcurrentTasks: number;
   private models: ModelRoutingSettings;
   private readonly projectExecutions: ProjectExecutionCoordinator | undefined;
@@ -103,6 +111,11 @@ export class WorkflowEngine {
     this.executionLeaseMs = options.executionLeaseMs ?? 6 * 60 * 60 * 1000;
     this.modelCapacityRetryDelaysMs =
       options.modelCapacityRetryDelaysMs ?? defaultModelCapacityRetryDelaysMs;
+    this.modelCapacityRetryResetAfterMs =
+      options.modelCapacityRetryResetAfterMs ??
+      defaultModelCapacityRetryResetAfterMs;
+    this.modelPrimaryProbeAfterMs =
+      options.modelPrimaryProbeAfterMs ?? defaultModelPrimaryProbeAfterMs;
     this.maxConcurrentTasks = options.maxConcurrentTasks;
     this.models = options.models;
     this.lifecycle =
@@ -118,6 +131,8 @@ export class WorkflowEngine {
           leaseExpiration: () => this.leaseExpiration(),
           modelSettings: () => this.models,
           modelCapacityRetryDelaysMs: this.modelCapacityRetryDelaysMs,
+          modelCapacityRetryResetAfterMs: this.modelCapacityRetryResetAfterMs,
+          modelPrimaryProbeAfterMs: this.modelPrimaryProbeAfterMs,
           recordEvent: async (event) => {
             await this.recordEvent(event);
           },
@@ -380,7 +395,10 @@ export class WorkflowEngine {
         report.taskId,
       );
       const previousActivity = activities
-        .filter(({ attemptId }) => attemptId === report.attemptId)
+        .filter(
+          ({ attemptId, outcome }) =>
+            attemptId === report.attemptId && outcome !== undefined,
+        )
         .at(-1);
       if (previousActivity) {
         if (taskActivityMatchesReport(previousActivity, report)) return found.task;
@@ -613,13 +631,28 @@ export class WorkflowEngine {
         return found.task;
       }
       if (execution.status === "pending") {
-        return this.continueTaskDispatch(found.project, found.task);
+        if (execution.reportReminderCount) {
+          return this.continueTaskReportRequest(
+            found.project,
+            found.task,
+            execution.threadId ? { resumePersistedThread: true } : undefined,
+          );
+        }
+        return this.continueTaskDispatch(
+          found.project,
+          found.task,
+          execution.threadId ? { resumePersistedThread: true } : undefined,
+        );
       }
       if (
         execution.status === "awaiting_report" &&
-        execution.turnCompletedAt
+        (execution.turnCompletedAt || !execution.turnId)
       ) {
-        return this.continueTaskReportRequest(found.project, found.task);
+        return this.continueTaskReportRequest(
+          found.project,
+          found.task,
+          execution.threadId ? { resumePersistedThread: true } : undefined,
+        );
       }
       await this.recordRecoverySuppressed(
         found.project.id,
@@ -631,7 +664,7 @@ export class WorkflowEngine {
     });
   }
 
-  restartTaskAfterInterruption(
+  resumeTaskAfterInterruption(
     taskId: string,
     expectedAttemptId: string,
   ): Promise<Task> {
@@ -646,7 +679,64 @@ export class WorkflowEngine {
         );
         return found.task;
       }
-      return this.startReplacementTaskExecution(found.project, found.task);
+      const execution = found.task.currentExecution;
+      if (!found.task.requestedAction) {
+        await this.recordRecoverySuppressed(
+          found.project.id,
+          found.task,
+          expectedAttemptId,
+          "task_no_longer_active",
+        );
+        return found.task;
+      }
+      if (!execution?.threadId) {
+        return this.blockTaskAfterRecoveryFailure(
+          found.project,
+          found.task,
+          "任务执行中断后缺少可恢复的原对话。",
+        );
+      }
+
+      const now = this.now();
+      const modelRouting = resetCapacityFailuresAfterStableTurn(
+        execution.modelRouting,
+        execution.turnStartedAt,
+        new Date(now),
+        this.modelCapacityRetryResetAfterMs,
+      );
+      const pending: Task = {
+        ...found.task,
+        currentExecution: {
+          ...execution,
+          status: execution.reportReminderCount ? "awaiting_report" : "pending",
+          modelRouting,
+          leaseExpiresAt: this.leaseExpiration(),
+        },
+        updatedAt: now,
+      };
+      delete pending.currentExecution?.turnId;
+      delete pending.currentExecution?.turnStartedAt;
+      delete pending.currentExecution?.turnCompletedAt;
+      delete pending.currentExecution?.finishedAt;
+      await this.store.saveTask(found.project.id, pending);
+      await this.recordEvent({
+        type: "task.execution_recovery_started",
+        projectId: found.project.id,
+        taskId,
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+        ...(execution.turnId ? { turnId: execution.turnId } : {}),
+        before: taskLifecycleState(found.task),
+        after: taskLifecycleState(pending),
+        data: { action: execution.action },
+      });
+      const recovery = {
+        resumePersistedThread: true,
+        ...(execution.turnId ? { recoveredTurnId: execution.turnId } : {}),
+      } as const;
+      return execution.reportReminderCount
+        ? this.continueTaskReportRequest(found.project, pending, recovery)
+        : this.continueTaskDispatch(found.project, pending, recovery);
     });
   }
 
@@ -847,12 +937,20 @@ export class WorkflowEngine {
       }
       let exhaustedModelRouting;
       if (isModelCapacityFailure(failure)) {
-        const recovery = planModelCapacityRecovery(
+        const failureTime = new Date(this.now());
+        const currentRouting = resetCapacityFailuresAfterStableTurn(
           execution.modelRouting,
+          execution.turnStartedAt,
+          failureTime,
+          this.modelCapacityRetryResetAfterMs,
+        );
+        const recovery = planModelCapacityRecovery(
+          currentRouting,
           failure,
           this.models,
-          new Date(this.now()),
+          failureTime,
           this.modelCapacityRetryDelaysMs,
+          this.modelPrimaryProbeAfterMs,
         );
         if (recovery.outcome === "retry_scheduled") {
           const scheduled: Task = {
@@ -943,6 +1041,78 @@ export class WorkflowEngine {
 
   retryScheduledExecutions(now = new Date(this.now())): Promise<void> {
     return this.enqueue(() => this.dispatchScheduledModelRetries(now));
+  }
+
+  resetStableModelCapacityFailures(now = new Date(this.now())): Promise<void> {
+    return this.enqueue(async () => {
+      for (const snapshot of await this.store.listProjects()) {
+        const projectExecution = snapshot.project.currentExecution;
+        if (
+          projectExecution &&
+          inFlightExecutionStatuses.has(projectExecution.status)
+        ) {
+          const modelRouting = resetCapacityFailuresAfterStableTurn(
+            projectExecution.modelRouting,
+            projectExecution.turnStartedAt,
+            now,
+            this.modelCapacityRetryResetAfterMs,
+          );
+          if (modelRouting !== projectExecution.modelRouting) {
+            const project: Project = {
+              ...snapshot.project,
+              currentExecution: { ...projectExecution, modelRouting },
+              updatedAt: now.toISOString(),
+            };
+            await this.store.saveProject(project);
+            await this.recordEvent({
+              type: "turn.capacity_failures_reset",
+              projectId: project.id,
+              attemptId: projectExecution.attemptId,
+              ...(projectExecution.threadId
+                ? { threadId: projectExecution.threadId }
+                : {}),
+              ...(projectExecution.turnId ? { turnId: projectExecution.turnId } : {}),
+              before: projectLifecycleState(snapshot.project),
+              after: projectLifecycleState(project),
+              data: { scope: "project", modelRoute: modelRouting.route },
+            });
+          }
+        }
+
+        for (const task of snapshot.tasks) {
+          const execution = task.currentExecution;
+          if (!execution || !inFlightExecutionStatuses.has(execution.status)) {
+            continue;
+          }
+          const modelRouting = resetCapacityFailuresAfterStableTurn(
+            execution.modelRouting,
+            execution.turnStartedAt,
+            now,
+            this.modelCapacityRetryResetAfterMs,
+          );
+          if (modelRouting === execution.modelRouting) continue;
+          const current = (await this.requireTask(task.id)).task;
+          if (current.currentExecution?.attemptId !== execution.attemptId) continue;
+          const reset: Task = {
+            ...current,
+            currentExecution: { ...current.currentExecution, modelRouting },
+            updatedAt: now.toISOString(),
+          };
+          await this.store.saveTask(snapshot.project.id, reset);
+          await this.recordEvent({
+            type: "turn.capacity_failures_reset",
+            projectId: snapshot.project.id,
+            taskId: task.id,
+            attemptId: execution.attemptId,
+            ...(execution.threadId ? { threadId: execution.threadId } : {}),
+            ...(execution.turnId ? { turnId: execution.turnId } : {}),
+            before: taskLifecycleState(current),
+            after: taskLifecycleState(reset),
+            data: { modelRoute: modelRouting.route },
+          });
+        }
+      }
+    });
   }
 
   private async reconcileInternal(): Promise<void> {
@@ -1180,7 +1350,7 @@ export class WorkflowEngine {
         task,
         attemptId,
         this.now(),
-        initialModelRouting(this.models),
+        task.modelRouting ?? initialModelRouting(this.models),
       );
     } catch (error) {
       await this.recordEvent({
@@ -1212,12 +1382,30 @@ export class WorkflowEngine {
     return hasActiveTaskExecution(result);
   }
 
-  private async continueTaskDispatch(project: Project, task: Task): Promise<Task> {
+  private async continueTaskDispatch(
+    project: Project,
+    task: Task,
+    recovery?: { resumePersistedThread: true; recoveredTurnId?: string },
+  ): Promise<Task> {
     const execution = task.currentExecution!;
-    const request = await this.taskDispatchRequest(project, task);
+    const modelRouting = prepareModelRoutingForTurn(
+      execution.modelRouting,
+      this.models,
+      new Date(this.now()),
+      this.modelPrimaryProbeAfterMs,
+    );
+    const taskForTurn =
+      modelRouting === execution.modelRouting
+        ? task
+        : {
+            ...task,
+            currentExecution: { ...execution, modelRouting },
+            updatedAt: this.now(),
+          };
+    const request = await this.taskDispatchRequest(project, taskForTurn);
     const { activity } = request;
     try {
-      let withThread = task;
+      let withThread = taskForTurn;
       let threadId = execution.threadId;
       if (!threadId) {
         const createsThread =
@@ -1225,8 +1413,11 @@ export class WorkflowEngine {
         const createdThreadId = await this.dispatcher.openThread(request);
         threadId = createdThreadId;
         withThread = {
-          ...task,
-          currentExecution: { ...execution, threadId: createdThreadId },
+          ...taskForTurn,
+          currentExecution: {
+            ...taskForTurn.currentExecution!,
+            threadId: createdThreadId,
+          },
           updatedAt: this.now(),
         };
         await this.store.saveTask(project.id, withThread);
@@ -1237,10 +1428,12 @@ export class WorkflowEngine {
             taskId: task.id,
             attemptId: execution.attemptId,
             threadId: createdThreadId,
-            before: taskLifecycleState(task),
+            before: taskLifecycleState(taskForTurn),
             after: taskLifecycleState(withThread),
           });
         }
+      } else if (recovery?.resumePersistedThread) {
+        await this.dispatcher.resumeThread(request, threadId);
       }
 
       const dispatch = await this.dispatcher.startTurn(
@@ -1250,15 +1443,17 @@ export class WorkflowEngine {
       if (dispatch.status === "conversation_active") return withThread;
 
       const turnId = dispatch.turnId;
+      const turnStartedAt = this.now();
       const running: Task = {
         ...withThread,
         currentExecution: {
           ...withThread.currentExecution!,
           status: "running",
           turnId,
+          turnStartedAt,
           leaseExpiresAt: this.leaseExpiration(),
         },
-        updatedAt: this.now(),
+        updatedAt: turnStartedAt,
       };
       await this.store.saveTask(project.id, running);
       await this.recordEvent({
@@ -1271,11 +1466,27 @@ export class WorkflowEngine {
         before: taskLifecycleState(withThread),
         after: taskLifecycleState(running),
       });
+      if (recovery) {
+        await this.recordTaskRecovery(
+          project,
+          running,
+          turnId,
+          turnStartedAt,
+          recovery.recoveredTurnId,
+        );
+      }
       return running;
     } catch (error) {
       const current = (await this.requireTask(task.id)).task;
       const now = this.now();
       const reason = error instanceof Error ? error.message : String(error);
+      if (recovery) {
+        return this.blockTaskAfterRecoveryFailure(
+          project,
+          current,
+          `任务执行恢复失败：${reason}`,
+        );
+      }
       const failed: Task = {
         ...current,
         status: "blocked",
@@ -1313,36 +1524,106 @@ export class WorkflowEngine {
   private async continueTaskReportRequest(
     project: Project,
     task: Task,
+    recovery?: { resumePersistedThread: true; recoveredTurnId?: string },
   ): Promise<Task> {
     const execution = task.currentExecution!;
-    const dispatch = await this.dispatcher.requestReport(
-      await this.taskDispatchRequest(project, task),
-      execution.threadId!,
-    );
-    if (dispatch.status === "conversation_active") return task;
+    try {
+      const modelRouting = prepareModelRoutingForTurn(
+        execution.modelRouting,
+        this.models,
+        new Date(this.now()),
+        this.modelPrimaryProbeAfterMs,
+      );
+      const taskForTurn =
+        modelRouting === execution.modelRouting
+          ? task
+          : {
+              ...task,
+              currentExecution: { ...execution, modelRouting },
+              updatedAt: this.now(),
+            };
+      const request = await this.taskDispatchRequest(project, taskForTurn);
+      if (recovery?.resumePersistedThread) {
+        await this.dispatcher.resumeThread(request, execution.threadId!);
+      }
+      const dispatch = await this.dispatcher.requestReport(
+        request,
+        execution.threadId!,
+      );
+      if (dispatch.status === "conversation_active") return task;
 
-    const reminded: Task = {
-      ...task,
-      currentExecution: {
-        ...execution,
+      const turnStartedAt = this.now();
+      const reminded: Task = {
+        ...taskForTurn,
+        currentExecution: {
+          ...taskForTurn.currentExecution!,
+          status: "awaiting_report",
+          turnId: dispatch.turnId,
+          turnStartedAt,
+          leaseExpiresAt: this.leaseExpiration(),
+        },
+        updatedAt: turnStartedAt,
+      };
+      delete reminded.currentExecution?.turnCompletedAt;
+      await this.store.saveTask(project.id, reminded);
+      await this.recordEvent({
+        type: "turn.started",
+        projectId: project.id,
+        taskId: task.id,
+        attemptId: execution.attemptId,
+        ...(execution.threadId ? { threadId: execution.threadId } : {}),
         turnId: dispatch.turnId,
-        leaseExpiresAt: this.leaseExpiration(),
-      },
-      updatedAt: this.now(),
-    };
-    delete reminded.currentExecution?.turnCompletedAt;
-    await this.store.saveTask(project.id, reminded);
+        before: taskLifecycleState(taskForTurn),
+        after: taskLifecycleState(reminded),
+      });
+      if (recovery) {
+        await this.recordTaskRecovery(
+          project,
+          reminded,
+          dispatch.turnId,
+          turnStartedAt,
+          recovery.recoveredTurnId,
+        );
+      }
+      return reminded;
+    } catch (error) {
+      if (!recovery) throw error;
+      const current = (await this.requireTask(task.id)).task;
+      const reason = error instanceof Error ? error.message : String(error);
+      return this.blockTaskAfterRecoveryFailure(
+        project,
+        current,
+        `任务执行恢复失败：${reason}`,
+      );
+    }
+  }
+
+  private async recordTaskRecovery(
+    project: Project,
+    task: Task,
+    turnId: string,
+    occurredAt: string,
+    recoveredTurnId?: string,
+  ): Promise<void> {
+    const execution = task.currentExecution!;
     await this.recordEvent({
-      type: "turn.started",
+      type: "task.execution_recovered",
       projectId: project.id,
       taskId: task.id,
       attemptId: execution.attemptId,
       ...(execution.threadId ? { threadId: execution.threadId } : {}),
-      turnId: dispatch.turnId,
-      before: taskLifecycleState(task),
-      after: taskLifecycleState(reminded),
+      turnId,
+      decision: "resume_current_execution",
+      result: "turn_started",
+      data: { recoveredTurnId: recoveredTurnId ?? null },
     });
-    return reminded;
+    await this.recordTaskLifecycleActivity(
+      project,
+      task,
+      "execution_recovered",
+      "服务中断后已在原任务对话中恢复执行。",
+      occurredAt,
+    );
   }
 
   private async finalizeTaskReport(
@@ -1406,6 +1687,7 @@ export class WorkflowEngine {
       status: "active",
       requestedAction: null,
       currentExecution: completedProjectExecution(project, this.now()),
+      modelRouting: execution.modelRouting,
       planning: markPlanningEvaluated(project.planning),
       updatedAt: this.now(),
     };
@@ -1537,6 +1819,42 @@ export class WorkflowEngine {
     return blocked;
   }
 
+  private async blockTaskAfterRecoveryFailure(
+    project: Project,
+    task: Task,
+    reason: string,
+  ): Promise<Task> {
+    const now = this.now();
+    const blocked: Task = {
+      ...task,
+      status: "blocked",
+      currentExecution: {
+        ...task.currentExecution!,
+        status: "failed",
+        finishedAt: now,
+      },
+      updatedAt: now,
+    };
+    await this.store.saveTask(project.id, blocked);
+    await this.recordEvent({
+      type: "task.execution_recovery_failed",
+      projectId: project.id,
+      taskId: task.id,
+      attemptId: task.currentExecution!.attemptId,
+      reason,
+      before: taskLifecycleState(task),
+      after: taskLifecycleState(blocked),
+    });
+    await this.recordTaskLifecycleActivity(
+      project,
+      blocked,
+      "execution_failed",
+      reason,
+      now,
+    );
+    return blocked;
+  }
+
   private async startReplacementTaskExecution(
     project: Project,
     current: Task,
@@ -1642,7 +1960,7 @@ export class WorkflowEngine {
   private async recordTaskLifecycleActivity(
     project: Project,
     task: Task,
-    type: "execution_failed" | "cancelled",
+    type: "execution_recovered" | "execution_failed" | "cancelled",
     summary: string,
     occurredAt: string,
     evidence?: NonNullable<TaskActivity["evidence"]>,

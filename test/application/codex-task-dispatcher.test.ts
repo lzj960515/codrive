@@ -218,6 +218,21 @@ describe("CodexTaskDispatcher", () => {
     ]);
   });
 
+  it("reattaches the persisted task thread during interrupted execution recovery", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = new CodexTaskDispatcher(gateway);
+    const currentRequest = request(task());
+
+    await dispatcher.resumeThread(currentRequest, "persisted_thread");
+
+    expect(gateway.calls).toEqual([
+      {
+        method: "resumeThread",
+        args: ["persisted_thread", project.repositoryPath],
+      },
+    ]);
+  });
+
   it("starts task and report turns under the project while preserving the task worktree", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);

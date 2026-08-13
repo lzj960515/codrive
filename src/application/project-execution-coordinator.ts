@@ -18,6 +18,8 @@ import {
   isRetryDue,
   markRetryStarted,
   planModelCapacityRecovery,
+  prepareModelRoutingForTurn,
+  resetCapacityFailuresAfterStableTurn,
 } from "./model-routing.js";
 
 const activeStatuses = new Set([
@@ -35,6 +37,8 @@ export interface ProjectExecutionCoordinatorOptions {
   leaseExpiration: () => string;
   modelSettings: () => ModelRoutingSettings;
   modelCapacityRetryDelaysMs: readonly number[];
+  modelCapacityRetryResetAfterMs: number;
+  modelPrimaryProbeAfterMs: number;
   recordEvent: (
     event: Omit<CodriveEvent, "eventId" | "occurredAt">,
   ) => Promise<void>;
@@ -83,7 +87,8 @@ export class ProjectExecutionCoordinator {
         action: "select_tasks",
         status: "pending",
         startedAt: now,
-        modelRouting: initialModelRouting(this.options.modelSettings()),
+        modelRouting:
+          project.modelRouting ?? initialModelRouting(this.options.modelSettings()),
         leaseExpiresAt: this.options.leaseExpiration(),
         ...context,
       },
@@ -231,15 +236,34 @@ export class ProjectExecutionCoordinator {
       after: projectLifecycleState(awaitingReport),
       data: { scope: "project" },
     });
+    const reminderRouting = prepareModelRoutingForTurn(
+      awaitingReport.currentExecution!.modelRouting,
+      this.options.modelSettings(),
+      new Date(this.options.now()),
+      this.options.modelPrimaryProbeAfterMs,
+    );
+    const projectForReminder =
+      reminderRouting === awaitingReport.currentExecution!.modelRouting
+        ? awaitingReport
+        : {
+            ...awaitingReport,
+            currentExecution: {
+              ...awaitingReport.currentExecution!,
+              modelRouting: reminderRouting,
+            },
+            updatedAt: this.options.now(),
+          };
     const reminderTurnId = await this.executor.requestReport(
-      awaitingReport,
+      projectForReminder,
       execution.threadId!,
     );
+    const turnStartedAt = this.options.now();
     const reminded: Project = {
-      ...awaitingReport,
+      ...projectForReminder,
       currentExecution: {
-        ...awaitingReport.currentExecution!,
+        ...projectForReminder.currentExecution!,
         turnId: reminderTurnId,
+        turnStartedAt,
         leaseExpiresAt: this.options.leaseExpiration(),
       },
     };
@@ -251,7 +275,7 @@ export class ProjectExecutionCoordinator {
       attemptId,
       ...(execution.threadId ? { threadId: execution.threadId } : {}),
       turnId: reminderTurnId,
-      before: projectLifecycleState(awaitingReport),
+      before: projectLifecycleState(projectForReminder),
       after: projectLifecycleState(reminded),
       data: {
         scope: "project",
@@ -368,12 +392,20 @@ export class ProjectExecutionCoordinator {
       return this.fail(project, failure.message);
     }
 
-    const recovery = planModelCapacityRecovery(
+    const failureTime = new Date(this.options.now());
+    const currentRouting = resetCapacityFailuresAfterStableTurn(
       execution.modelRouting,
+      execution.turnStartedAt,
+      failureTime,
+      this.options.modelCapacityRetryResetAfterMs,
+    );
+    const recovery = planModelCapacityRecovery(
+      currentRouting,
       failure,
       this.options.modelSettings(),
-      new Date(this.options.now()),
+      failureTime,
       this.options.modelCapacityRetryDelaysMs,
+      this.options.modelPrimaryProbeAfterMs,
     );
     if (recovery.outcome === "exhausted") {
       return this.fail(project, failure.message, undefined, recovery.routing);
@@ -434,14 +466,31 @@ export class ProjectExecutionCoordinator {
 
   private async dispatch(project: Project): Promise<Project> {
     const execution = project.currentExecution!;
+    const modelRouting = prepareModelRoutingForTurn(
+      execution.modelRouting,
+      this.options.modelSettings(),
+      new Date(this.options.now()),
+      this.options.modelPrimaryProbeAfterMs,
+    );
+    const projectForTurn =
+      modelRouting === execution.modelRouting
+        ? project
+        : {
+            ...project,
+            currentExecution: { ...execution, modelRouting },
+            updatedAt: this.options.now(),
+          };
     try {
-      let withThread = project;
+      let withThread = projectForTurn;
       let threadId = execution.threadId;
       if (!threadId) {
-        threadId = await this.executor.openThread(project);
+        threadId = await this.executor.openThread(projectForTurn);
         withThread = {
-          ...project,
-          currentExecution: { ...execution, threadId },
+          ...projectForTurn,
+          currentExecution: {
+            ...projectForTurn.currentExecution!,
+            threadId,
+          },
           updatedAt: this.options.now(),
         };
         await this.store.saveProject(withThread);
@@ -450,7 +499,7 @@ export class ProjectExecutionCoordinator {
           projectId: project.id,
           attemptId: execution.attemptId,
           threadId,
-          before: projectLifecycleState(project),
+          before: projectLifecycleState(projectForTurn),
           after: projectLifecycleState(withThread),
           data: { ephemeral: true },
         });
@@ -465,6 +514,7 @@ export class ProjectExecutionCoordinator {
           ...withThread.currentExecution!,
           status: execution.reportReminderCount ? "awaiting_report" : "running",
           turnId,
+          turnStartedAt: this.options.now(),
           leaseExpiresAt: this.options.leaseExpiration(),
         },
         updatedAt: this.options.now(),

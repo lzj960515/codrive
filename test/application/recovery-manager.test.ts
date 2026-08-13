@@ -101,7 +101,7 @@ describe("RecoveryManager", () => {
     recovery = new RecoveryManager(store, workflow, notifications);
   });
 
-  it("marks an interrupted App Server turn as failed", async () => {
+  it("resumes an interrupted App Server turn in the same task execution", async () => {
     const execution = (await store.findTask(taskId))!.task.currentExecution!;
 
     await recovery.handleNotification({
@@ -112,9 +112,44 @@ describe("RecoveryManager", () => {
     });
 
     expect((await store.findTask(taskId))?.task).toMatchObject({
-      status: "blocked",
-      currentExecution: { status: "failed" },
+      status: "developing",
+      currentExecution: {
+        status: "running",
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+      },
     });
+    expect((await store.findTask(taskId))?.task.currentExecution?.turnId).not.toBe(
+      execution.turnId,
+    );
+    expect(taskDispatcher.resumed).toHaveLength(1);
+  });
+
+  it("ignores the interrupted notification produced by task cancellation", async () => {
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.cancelTask(taskId, {
+      cancelledBy: "user",
+      decisionBasis: "user_confirmed",
+      reason: "Stop this task",
+    });
+
+    await recovery.handleNotification({
+      method: "turn/completed",
+      params: {
+        turn: { id: execution.turnId, status: "interrupted", error: null },
+      },
+    });
+
+    expect((await store.findTask(taskId))?.task).toMatchObject({
+      status: "cancelled",
+      requestedAction: null,
+      currentExecution: {
+        status: "interrupted",
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+      },
+    });
+    expect(taskDispatcher.resumed).toHaveLength(0);
   });
 
   it("ignores high-frequency App Server notifications that cannot change workflow state", async () => {
@@ -374,14 +409,184 @@ describe("RecoveryManager", () => {
     });
   });
 
-  it("starts a new attempt when a running turn is absent after restart", async () => {
-    const before = (await store.findTask(taskId))!.task.currentExecution!;
+  it("resumes an interrupted task in its current attempt and conversation", async () => {
+    const found = (await store.findTask(taskId))!;
+    const before = found.task.currentExecution!;
+    await store.saveTask(found.project.id, {
+      ...found.task,
+      currentExecution: {
+        ...before,
+        turnStartedAt: "2026-08-02T23:59:00.000Z",
+        modelRouting: {
+          model: testModels.fallback,
+          route: "fallback",
+          retryCount: 2,
+        },
+      },
+    });
 
     await recovery.recoverInterruptedExecutions();
 
     const after = (await store.findTask(taskId))!.task.currentExecution!;
-    expect(after.status).toBe("running");
-    expect(after.attemptId).not.toBe(before.attemptId);
+    expect(after).toMatchObject({
+      status: "running",
+      attemptId: before.attemptId,
+      action: before.action,
+      threadId: before.threadId,
+      modelRouting: {
+        model: testModels.fallback,
+        route: "fallback",
+        retryCount: 2,
+        circuitBreaker: {
+          state: "open",
+          primaryProbeAt: "2026-08-03T00:05:00.000Z",
+        },
+      },
+    });
+    expect(after.turnId).not.toBe(before.turnId);
+    expect(taskDispatcher.opened).toHaveLength(1);
+    expect(taskDispatcher.resumed).toEqual([
+      expect.objectContaining({
+        task: expect.objectContaining({ id: taskId }),
+        threadId: before.threadId,
+      }),
+    ]);
+    expect(await store.listTaskActivities(found.project.id, taskId)).toEqual([
+      expect.objectContaining({
+        type: "execution_recovered",
+        attemptId: before.attemptId,
+        threadId: before.threadId,
+      }),
+    ]);
+
+    await expect(
+      workflow.submitReport({
+        taskId,
+        attemptId: before.attemptId,
+        outcome: "completed",
+        summary: "Completed after service recovery",
+        workspacePath: "/workspace/game/.worktrees/task",
+        candidateCommit: "candidate_after_recovery",
+      }),
+    ).resolves.toMatchObject({
+      currentExecution: {
+        attemptId: before.attemptId,
+        submittedActivityId: expect.any(String),
+      },
+    });
+  });
+
+  it("blocks recovery instead of creating a new conversation when the persisted thread cannot resume", async () => {
+    const before = (await store.findTask(taskId))!.task.currentExecution!;
+    taskDispatcher.beforeResumeThread = async () => {
+      throw new Error("persisted thread is unavailable");
+    };
+
+    await recovery.recoverInterruptedExecutions();
+
+    const found = (await store.findTask(taskId))!;
+    expect(found.task).toMatchObject({
+      status: "blocked",
+      currentExecution: {
+        status: "failed",
+        attemptId: before.attemptId,
+        threadId: before.threadId,
+      },
+    });
+    expect(taskDispatcher.opened).toHaveLength(1);
+    expect(taskDispatcher.started).toHaveLength(1);
+    expect(await store.listTaskActivities(found.project.id, taskId)).toEqual([
+      expect.objectContaining({
+        type: "execution_failed",
+        summary: expect.stringContaining("persisted thread is unavailable"),
+        attemptId: before.attemptId,
+        threadId: before.threadId,
+      }),
+    ]);
+  });
+
+  it("probes primary when stable fallback recovery reaches its cooldown", async () => {
+    const found = (await store.findTask(taskId))!;
+    const before = found.task.currentExecution!;
+    await store.saveTask(found.project.id, {
+      ...found.task,
+      currentExecution: {
+        ...before,
+        turnStartedAt: "2026-08-02T23:55:00.000Z",
+        modelRouting: {
+          model: testModels.fallback,
+          route: "fallback",
+          retryCount: 2,
+          circuitBreaker: {
+            state: "open",
+            primaryProbeAt: "2026-08-03T00:00:00.000Z",
+          },
+        },
+      },
+    });
+
+    await recovery.recoverInterruptedExecutions();
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "running",
+      attemptId: before.attemptId,
+      threadId: before.threadId,
+      modelRouting: {
+        model: testModels.primary,
+        route: "primary",
+        retryCount: 0,
+        circuitBreaker: {
+          state: "half_open",
+          fallbackRetryCount: 0,
+        },
+      },
+    });
+    expect(taskDispatcher.resumed.at(-1)?.task.currentExecution?.modelRouting).toMatchObject({
+      model: testModels.primary,
+      route: "primary",
+      circuitBreaker: { state: "half_open" },
+    });
+  });
+
+  it("keeps a recovered half-open probe on the primary model", async () => {
+    const found = (await store.findTask(taskId))!;
+    const before = found.task.currentExecution!;
+    await store.saveTask(found.project.id, {
+      ...found.task,
+      currentExecution: {
+        ...before,
+        turnStartedAt: "2026-08-02T23:59:00.000Z",
+        modelRouting: {
+          model: testModels.primary,
+          route: "primary",
+          retryCount: 0,
+          circuitBreaker: {
+            state: "half_open",
+            fallbackRetryCount: 2,
+            probeStartedAt: "2026-08-02T23:59:00.000Z",
+          },
+        },
+      },
+    });
+
+    await recovery.recoverInterruptedExecutions();
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      status: "running",
+      attemptId: before.attemptId,
+      threadId: before.threadId,
+      modelRouting: {
+        model: testModels.primary,
+        route: "primary",
+        retryCount: 0,
+        circuitBreaker: {
+          state: "half_open",
+          fallbackRetryCount: 2,
+          probeStartedAt: "2026-08-03T00:00:00.000Z",
+        },
+      },
+    });
+    expect(taskDispatcher.resumed).toHaveLength(1);
   });
 
   it("keeps the current attempt when its App Server turn is still running", async () => {
