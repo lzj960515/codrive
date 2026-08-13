@@ -14,8 +14,12 @@ else if (command === "project-control" && id && action) {
   const decision = action === "cancel" ? await readCancellationDecision() : {};
   result = await sendCommand("project.control", { projectId: id, action, ...decision });
 } else if (command === "task-control" && id && action) {
-  const decision = action === "cancel" ? await readCancellationDecision() : {};
-  result = await sendCommand("task.control", { taskId: id, action, ...decision });
+  const details = action === "cancel"
+    ? await readCancellationDecision()
+    : action === "reschedule"
+      ? await readResumeSchedule()
+      : {};
+  result = await sendCommand("task.control", { taskId: id, action, ...details });
 }
 else if (command === "record-decision" && id) {
   const payload = JSON.parse(await readStdin());
@@ -47,6 +51,13 @@ async function readCancellationDecision() {
     fail("Cancellation reason is required");
   }
   return { decisionBasis: payload.decisionBasis, reason: payload.reason.trim() };
+}
+async function readResumeSchedule() {
+  const payload = JSON.parse(await readStdin());
+  if (typeof payload.resumeAt !== "string" || !payload.resumeAt.trim()) {
+    fail("Scheduled resumeAt is required");
+  }
+  return { resumeAt: payload.resumeAt.trim() };
 }
 function print(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function fail(message) { process.stderr.write(`${message}\n`); process.exit(1); }

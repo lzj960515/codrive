@@ -58,6 +58,23 @@ export class CodexTaskDispatcher implements TaskDispatcher {
     );
   }
 
+  resumeScheduledTurn(
+    request: DispatchRequest,
+    threadId: string,
+    resumePrompt: string,
+  ): Promise<TurnDispatchResult> {
+    const prompt =
+      `任务 ${request.task.id} 的计划等待已经结束。` +
+      `请使用 $codrive-task 重新读取该任务的当前上下文并继续原阶段。\n\n` +
+      `等待前保存的执行检查点：\n${resumePrompt}`;
+    return this.startWhenConversationIsIdle(
+      threadId,
+      conversationDirectory(request),
+      prompt,
+      request.task.currentExecution!.modelRouting.model,
+    );
+  }
+
   async interrupt(request: DispatchRequest): Promise<void> {
     const execution = request.task.currentExecution;
     if (execution?.threadId && execution.turnId) {

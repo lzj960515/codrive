@@ -194,13 +194,14 @@ describe("RecoveryManager", () => {
       message: "Selected model is at capacity. Please try a different model.",
       codexErrorInfo: "serverOverloaded",
     });
+    const restartedWorkflow = new WorkflowEngine(timedStore, dispatcher, {
+      maxConcurrentTasks: 1,
+      models: testModels,
+      now: () => new Date(Date.now()).toISOString(),
+    });
     const restartedRecovery = new RecoveryManager(
       timedStore,
-      new WorkflowEngine(timedStore, dispatcher, {
-        maxConcurrentTasks: 1,
-        models: testModels,
-        now: () => new Date(Date.now()).toISOString(),
-      }),
+      restartedWorkflow,
       new StubNotifications(),
     );
     let resolveRetryStarted!: () => void;
@@ -240,6 +241,326 @@ describe("RecoveryManager", () => {
     } finally {
       unsubscribeRetryStarted();
       restartedRecovery.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores a persisted planned blocker at its exact deadline after restart", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T00:00:00.000Z"));
+    const timedStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-scheduled-resume-")),
+    );
+    const created = await timedStore.createProject({
+      name: "Scheduled Game",
+      repositoryPath: "/workspace/scheduled-game",
+      defaultBranch: "main",
+      productDocument: "# Scheduled Game\n",
+      tasks: [{ title: "Loop", description: "Build", acceptanceCriteria: [] }],
+    });
+    await timedStore.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "blocked",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: "attempt_1",
+        action: "develop",
+        status: "waiting_for_resume",
+        startedAt: "2026-08-02T23:00:00.000Z",
+        threadId: "thread_1",
+        modelRouting: testModelRouting(),
+        scheduledResume: {
+          reason: "Wait for the build",
+          resumeAt: "2026-08-03T00:00:05.000Z",
+          resumePrompt: "Inspect build 42 and continue.",
+        },
+      },
+    });
+    const dispatcher = new RecordingTaskDispatcher();
+    const restartedWorkflow = new WorkflowEngine(timedStore, dispatcher, {
+      maxConcurrentTasks: 1,
+      models: testModels,
+      now: () => new Date(Date.now()).toISOString(),
+    });
+    const resumeScheduledTasks = vi.spyOn(
+      restartedWorkflow,
+      "resumeScheduledTasks",
+    );
+    const restartedRecovery = new RecoveryManager(
+      timedStore,
+      restartedWorkflow,
+      new StubNotifications(),
+    );
+    let resolveResumeStarted!: () => void;
+    const resumeStarted = new Promise<void>((resolve) => {
+      resolveResumeStarted = resolve;
+    });
+    const unsubscribeResumeStarted = timedStore.subscribe((event) => {
+      if (event.type === "task.scheduled_resume_started") {
+        resolveResumeStarted();
+      }
+    });
+
+    try {
+      await restartedRecovery.start();
+      expect(vi.getTimerCount()).toBe(2);
+      expect(dispatcher.scheduledResumes).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(dispatcher.scheduledResumes).toHaveLength(0);
+
+      await vi.advanceTimersToNextTimerAsync();
+      await resumeStarted;
+      expect(Date.now()).toBe(Date.parse("2026-08-03T00:00:05.000Z"));
+      expect(resumeScheduledTasks).toHaveBeenLastCalledWith(
+        new Date("2026-08-03T00:00:05.000Z"),
+      );
+      expect(
+        (await timedStore.findTask(created.tasks[0]!.id))!.task.currentExecution,
+      ).toMatchObject({ status: "running", attemptId: "attempt_1" });
+      expect(dispatcher.scheduledResumes).toHaveLength(1);
+    } finally {
+      unsubscribeResumeStarted();
+      restartedRecovery.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits in timer-sized segments for a scheduled resume beyond the Node timer limit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T00:00:00.000Z"));
+    const timedStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-long-scheduled-resume-")),
+    );
+    const created = await timedStore.createProject({
+      name: "Long Scheduled Game",
+      repositoryPath: "/workspace/long-scheduled-game",
+      defaultBranch: "main",
+      productDocument: "# Long Scheduled Game\n",
+      tasks: [{ title: "Loop", description: "Build", acceptanceCriteria: [] }],
+    });
+    await timedStore.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "blocked",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: "attempt_1",
+        action: "develop",
+        status: "waiting_for_resume",
+        startedAt: "2026-08-02T23:00:00.000Z",
+        threadId: "thread_1",
+        modelRouting: testModelRouting(),
+        scheduledResume: {
+          reason: "Wait for the release window",
+          resumeAt: "2026-09-02T00:00:00.000Z",
+          resumePrompt: "Inspect the release window and continue.",
+        },
+      },
+    });
+    const dispatcher = new RecordingTaskDispatcher();
+    const restartedRecovery = new RecoveryManager(
+      timedStore,
+      new WorkflowEngine(timedStore, dispatcher, {
+        maxConcurrentTasks: 1,
+        models: testModels,
+        now: () => new Date(Date.now()).toISOString(),
+      }),
+      new StubNotifications(),
+    );
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      await restartedRecovery.start();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        2_147_483_647,
+      );
+      await vi.advanceTimersByTimeAsync(2_147_483_647);
+      expect(dispatcher.scheduledResumes).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(2);
+    } finally {
+      restartedRecovery.stop();
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not spin a zero-delay timer when a due resume is waiting for capacity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T00:00:00.000Z"));
+    const timedStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-capacity-scheduled-resume-")),
+    );
+    const created = await timedStore.createProject({
+      name: "Capacity Scheduled Game",
+      repositoryPath: "/workspace/capacity-scheduled-game",
+      defaultBranch: "main",
+      productDocument: "# Capacity Scheduled Game\n",
+      tasks: [
+        { title: "Active", description: "Build", acceptanceCriteria: [] },
+        { title: "Waiting", description: "Wait", acceptanceCriteria: [] },
+      ],
+    });
+    await timedStore.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "developing",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: "active_attempt",
+        action: "develop",
+        status: "running",
+        startedAt: "2026-08-02T23:00:00.000Z",
+        threadId: "active_thread",
+        turnId: "active_turn",
+        modelRouting: testModelRouting(),
+      },
+    });
+    await timedStore.saveTask(created.project.id, {
+      ...created.tasks[1]!,
+      status: "blocked",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: "waiting_attempt",
+        action: "develop",
+        status: "waiting_for_resume",
+        startedAt: "2026-08-02T23:00:00.000Z",
+        threadId: "waiting_thread",
+        modelRouting: testModelRouting(),
+        scheduledResume: {
+          reason: "Wait for capacity",
+          resumeAt: "2026-08-03T00:00:05.000Z",
+          resumePrompt: "Continue when capacity is available.",
+        },
+      },
+    });
+    const dispatcher = new RecordingTaskDispatcher();
+    const capacityWorkflow = new WorkflowEngine(timedStore, dispatcher, {
+      maxConcurrentTasks: 1,
+      models: testModels,
+      now: () => new Date(Date.now()).toISOString(),
+    });
+    const capacityRecovery = new RecoveryManager(
+      timedStore,
+      capacityWorkflow,
+      new StubNotifications(),
+    );
+    const refreshTimer = (
+      capacityRecovery as unknown as {
+        scheduleRetryWakeup(now?: Date): Promise<void>;
+      }
+    ).scheduleRetryWakeup.bind(capacityRecovery);
+
+    try {
+      vi.setSystemTime(new Date("2026-08-03T00:00:05.000Z"));
+      await capacityWorkflow.resumeScheduledTasks(new Date());
+      await refreshTimer(new Date());
+
+      expect(dispatcher.scheduledResumes).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+
+      const active = (await timedStore.findTask(created.tasks[0]!.id))!.task;
+      await timedStore.saveTask(created.project.id, {
+        ...active,
+        status: "done",
+        requestedAction: null,
+        currentExecution: {
+          ...active.currentExecution!,
+          status: "completed",
+          finishedAt: new Date(Date.now()).toISOString(),
+        },
+      });
+      await capacityWorkflow.resumeScheduledTasks(new Date());
+      expect(dispatcher.scheduledResumes).toHaveLength(1);
+    } finally {
+      capacityRecovery.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("compensates an overdue planned blocker once during startup", async () => {
+    const found = (await store.findTask(taskId))!;
+    const execution = found.task.currentExecution!;
+    await store.saveTask(found.project.id, {
+      ...found.task,
+      status: "blocked",
+      currentExecution: {
+        ...execution,
+        status: "waiting_for_resume",
+        scheduledResume: {
+          reason: "Wait for the build",
+          resumeAt: "2026-08-02T23:59:00.000Z",
+          resumePrompt: "Inspect the build and continue.",
+        },
+      },
+    });
+
+    await recovery.start();
+    await recovery.recoverUnattendedWork(new Date("2026-08-03T00:00:00.000Z"));
+
+    expect(taskDispatcher.scheduledResumes).toHaveLength(1);
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      status: "running",
+    });
+    recovery.stop();
+  });
+
+  it("defers one due resume while its conversation is busy and resumes once on idle", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T00:00:00.000Z"));
+    const found = (await store.findTask(taskId))!;
+    const execution = found.task.currentExecution!;
+    await store.saveTask(found.project.id, {
+      ...found.task,
+      status: "blocked",
+      currentExecution: {
+        ...execution,
+        status: "waiting_for_resume",
+        scheduledResume: {
+          reason: "Wait for the build",
+          resumeAt: "2026-08-02T23:59:00.000Z",
+          resumePrompt: "Inspect the build and continue.",
+        },
+      },
+    });
+    taskDispatcher.conversationActive = true;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      await recovery.start();
+
+      expect(taskDispatcher.scheduledResumes).toHaveLength(0);
+      expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+        status: "waiting_for_resume",
+        scheduledResume: { wakeAttemptedAt: "2026-08-03T00:00:00.000Z" },
+      });
+      expect(setTimeoutSpy.mock.calls).not.toContainEqual([
+        expect.any(Function),
+        0,
+      ]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(taskDispatcher.scheduledResumes).toHaveLength(0);
+
+      taskDispatcher.conversationActive = false;
+      const idleNotification: JsonRpcNotification = {
+        method: "thread/status/changed",
+        params: {
+          threadId: execution.threadId,
+          status: { type: "idle" },
+        },
+      };
+      await recovery.handleNotification(idleNotification);
+      await recovery.handleNotification(idleNotification);
+
+      expect(taskDispatcher.scheduledResumes).toHaveLength(1);
+      expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+        status: "running",
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+      });
+    } finally {
+      recovery.stop();
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
     }
   });

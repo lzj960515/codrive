@@ -673,6 +673,95 @@ describe("HTTP API", () => {
     );
   });
 
+  it("accepts planned blocker fields and exposes early-continue controls", async () => {
+    const created = await registerProject();
+    const task = created.tasks[0]!;
+    const execution = {
+      attemptId: "attempt_scheduled",
+      action: "develop" as const,
+      status: "running" as const,
+      startedAt: new Date().toISOString(),
+      threadId: "thread_scheduled",
+      turnId: "turn_scheduled",
+      modelRouting: testModelRouting(),
+    };
+    await store.saveTask(created.project.id, {
+      ...task,
+      status: "developing",
+      requestedAction: "develop",
+      currentExecution: execution,
+    });
+    const resumeAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    const resumePrompt = "PRIVATE_AI_CHECKPOINT_MUST_NOT_REACH_THE_BOARD";
+
+    const reported = await skillCommand({
+      type: "task.report",
+      payload: {
+        taskId: task.id,
+        attemptId: execution.attemptId,
+        outcome: "blocked",
+        summary: "Wait for the remote build",
+        resumeAt,
+        resumePrompt,
+      },
+    });
+    expect(reported.statusCode).toBe(200);
+    await engine.completeTurn(task.id, execution.attemptId, execution.turnId!);
+
+    const detail = await server.inject({
+      method: "GET",
+      url: `/api/tasks/${task.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const context = await server.inject({
+      method: "GET",
+      url: `/api/contexts/tasks/${task.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    expect(detail.json()).toMatchObject({
+      task: {
+        status: "blocked",
+        currentExecution: {
+          action: "develop",
+          status: "waiting_for_resume",
+          scheduledResume: {
+            reason: "Wait for the remote build",
+            resumeAt,
+          },
+        },
+      },
+      activities: [
+        expect.objectContaining({
+          type: "blocked",
+          evidence: expect.objectContaining({ resumeAt }),
+        }),
+      ],
+    });
+    expect(detail.body).not.toContain(resumePrompt);
+    expect(context.body).toContain(resumePrompt);
+
+    const rescheduledAt = new Date(Date.now() + 2 * 60 * 60 * 1_000).toISOString();
+    const rescheduled = await command({
+      type: "task.control",
+      payload: { taskId: task.id, action: "reschedule", resumeAt: rescheduledAt },
+    });
+    expect(rescheduled.statusCode).toBe(200);
+    expect(rescheduled.json().currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      scheduledResume: { resumeAt: rescheduledAt },
+    });
+
+    const continued = await command({
+      type: "task.control",
+      payload: { taskId: task.id, action: "continue" },
+    });
+    expect(continued.statusCode).toBe(200);
+    expect(continued.json().currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      status: "running",
+    });
+  });
+
   it("makes recorded product decisions available to task and project Skills", async () => {
     const created = await registerProject();
     const firstAttempt = created.project.currentExecution!.attemptId;
@@ -1095,6 +1184,10 @@ describe("HTTP API", () => {
     expect(page.body).toContain("验收标准");
     expect(page.body).toContain("进展记录");
     expect(page.body).toContain("请求决定");
+    expect(page.body).toContain("提前继续");
+    expect(page.body).toContain("重新安排");
+    expect(page.body).toContain('timeZoneName: "short"');
+    expect(page.body).toContain("new Date(localValue).toISOString()");
     expect(page.body).toContain('class="settings-header"');
     expect(page.body).not.toContain("Runtime controls");
     expect(page.body).not.toContain("本机运行时");

@@ -13,6 +13,7 @@ const occupiedExecutionStatuses = new Set([
   "retry_scheduled",
   "awaiting_report",
   "waiting_for_input",
+  "waiting_for_resume",
 ]);
 
 export function startTaskExecution(
@@ -52,11 +53,15 @@ export function applyTaskReport(
   task: Task,
   report: TaskReport,
   now: string,
+  reportSubmittedAt = now,
 ): Task {
-  validateTaskReport(task, report);
+  validateTaskReport(task, report, reportSubmittedAt);
   const execution = task.currentExecution!;
   if (report.outcome === "needs_input") {
     return suspendTaskForInput(task, report, now);
+  }
+  if (isScheduledBlocker(report)) {
+    return suspendTaskForScheduledResume(task, report, now);
   }
   const transition = transitionForReport(execution.action, report.outcome);
   const { currentExecution: _completedExecution, ...taskWithoutExecution } = task;
@@ -68,6 +73,27 @@ export function applyTaskReport(
     updatedAt: now,
   };
   return nextTask;
+}
+
+function suspendTaskForScheduledResume(
+  task: Task,
+  report: TaskReport,
+  now: string,
+): Task {
+  return {
+    ...task,
+    status: "blocked",
+    currentExecution: {
+      ...task.currentExecution!,
+      status: "waiting_for_resume",
+      scheduledResume: {
+        reason: report.summary,
+        resumeAt: report.resumeAt!,
+        resumePrompt: report.resumePrompt!,
+      },
+    },
+    updatedAt: now,
+  };
 }
 
 function suspendTaskForInput(task: Task, report: TaskReport, now: string): Task {
@@ -82,7 +108,11 @@ function suspendTaskForInput(task: Task, report: TaskReport, now: string): Task 
   };
 }
 
-export function validateTaskReport(task: Task, report: TaskReport): void {
+export function validateTaskReport(
+  task: Task,
+  report: TaskReport,
+  now: string,
+): void {
   const execution = task.currentExecution;
   if (
     report.taskId !== task.id ||
@@ -92,7 +122,7 @@ export function validateTaskReport(task: Task, report: TaskReport): void {
     throw new Error(`Report does not match the current execution for ${task.id}`);
   }
 
-  validateReportArtifacts(execution.action, report);
+  validateReportArtifacts(execution.action, report, now);
   if (report.outcome !== "needs_input") {
     transitionForReport(execution.action, report.outcome);
   }
@@ -101,7 +131,9 @@ export function validateTaskReport(task: Task, report: TaskReport): void {
 function validateReportArtifacts(
   action: TaskAction,
   report: TaskReport,
+  now: string,
 ): void {
+  validateScheduledBlocker(report, now);
   if (report.outcome === "needs_input") {
     requireReportFields(report, ["question"]);
   }
@@ -129,6 +161,47 @@ function validateReportArtifacts(
   if (action === "integrate" && report.outcome === "completed") {
     requireReportFields(report, ["mergedCommit"]);
   }
+}
+
+const rfc3339AbsoluteTime =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function validateScheduledBlocker(report: TaskReport, now: string): void {
+  const hasResumeAt = report.resumeAt !== undefined;
+  const hasResumePrompt = report.resumePrompt !== undefined;
+  if (hasResumeAt !== hasResumePrompt) {
+    throw new InvalidTaskReportError(
+      `Report ${report.attemptId} requires resumeAt and resumePrompt together`,
+    );
+  }
+  if (!hasResumeAt) return;
+  if (report.outcome !== "blocked") {
+    throw new InvalidTaskReportError(
+      `Report ${report.attemptId} can only schedule resume for blocked`,
+    );
+  }
+  if (!report.resumePrompt?.trim()) {
+    throw new InvalidTaskReportError(
+      `Report ${report.attemptId} requires a non-empty resumePrompt`,
+    );
+  }
+  if (
+    !rfc3339AbsoluteTime.test(report.resumeAt!) ||
+    !Number.isFinite(Date.parse(report.resumeAt!))
+  ) {
+    throw new InvalidTaskReportError(
+      `Report ${report.attemptId} resumeAt must be an RFC 3339 absolute time`,
+    );
+  }
+  if (Date.parse(report.resumeAt!) <= Date.parse(now)) {
+    throw new InvalidTaskReportError(
+      `Report ${report.attemptId} resumeAt must be in the future`,
+    );
+  }
+}
+
+function isScheduledBlocker(report: TaskReport): boolean {
+  return report.outcome === "blocked" && report.resumeAt !== undefined;
 }
 
 function requireReportFields(

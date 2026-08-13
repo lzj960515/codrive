@@ -22,5 +22,10 @@ export interface TaskDispatcher {
     request: DispatchRequest,
     threadId: string,
   ): Promise<TurnDispatchResult>;
+  resumeScheduledTurn(
+    request: DispatchRequest,
+    threadId: string,
+    resumePrompt: string,
+  ): Promise<TurnDispatchResult>;
   interrupt(request: DispatchRequest): Promise<void>;
 }

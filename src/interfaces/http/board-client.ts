@@ -10,6 +10,7 @@ export function renderBoardClient(accessToken: string): string {
     const statusLabels = {
       active: "进行中", selecting_tasks: "安排任务中", idle: "当前无待办",
       waiting_for_input: "等待决定",
+      waiting_for_resume: "计划等待",
       blocked: "已阻塞", cancelled: "已取消", backlog: "待安排", developing: "开发中",
       reviewing: "审查中", changes_requested: "返工中", integrating: "合入中", done: "已完成",
       running: "自动推进", paused: "已暂停", develop: "开发", rework: "返工", review: "审查",
@@ -24,7 +25,8 @@ export function renderBoardClient(accessToken: string): string {
       development_completed: "开发完成", rework_completed: "返工完成",
       review_approved: "审查通过", review_changes_requested: "审查退回",
       review_requested: "请求审查", integration_completed: "合入完成",
-      decision_requested: "请求决定", execution_recovered: "中断恢复", execution_failed: "执行失败"
+      decision_requested: "请求决定", scheduled_resume_started: "计划恢复",
+      scheduled_resume_rescheduled: "重新安排恢复", execution_recovered: "中断恢复", execution_failed: "执行失败"
     };
     const path = window.location.pathname;
     const route = path === "/settings"
@@ -43,7 +45,7 @@ export function renderBoardClient(accessToken: string): string {
     const escapeHtml = value => String(value ?? "").replace(/[&<>\"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[character]));
     const bucket = status => boardLayout.statusColumns[status] || status;
     const label = status => statusLabels[status] || String(status || "").replaceAll("_", " ");
-    const formatTime = value => value ? new Date(value).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+    const formatTime = value => value ? new Date(value).toLocaleString("zh-CN", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" }) : "—";
     const initials = value => String(value || "C").trim().split(/\\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
 
     async function api(path, options = {}) {
@@ -245,7 +247,7 @@ export function renderBoardClient(accessToken: string): string {
     function taskCard(task) {
       const copy = task.cancellation?.reason || task.description;
       const alert = ["waiting_for_input", "blocked", "changes_requested"].includes(task.status) ? "task-alert" : "";
-      const visibleStatus = task.executionStatus === "retry_scheduled" ? task.executionStatus : task.status;
+      const visibleStatus = ["retry_scheduled", "waiting_for_resume"].includes(task.executionStatus) ? task.executionStatus : task.status;
       return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
         '<span class="task-card-top"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(visibleStatus))+'</span></span>'+
         '<h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(copy)+'</p>'+
@@ -364,6 +366,9 @@ export function renderBoardClient(accessToken: string): string {
       const cancellation = task.status === "cancelled"
         ? '<div class="cancellation-card"><b>取消理由</b><p>'+escapeHtml(task.cancellation?.reason || "历史取消记录未保存理由。")+'</p>'+(task.cancellation ? '<small>'+escapeHtml(label(task.cancellation.decisionBasis))+' · '+escapeHtml(label(task.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(task.cancellation.cancelledAt))+'</small>' : '<small>该任务在取消理由成为必填项之前结束。</small>')+'</div>'
         : '';
+      const scheduledResume = task.currentExecution?.scheduledResume
+        ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="action-button" type="button" data-continue-now>提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at></label><button class="action-button" type="button" data-reschedule>保存时间</button></div></section>'
+        : '';
       const currentConversation = task.currentExecution
         ? '<section class="current-conversation">'+
             '<div class="current-conversation-copy"><span>当前对话</span><div><b>'+escapeHtml(label(task.currentExecution.action))+'</b><i aria-hidden="true">·</i><strong>'+escapeHtml(label(task.currentExecution.status))+'</strong></div></div>'+
@@ -374,7 +379,7 @@ export function renderBoardClient(accessToken: string): string {
         ? '<ol class="activity-timeline">'+activities.map((activity, index, all) => activityCard(activity, index, all, currentDecisionRequest?.id)).join("")+'</ol>'
         : '<div class="activity-empty"><b>尚无进展记录</b><span>节点完成汇报后会按时间出现在这里。</span></div>';
       const controls = [
-        task.status === "blocked" ? '<button class="action-button" data-retry>重试</button>' : ''
+        task.status === "blocked" && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry>重试</button>' : ''
       ].filter(Boolean).join("");
       host.innerHTML =
         '<header class="detail-head"><strong>任务详情</strong><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
@@ -382,7 +387,7 @@ export function renderBoardClient(accessToken: string): string {
           '<div class="detail-status"><span></span>'+escapeHtml(label(task.status))+'</div>'+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
-          (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+currentConversation+
+          (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+scheduledResume+currentConversation+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+
           '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.requestedAction || task.status))+'</dd>'+
@@ -408,6 +413,20 @@ export function renderBoardClient(accessToken: string): string {
       });
       host.querySelector("[data-retry]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "retry" });
+        await refresh();
+      });
+      host.querySelector("[data-continue-now]")?.addEventListener("click", async () => {
+        await command("task.control", { taskId: task.id, action: "continue" });
+        await refresh();
+      });
+      host.querySelector("[data-reschedule]")?.addEventListener("click", async () => {
+        const localValue = host.querySelector("[data-reschedule-at]").value;
+        if (!localValue) return;
+        await command("task.control", {
+          taskId: task.id,
+          action: "reschedule",
+          resumeAt: new Date(localValue).toISOString()
+        });
         await refresh();
       });
     }

@@ -294,6 +294,12 @@ export const boardStyles = `
   .detail-body h2 { margin: 0; font-size: 24px; line-height: 1.2; letter-spacing: -.035em; }
   .detail-description { margin: 13px 0 0; color: #56615b; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
   .detail-actions { display: flex; gap: 8px; margin-top: 19px; }
+  .scheduled-resume-card { display: grid; gap: 14px; margin-top: 20px; padding: 16px; color: #6d4a15; background: linear-gradient(135deg, #fff8e5, #f8e9c4); border: 1px solid #e5cb87; border-radius: 13px; }
+  .scheduled-resume-card p { margin: 7px 0; color: #705c37; font-size: 12px; line-height: 1.55; }
+  .scheduled-resume-card time { font: 800 11px/1.4 var(--condensed); letter-spacing: .035em; }
+  .scheduled-resume-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+  .scheduled-resume-actions label { display: grid; gap: 5px; color: #78653f; font: 800 9px/1 var(--condensed); letter-spacing: .08em; text-transform: uppercase; }
+  .scheduled-resume-actions input { min-height: 34px; padding: 6px 9px; color: var(--ink); background: rgba(255,255,255,.78); border: 1px solid #d8bf80; border-radius: 8px; font: 700 11px/1 var(--condensed); }
   .detail-section { min-width: 0; max-width: 100%; margin-top: 27px; padding-top: 22px; border-top: 1px solid var(--line); }
   .detail-section h3 { display: flex; justify-content: space-between; margin: 0 0 13px; font: 900 10px/1 var(--condensed); letter-spacing: .12em; }
   .detail-section h3 span { color: #9aa19d; }

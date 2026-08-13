@@ -78,10 +78,14 @@ export class CodriveLog {
     const { state: _state, ...details } = event as LifecycleEvent & {
       state?: unknown;
     };
+    const safeDetails =
+      details.type === "task.activity_recorded"
+        ? { ...details, data: { activityRecorded: true } }
+        : details;
     this.writeLine(
       "lifecycle",
       "EVENT",
-      JSON.stringify(details),
+      JSON.stringify(safeDetails),
       new Date(event.occurredAt),
     );
   }

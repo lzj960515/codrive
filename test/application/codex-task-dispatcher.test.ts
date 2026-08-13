@@ -263,6 +263,34 @@ describe("CodexTaskDispatcher", () => {
     ]);
   });
 
+  it("uses the saved AI checkpoint and stable task identity for a scheduled resume", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = new CodexTaskDispatcher(gateway);
+
+    const turn = await dispatcher.resumeScheduledTurn(
+      request(task()),
+      "thread_1",
+      "Inspect build 42, retain the current worktree, and continue the review.",
+    );
+
+    expect(turn).toEqual({ status: "started", turnId: "turn_1" });
+    expect(gateway.calls).toEqual([
+      {
+        method: "startTurn",
+        args: [
+          "thread_1",
+          project.repositoryPath,
+          expect.stringContaining("任务 task_1"),
+          "gpt-5.6-sol",
+        ],
+      },
+    ]);
+    expect(String(gateway.calls[0]!.args[2])).toContain("$codrive-task");
+    expect(String(gateway.calls[0]!.args[2])).toContain(
+      "Inspect build 42, retain the current worktree, and continue the review.",
+    );
+  });
+
   it("leaves task and report messages pending while the conversation is active", async () => {
     const gateway = new RecordingGateway();
     gateway.threadActive = true;

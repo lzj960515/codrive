@@ -8,12 +8,23 @@ export async function createTaskDetailView(
   task: Task,
 ) {
   const activities = await store.listTaskActivities(project.id, task.id);
+  const publicActivities = activities.map((activity) => {
+    if (!activity.evidence?.resumePrompt) return activity;
+    const { resumePrompt: _resumePrompt, ...evidence } = activity.evidence;
+    return { ...activity, evidence };
+  });
   const projection = projectTaskActivities(activities);
   const currentExecution = task.currentExecution
     ? {
         action: task.currentExecution.action,
         status: task.currentExecution.status,
         threadId: task.currentExecution.threadId ?? null,
+        scheduledResume: task.currentExecution.scheduledResume
+          ? {
+              reason: task.currentExecution.scheduledResume.reason,
+              resumeAt: task.currentExecution.scheduledResume.resumeAt,
+            }
+          : null,
       }
     : null;
   const currentDecisionRequest =
@@ -44,7 +55,7 @@ export async function createTaskDetailView(
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     },
-    activities,
+    activities: publicActivities,
     currentDecisionRequest,
   };
 }

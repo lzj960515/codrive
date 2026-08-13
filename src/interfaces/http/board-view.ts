@@ -32,6 +32,12 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
         requestedAction: task.requestedAction,
         executionStatus: task.currentExecution?.status ?? null,
         modelRouting: task.currentExecution?.modelRouting ?? null,
+        scheduledResume: task.currentExecution?.scheduledResume
+          ? {
+              reason: task.currentExecution.scheduledResume.reason,
+              resumeAt: task.currentExecution.scheduledResume.resumeAt,
+            }
+          : null,
         cancellation: task.cancellation ?? null,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,

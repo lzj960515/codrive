@@ -207,6 +207,111 @@ describe("task workflow", () => {
     expect(completed.currentExecution).toBeUndefined();
   });
 
+  it.each(["develop", "rework", "review", "integrate"] as const)(
+    "keeps the same %s execution while a planned blocker waits",
+    (action) => {
+      const started = startTaskExecution(
+        task({ status: statusForAction(action), requestedAction: action }),
+        `${action}_attempt`,
+        timestamp,
+      );
+
+      const waiting = applyTaskReport(
+        started,
+        {
+          taskId: started.id,
+          attemptId: `${action}_attempt`,
+          outcome: "blocked",
+          summary: "Wait for the external build",
+          resumeAt: "2026-08-03T01:00:00.000Z",
+          resumePrompt: "Check the external build result, then continue the current stage.",
+        },
+        timestamp,
+      );
+
+      expect(waiting).toMatchObject({
+        status: "blocked",
+        requestedAction: action,
+        currentExecution: {
+          attemptId: `${action}_attempt`,
+          action,
+          status: "waiting_for_resume",
+          scheduledResume: {
+            reason: "Wait for the external build",
+            resumeAt: "2026-08-03T01:00:00.000Z",
+            resumePrompt:
+              "Check the external build result, then continue the current stage.",
+          },
+        },
+      });
+    },
+  );
+
+  it("validates the complete planned blocker report contract", () => {
+    const developing = startTaskExecution(
+      task({ requestedAction: "develop" }),
+      "develop_attempt",
+      timestamp,
+    );
+    const report = (overrides: Partial<TaskReport>): TaskReport => ({
+      taskId: developing.id,
+      attemptId: "develop_attempt",
+      outcome: "blocked",
+      summary: "Wait for a dependency",
+      ...overrides,
+    });
+
+    expect(() =>
+      applyTaskReport(
+        developing,
+        report({ resumeAt: "2026-08-03T01:00:00.000Z" }),
+        timestamp,
+      ),
+    ).toThrow(/resumeAt.*resumePrompt/i);
+    expect(() =>
+      applyTaskReport(
+        developing,
+        report({ resumePrompt: "Continue after checking the dependency." }),
+        timestamp,
+      ),
+    ).toThrow(/resumeAt.*resumePrompt/i);
+    expect(() =>
+      applyTaskReport(
+        developing,
+        report({
+          resumeAt: "2026-08-03 01:00",
+          resumePrompt: "Continue after checking the dependency.",
+        }),
+        timestamp,
+      ),
+    ).toThrow(/RFC 3339/i);
+    expect(() =>
+      applyTaskReport(
+        developing,
+        report({
+          resumeAt: "2026-08-02T23:59:00.000Z",
+          resumePrompt: "Continue after checking the dependency.",
+        }),
+        timestamp,
+      ),
+    ).toThrow(/future/i);
+    expect(() =>
+      applyTaskReport(
+        developing,
+        {
+          taskId: developing.id,
+          attemptId: "develop_attempt",
+          outcome: "needs_input",
+          summary: "Choose a behavior",
+          question: "Which behavior?",
+          resumeAt: "2026-08-03T01:00:00.000Z",
+          resumePrompt: "Continue later.",
+        },
+        timestamp,
+      ),
+    ).toThrow(/only.*blocked/i);
+  });
+
   it("requires the artifacts consumed by later stages", () => {
     const cases: Array<{ task: Task; report: TaskReport; expected: RegExp }> = [
       {
@@ -260,3 +365,9 @@ describe("task workflow", () => {
     }
   });
 });
+
+function statusForAction(action: NonNullable<Task["requestedAction"]>): Task["status"] {
+  if (action === "review") return "reviewing";
+  if (action === "integrate") return "integrating";
+  return "developing";
+}

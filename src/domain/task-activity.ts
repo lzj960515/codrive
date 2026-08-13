@@ -17,6 +17,8 @@ const reportEvidenceFields = [
   "tests",
   "findings",
   "question",
+  "resumeAt",
+  "resumePrompt",
 ] as const satisfies ReadonlyArray<keyof TaskReport>;
 
 export interface CreateTaskReportActivityInput {
@@ -32,7 +34,12 @@ export interface CreateTaskLifecycleActivityInput {
   activityId: string;
   projectId: string;
   taskId: string;
-  type: "execution_recovered" | "execution_failed" | "cancelled";
+  type:
+    | "scheduled_resume_started"
+    | "scheduled_resume_rescheduled"
+    | "execution_recovered"
+    | "execution_failed"
+    | "cancelled";
   summary: string;
   occurredAt: string;
   attemptId?: string;

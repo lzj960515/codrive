@@ -158,6 +158,22 @@ describe("bundled Skill scripts", () => {
     expect(task.task.id).toBe(created.tasks[0]!.id);
     expect(task.activities).toEqual([]);
 
+    const scheduledTask = added.tasks[0]!;
+    const scheduledExecution = scheduledTask.currentExecution;
+    if (scheduledExecution) {
+      const resumeAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+      const blocked = JSON.parse(
+        await runSkill("codrive-task", ["report", scheduledTask.id], {
+          attemptId: scheduledExecution.attemptId,
+          outcome: "blocked",
+          summary: "Wait for the external build",
+          resumeAt,
+          resumePrompt: "Inspect the external build and continue.",
+        }),
+      ) as { currentExecution: { status: string } };
+      expect(blocked.currentExecution.status).toBe("running");
+    }
+
     const settings = JSON.parse(
       await runSkill("codrive-control", ["settings"]),
     ) as { settings: typeof runtimeSettings };

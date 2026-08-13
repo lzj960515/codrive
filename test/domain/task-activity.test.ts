@@ -65,6 +65,25 @@ describe("task activities", () => {
     expect(taskActivityMatchesReport(activity, report)).toBe(true);
   });
 
+  it("keeps a planned blocker schedule in its immutable activity", () => {
+    const report: TaskReport = {
+      taskId,
+      attemptId: "attempt_1",
+      outcome: "blocked",
+      summary: "Wait for the deployment",
+      resumeAt: "2026-08-11T02:00:00.000Z",
+      resumePrompt: "Inspect deployment health and continue the review.",
+    };
+
+    const activity = createActivity("review", report);
+
+    expect(activity.evidence).toEqual({
+      resumeAt: "2026-08-11T02:00:00.000Z",
+      resumePrompt: "Inspect deployment health and continue the review.",
+    });
+    expect(taskReportFromActivity(activity)).toEqual(report);
+  });
+
   it("projects delivery and conversation facts from the ordered history", () => {
     const activities = [
       createActivity(

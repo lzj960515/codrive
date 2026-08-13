@@ -20,6 +20,12 @@ export interface NotificationSource {
 const retryScheduleEventTypes = new Set([
   "turn.retry_scheduled",
   "turn.started",
+  "task.activity_recorded",
+  "task.scheduled_resume_requested",
+  "task.scheduled_resume_rescheduled",
+  "task.scheduled_resume_started",
+  "task.scheduled_resume_waiting",
+  "task.scheduled_resume_deferred",
   "task.cancelled",
   "project.cancelled",
   "project.paused",
@@ -30,6 +36,7 @@ const workflowNotificationMethods = new Set([
   "thread/status/changed",
   "turn/completed",
 ]);
+const maximumTimerDelayMs = 2_147_483_647;
 
 export class RecoveryManager {
   private unsubscribe: (() => void) | null = null;
@@ -52,6 +59,7 @@ export class RecoveryManager {
       if (changesRetrySchedule(event.type)) void this.scheduleRetryWakeup();
     });
     await this.recoverInterruptedExecutions();
+    await this.workflow.resumeScheduledTasks(new Date(), undefined, true);
     await this.workflow.lifecycle.run(
       {
         source: "recovery",
@@ -107,6 +115,10 @@ export class RecoveryManager {
               };
               if (params.threadId && params.status?.type === "idle") {
                 await this.recoverDeferredTaskTurns(params.threadId);
+                await this.workflow.resumeScheduledTasks(
+                  new Date(),
+                  params.threadId,
+                );
               }
               return;
             }
@@ -200,6 +212,7 @@ export class RecoveryManager {
 
   async recoverUnattendedWork(now = new Date()): Promise<void> {
     await this.workflow.resetStableModelCapacityFailures(now);
+    await this.workflow.resumeScheduledTasks(now, undefined, true);
     await this.recoverDeferredTaskTurns();
     await this.recoverExpiredExecutions(now);
     await this.workflow.lifecycle.run(
@@ -224,9 +237,25 @@ export class RecoveryManager {
         if (project.scheduling !== "running" || project.status === "cancelled") {
           return [];
         }
-        return [project.currentExecution, ...tasks.map((task) => task.currentExecution)]
+        const modelRetries = [
+          project.currentExecution,
+          ...tasks.map((task) => task.currentExecution),
+        ]
           .filter((execution) => execution?.status === "retry_scheduled")
           .map((execution) => Date.parse(execution!.modelRouting.nextRetryAt!));
+        const scheduledResumes = tasks
+          .filter(
+            (task) =>
+              task.currentExecution?.status === "waiting_for_resume" &&
+              task.currentExecution.scheduledResume &&
+              !task.currentExecution.scheduledResume.wakeAttemptedAt &&
+              Date.parse(task.currentExecution.scheduledResume.resumeAt) >
+                now.getTime(),
+          )
+          .map((task) =>
+            Date.parse(task.currentExecution!.scheduledResume!.resumeAt),
+          );
+        return [...modelRetries, ...scheduledResumes];
       }),
     );
     if (!Number.isFinite(nextRetryAt)) return;
@@ -234,11 +263,13 @@ export class RecoveryManager {
     this.retryTimer = setTimeout(async () => {
       if (generation !== this.retryScheduleGeneration) return;
       this.retryTimer = null;
-      await this.workflow.retryScheduledExecutions(new Date());
+      const wakeupTime = new Date();
+      await this.workflow.retryScheduledExecutions(wakeupTime);
+      await this.workflow.resumeScheduledTasks(wakeupTime);
       if (generation === this.retryScheduleGeneration) {
         await this.scheduleRetryWakeup();
       }
-    }, Math.max(0, nextRetryAt - now.getTime()));
+    }, Math.min(Math.max(0, nextRetryAt - now.getTime()), maximumTimerDelayMs));
     this.retryTimer.unref();
   }
 

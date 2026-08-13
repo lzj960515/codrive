@@ -135,6 +135,36 @@ describe("CodriveLog", () => {
     expect(contents).not.toContain("PRIVATE_REPORT_BODY_MUST_NOT_APPEAR");
   });
 
+  it("omits AI resume checkpoints from lifecycle logs", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-log-"));
+    const logPath = join(directory, "codrive.log");
+    const log = new CodriveLog(logPath, { writeToTerminal: () => undefined });
+
+    log.event({
+      schemaVersion: 1,
+      eventId: "event_1",
+      type: "task.activity_recorded",
+      component: "workflow",
+      source: "skill",
+      projectId: "project_1",
+      taskId: "task_1",
+      attemptId: "attempt_1",
+      occurredAt: "2026-08-04T03:05:37.362Z",
+      data: {
+        activity: {
+          evidence: {
+            resumePrompt: "PRIVATE_RESUME_CHECKPOINT_MUST_NOT_APPEAR",
+          },
+        },
+      },
+    });
+    log.close();
+
+    const contents = await readFile(logPath, "utf8");
+    expect(contents).toContain('"data":{"activityRecorded":true}');
+    expect(contents).not.toContain("PRIVATE_RESUME_CHECKPOINT_MUST_NOT_APPEAR");
+  });
+
   it("rotates a full log before writing the next line", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-log-"));
     const logPath = join(directory, "codrive.log");

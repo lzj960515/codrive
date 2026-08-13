@@ -103,6 +103,31 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 
 `needs_input` 追加“请求决定”活动并保留当前执行和 `attemptId`。用户在 Codex App 的原任务对话中回答后，继续当前阶段，并使用同一个 `attemptId` 提交新的最终报告；历史请求继续保留在活动时间线中。
 
+## 阻塞与计划恢复
+
+根据恢复条件选择同一个 `blocked` outcome 的两种形式：
+
+- 恢复时间未知时提交普通 `blocked`，写清当前障碍。该执行结束，用户稍后通过 `retry` 创建新的 attempt。
+- 障碍具有明确恢复时间时提交计划 `blocked`，同时提供 `resumeAt` 和 `resumePrompt`。Codrive 保留当前 action、attempt、thread 和模型路由，到期并重新取得项目容量与合入资格后，在原对话继续同一执行。
+
+`resumeAt` 使用可解析、处于未来且带 `Z` 或 UTC 偏移的 RFC 3339 绝对时间。用户使用自然语言表达时间时，先读取当前会话的时区上下文，将它解析为带偏移的绝对时间再提交；信息不足且不同解释会改变恢复时刻时，使用 `needs_input` 确认。
+
+`resumePrompt` 是写给恢复后自己的执行检查点，简明包含：届时要重新检查的外部或仓库事实、等待前已经完成的工作与验证、继续当前阶段的明确下一步。恢复消息还会携带固定任务 ID 和 `$codrive-task` 入口，不在检查点中复制完整任务文档。
+
+计划阻塞报告格式：
+
+```json
+{
+  "attemptId": "attempt-id",
+  "outcome": "blocked",
+  "summary": "等待原因",
+  "resumeAt": "2026-08-13T18:30:00+08:00",
+  "resumePrompt": "先检查等待事实与现有工作树，再从当前阶段的下一步继续。"
+}
+```
+
+当前阶段要求报告为最后一个副作用时，计划阻塞同样遵守该顺序。提交成功后由 Codrive 原生调度，当前回合结束；不创建外部 cron、Automation 或额外提醒。
+
 ## 取消判断
 
 当前阶段出现取消候选时，先判断是否需要用户决定：

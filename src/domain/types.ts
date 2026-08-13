@@ -159,9 +159,17 @@ export type ExecutionStatus =
   | "retry_scheduled"
   | "awaiting_report"
   | "waiting_for_input"
+  | "waiting_for_resume"
   | "completed"
   | "failed"
   | "interrupted";
+
+export interface ScheduledTaskResume {
+  reason: string;
+  resumeAt: string;
+  resumePrompt: string;
+  wakeAttemptedAt?: string;
+}
 
 export interface TaskExecution {
   attemptId: string;
@@ -175,6 +183,7 @@ export interface TaskExecution {
   finishedAt?: string;
   turnCompletedAt?: string;
   submittedActivityId?: string;
+  scheduledResume?: ScheduledTaskResume;
   reportReminderCount?: number;
   leaseExpiresAt?: string;
 }
@@ -200,6 +209,8 @@ export interface TaskReport {
   tests?: string;
   findings?: string[];
   question?: string;
+  resumeAt?: string;
+  resumePrompt?: string;
 }
 
 export type TaskActivityType =
@@ -211,6 +222,8 @@ export type TaskActivityType =
   | "integration_completed"
   | "decision_requested"
   | "blocked"
+  | "scheduled_resume_started"
+  | "scheduled_resume_rescheduled"
   | "execution_recovered"
   | "execution_failed"
   | "cancelled";
@@ -224,6 +237,8 @@ export interface TaskActivityEvidence {
   tests?: string;
   findings?: string[];
   question?: string;
+  resumeAt?: string;
+  resumePrompt?: string;
   reason?: string;
   decisionBasis?: CancellationDecisionBasis;
 }
@@ -342,6 +357,8 @@ export type CodriveCommand =
       type: "task.control";
       payload:
         | { taskId: string; action: "retry" }
+        | { taskId: string; action: "continue" }
+        | { taskId: string; action: "reschedule"; resumeAt: string }
         | {
             taskId: string;
             action: "cancel";

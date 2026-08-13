@@ -1345,6 +1345,216 @@ describe("WorkflowEngine", () => {
     expect(taskDispatcher.started).toHaveLength(3);
   });
 
+  it("releases capacity while waiting and resumes one due turn with the same identity", async () => {
+    const created = await registerProject(2);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start both tasks",
+      taskIds: created.tasks.map(({ id: selectedTaskId }) => selectedTaskId),
+    });
+    const developing = (await store.findTask(created.tasks[0]!.id))!.task;
+    const execution = developing.currentExecution!;
+    const resumeAt = "2026-08-03T01:00:00.000Z";
+
+    await workflow.submitReport({
+      taskId: developing.id,
+      attemptId: execution.attemptId,
+      outcome: "blocked",
+      summary: "Wait for the remote build",
+      resumeAt,
+      resumePrompt: "Check build 42 and continue from the existing worktree.",
+    });
+    await workflow.completeTurn(
+      developing.id,
+      execution.attemptId,
+      execution.turnId!,
+    );
+
+    const waiting = (await store.findTask(developing.id))!.task;
+    expect(waiting).toMatchObject({
+      status: "blocked",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+        status: "waiting_for_resume",
+        modelRouting: execution.modelRouting,
+        scheduledResume: { resumeAt },
+      },
+    });
+    expect(await workflow.availableTaskSlots(created.project.id)).toBe(1);
+
+    now = new Date(resumeAt);
+    await Promise.all([
+      workflow.resumeScheduledTasks(now),
+      workflow.resumeScheduledTasks(now),
+    ]);
+
+    const resumed = (await store.findTask(developing.id))!.task;
+    expect(resumed).toMatchObject({
+      status: "developing",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+        status: "running",
+        modelRouting: execution.modelRouting,
+      },
+    });
+    expect(resumed.currentExecution).not.toHaveProperty("scheduledResume");
+    expect(taskDispatcher.scheduledResumes).toHaveLength(1);
+    expect(taskDispatcher.scheduledResumes[0]).toMatchObject({
+      threadId: execution.threadId,
+      resumePrompt: "Check build 42 and continue from the existing worktree.",
+    });
+    expect(
+      await store.listTaskActivities(created.project.id, developing.id),
+    ).toEqual([
+      expect.objectContaining({
+        type: "blocked",
+        evidence: expect.objectContaining({ resumeAt }),
+      }),
+      expect.objectContaining({ type: "scheduled_resume_started" }),
+    ]);
+  });
+
+  it("keeps a due planned blocker paused and resumes it after the project continues", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const developing = (await store.findTask(created.tasks[0]!.id))!.task;
+    const execution = developing.currentExecution!;
+
+    await workflow.submitReport({
+      taskId: developing.id,
+      attemptId: execution.attemptId,
+      outcome: "blocked",
+      summary: "Wait briefly",
+      resumeAt: "2026-08-03T00:05:00.000Z",
+      resumePrompt: "Recheck the result and continue.",
+    });
+    await workflow.completeTurn(developing.id, execution.attemptId, execution.turnId!);
+    await workflow.controlProject(created.project.id, "pause");
+    now = new Date("2026-08-03T00:06:00.000Z");
+
+    await workflow.resumeScheduledTasks(now);
+    expect(taskDispatcher.scheduledResumes).toHaveLength(0);
+
+    await workflow.controlProject(created.project.id, "resume");
+    expect(taskDispatcher.scheduledResumes).toHaveLength(1);
+    expect((await store.findTask(developing.id))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      status: "running",
+    });
+  });
+
+  it("reschedules or continues a planned blocker without replacing its execution", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const developing = (await store.findTask(created.tasks[0]!.id))!.task;
+    const execution = developing.currentExecution!;
+
+    await workflow.submitReport({
+      taskId: developing.id,
+      attemptId: execution.attemptId,
+      outcome: "blocked",
+      summary: "Wait for a delivery",
+      resumeAt: "2026-08-03T02:00:00.000Z",
+      resumePrompt: "Inspect the delivery and continue.",
+    });
+    await workflow.completeTurn(developing.id, execution.attemptId, execution.turnId!);
+
+    await workflow.rescheduleTaskResume(
+      developing.id,
+      "2026-08-03T03:00:00.000Z",
+    );
+    expect((await store.findTask(developing.id))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      scheduledResume: { resumeAt: "2026-08-03T03:00:00.000Z" },
+    });
+
+    await workflow.continueTaskNow(developing.id);
+    expect(taskDispatcher.scheduledResumes).toHaveLength(1);
+    expect((await store.findTask(developing.id))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      status: "running",
+    });
+  });
+
+  it("serializes cancellation and rescheduling before concurrent due wakeups", async () => {
+    const created = await registerProject(2);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start both tasks",
+      taskIds: created.tasks.map(({ id: taskId }) => taskId),
+    });
+    const executions = await Promise.all(
+      created.tasks.map(async ({ id: taskId }) =>
+        (await store.findTask(taskId))!.task.currentExecution!,
+      ),
+    );
+    for (const [index, task] of created.tasks.entries()) {
+      await workflow.submitReport({
+        taskId: task.id,
+        attemptId: executions[index]!.attemptId,
+        outcome: "blocked",
+        summary: `Wait ${index}`,
+        resumeAt:
+          index === 0
+            ? "2026-08-03T00:05:00.000Z"
+            : "2026-08-03T00:10:00.000Z",
+        resumePrompt: `Recheck wait ${index} and continue.`,
+      });
+      await workflow.completeTurn(
+        task.id,
+        executions[index]!.attemptId,
+        executions[index]!.turnId!,
+      );
+    }
+
+    now = new Date("2026-08-03T00:05:00.000Z");
+    await Promise.all([
+      workflow.cancelTask(created.tasks[0]!.id, {
+        cancelledBy: "codex",
+        decisionBasis: "agent_decision",
+        reason: "The scheduled work is no longer required",
+      }),
+      workflow.resumeScheduledTasks(now),
+    ]);
+    expect((await store.findTask(created.tasks[0]!.id))!.task.status).toBe(
+      "cancelled",
+    );
+    expect(taskDispatcher.scheduledResumes).toHaveLength(0);
+
+    now = new Date("2026-08-03T00:10:00.000Z");
+    await Promise.all([
+      workflow.rescheduleTaskResume(
+        created.tasks[1]!.id,
+        "2026-08-03T00:20:00.000Z",
+      ),
+      workflow.resumeScheduledTasks(now),
+      workflow.resumeScheduledTasks(now),
+    ]);
+    expect((await store.findTask(created.tasks[1]!.id))!.task.currentExecution)
+      .toMatchObject({
+        attemptId: executions[1]!.attemptId,
+        status: "waiting_for_resume",
+        scheduledResume: { resumeAt: "2026-08-03T00:20:00.000Z" },
+      });
+    expect(taskDispatcher.scheduledResumes).toHaveLength(0);
+  });
+
   it("retries failed project execution independently from scheduling resume", async () => {
     const created = await registerProject(1);
     const firstExecution = created.project.currentExecution!;
@@ -2299,6 +2509,89 @@ describe("WorkflowEngine", () => {
     await workflow.reconcile();
 
     expect(taskDispatcher.started).toHaveLength(0);
+  });
+
+  it("releases the integration lease while an integrating task waits for resume", async () => {
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [
+        { title: "One", description: "One", acceptanceCriteria: [] },
+        { title: "Two", description: "Two", acceptanceCriteria: [] },
+      ],
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "blocked",
+      requestedAction: "integrate",
+      currentExecution: {
+        attemptId: "integrate_waiting",
+        action: "integrate",
+        status: "waiting_for_resume",
+        startedAt: "2026-08-03T00:00:00.000Z",
+        threadId: "thread_waiting",
+        modelRouting: testModelRouting(),
+        scheduledResume: {
+          reason: "Wait for a deployment",
+          resumeAt: "2026-08-03T01:00:00.000Z",
+          resumePrompt: "Check the deployment and continue.",
+        },
+      },
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[1]!,
+      status: "integrating",
+      requestedAction: "integrate",
+    });
+
+    await workflow.reconcile();
+
+    expect(taskDispatcher.started).toHaveLength(1);
+    expect(taskDispatcher.started[0]?.task.id).toBe(created.tasks[1]!.id);
+  });
+
+  it("resumes multiple due waits by deadline within available capacity", async () => {
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [
+        { title: "One", description: "One", acceptanceCriteria: [] },
+        { title: "Two", description: "Two", acceptanceCriteria: [] },
+      ],
+    });
+    for (const [index, task] of created.tasks.entries()) {
+      await store.saveTask(created.project.id, {
+        ...task,
+        status: "blocked",
+        requestedAction: "develop",
+        currentExecution: {
+          attemptId: `wait_${index}`,
+          action: "develop",
+          status: "waiting_for_resume",
+          startedAt: "2026-08-02T23:00:00.000Z",
+          threadId: `thread_${index}`,
+          modelRouting: testModelRouting(),
+          scheduledResume: {
+            reason: `Wait ${index}`,
+            resumeAt:
+              index === 0
+                ? "2026-08-03T08:01:00.000+08:00"
+                : "2026-08-03T00:02:00.000Z",
+            resumePrompt: `Continue ${index}`,
+          },
+        },
+      });
+    }
+
+    await workflow.resumeScheduledTasks(new Date("2026-08-03T00:03:00.000Z"));
+
+    expect(taskDispatcher.scheduledResumes.map(({ task }) => task.id)).toEqual(
+      created.tasks.map(({ id: taskId }) => taskId),
+    );
   });
 
   it("marks the project idle when its last task completes the full pipeline", async () => {

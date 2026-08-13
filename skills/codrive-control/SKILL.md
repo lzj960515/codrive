@@ -55,10 +55,22 @@ node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> 
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> retry
+node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> continue
+node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> reschedule
 node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel
 ```
 
 模型容量失败会在原 attempt 和原对话中按 5 秒、10 秒、20 秒自动重试三次，然后切换到 fallback 模型继续恢复。Fallback 同样重试三次；全部耗尽后任务才进入 `blocked`。此时任务级 `retry` 创建新的 attempt。`waiting_for_input` 由用户在原开发对话中回复，随后继续同一个 attempt。
+
+`waiting_for_resume` 是计划等待：保留原阶段、attempt、thread、模型路由和 AI 编写的 `resumePrompt` 检查点，同时释放项目容量与 integrate 的仓库资格。`continue` 提前继续同一执行；`reschedule` 通过标准输入接收新的未来 RFC 3339 绝对时间：
+
+```json
+{
+  "resumeAt": "2026-08-13T18:30:00+08:00"
+}
+```
+
+重新安排只改变恢复时间；提前继续和到期恢复都会先重新取得当前项目容量与仓库合入资格，再在原对话启动唯一的新 turn。项目暂停会保留等待，恢复项目后处理已经到期的任务。
 
 ## 取消判断
 

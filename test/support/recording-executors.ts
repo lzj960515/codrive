@@ -24,6 +24,9 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
   readonly resumed: Array<DispatchRequest & { threadId: string }> = [];
   readonly started: Array<DispatchRequest & { threadId: string; model: string }> = [];
   readonly reminders: Array<DispatchRequest & { threadId: string; model: string }> = [];
+  readonly scheduledResumes: Array<
+    DispatchRequest & { threadId: string; model: string; resumePrompt: string }
+  > = [];
   readonly interrupted: DispatchRequest[] = [];
   beforeStartTurn?: (request: DispatchRequest, threadId: string) => Promise<void>;
   beforeResumeThread?: (request: DispatchRequest, threadId: string) => Promise<void>;
@@ -66,6 +69,24 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
     return {
       status: "started",
       turnId: `task_reminder_${this.reminders.length}`,
+    };
+  }
+
+  async resumeScheduledTurn(
+    request: DispatchRequest,
+    threadId: string,
+    resumePrompt: string,
+  ): Promise<TurnDispatchResult> {
+    if (this.conversationActive) return { status: "conversation_active" };
+    this.scheduledResumes.push({
+      ...request,
+      threadId,
+      resumePrompt,
+      model: request.task.currentExecution!.modelRouting.model,
+    });
+    return {
+      status: "started",
+      turnId: `task_scheduled_resume_${this.scheduledResumes.length}`,
     };
   }
 

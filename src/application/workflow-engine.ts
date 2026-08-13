@@ -74,6 +74,7 @@ const inFlightExecutionStatuses = new Set(["running", "awaiting_report"]);
 const reportableExecutionStatuses = new Set([
   ...activeExecutionStatuses,
   "waiting_for_input",
+  "waiting_for_resume",
 ]);
 const reportSubmissionStatuses = new Set([
   "pending",
@@ -232,12 +233,22 @@ export class WorkflowEngine {
           command.payload.productDocument,
         );
       case "task.control":
-        return command.payload.action === "retry"
-          ? this.retryTask(command.payload.taskId)
-          : this.cancelTask(
+        switch (command.payload.action) {
+          case "retry":
+            return this.retryTask(command.payload.taskId);
+          case "continue":
+            return this.continueTaskNow(command.payload.taskId);
+          case "reschedule":
+            return this.rescheduleTaskResume(
+              command.payload.taskId,
+              command.payload.resumeAt,
+            );
+          case "cancel":
+            return this.cancelTask(
               command.payload.taskId,
               cancellationInput(command.payload, source),
             );
+        }
       case "task.report":
         return this.submitReport(command.payload);
       case "project.report":
@@ -417,7 +428,7 @@ export class WorkflowEngine {
           `Report does not match the current execution for ${report.taskId}`,
         );
       }
-      validateTaskReport(found.task, report);
+      validateTaskReport(found.task, report, this.now());
 
       const activity = createTaskReportActivity({
         activityId: this.createId("activity"),
@@ -446,7 +457,12 @@ export class WorkflowEngine {
       });
 
       if (execution.turnCompletedAt || execution.status === "waiting_for_input") {
-        const completed = await this.finalizeTaskReport(found.project, task, report);
+        const completed = await this.finalizeTaskReport(
+          found.project,
+          task,
+          report,
+          activity.occurredAt,
+        );
         await this.reconcileInternal();
         return completed;
       }
@@ -540,6 +556,7 @@ export class WorkflowEngine {
           found.project,
           taskWithCompletedTurn,
           taskReportFromActivity(activity),
+          activity.occurredAt,
         );
         await this.reconcileInternal();
         return completed;
@@ -613,6 +630,81 @@ export class WorkflowEngine {
         );
       }
       return this.startReplacementTaskExecution(found.project, found.task);
+    });
+  }
+
+  continueTaskNow(taskId: string): Promise<Task> {
+    return this.enqueue(async () => {
+      const found = await this.requireScheduledTaskResume(taskId);
+      const now = this.now();
+      const schedule = resetScheduledWakeAttempt(
+        found.task.currentExecution!.scheduledResume!,
+        now,
+      );
+      const task = {
+        ...found.task,
+        currentExecution: {
+          ...found.task.currentExecution!,
+          scheduledResume: schedule,
+        },
+        updatedAt: now,
+      };
+      await this.store.saveTask(found.project.id, task);
+      await this.recordEvent({
+        type: "task.scheduled_resume_requested",
+        projectId: found.project.id,
+        taskId,
+        attemptId: task.currentExecution!.attemptId,
+        ...(task.currentExecution!.threadId
+          ? { threadId: task.currentExecution!.threadId }
+          : {}),
+        before: taskLifecycleState(found.task),
+        after: taskLifecycleState(task),
+        data: { resumeAt: now, trigger: "manual" },
+      });
+      await this.reconcileInternal();
+      return (await this.requireTask(taskId)).task;
+    });
+  }
+
+  rescheduleTaskResume(taskId: string, resumeAt: string): Promise<Task> {
+    return this.enqueue(async () => {
+      const found = await this.requireScheduledTaskResume(taskId);
+      const normalizedResumeAt = requireFutureRfc3339(resumeAt, this.now());
+      const execution = found.task.currentExecution!;
+      const previousResumeAt = execution.scheduledResume!.resumeAt;
+      const schedule = resetScheduledWakeAttempt(
+        execution.scheduledResume!,
+        normalizedResumeAt,
+      );
+      const task: Task = {
+        ...found.task,
+        currentExecution: {
+          ...execution,
+          scheduledResume: schedule,
+        },
+        updatedAt: this.now(),
+      };
+      await this.store.saveTask(found.project.id, task);
+      await this.recordEvent({
+        type: "task.scheduled_resume_rescheduled",
+        projectId: found.project.id,
+        taskId,
+        attemptId: execution.attemptId,
+        ...(execution.threadId ? { threadId: execution.threadId } : {}),
+        before: taskLifecycleState(found.task),
+        after: taskLifecycleState(task),
+        data: { previousResumeAt, resumeAt: normalizedResumeAt },
+      });
+      await this.recordTaskLifecycleActivity(
+        found.project,
+        task,
+        "scheduled_resume_rescheduled",
+        "计划恢复时间已重新安排。",
+        this.now(),
+        { resumeAt: normalizedResumeAt },
+      );
+      return task;
     });
   }
 
@@ -1043,6 +1135,16 @@ export class WorkflowEngine {
     return this.enqueue(() => this.dispatchScheduledModelRetries(now));
   }
 
+  resumeScheduledTasks(
+    now = new Date(this.now()),
+    threadId?: string,
+    includeDeferred = false,
+  ): Promise<void> {
+    return this.enqueue(() =>
+      this.dispatchScheduledTaskResumes(now, threadId, includeDeferred),
+    );
+  }
+
   resetStableModelCapacityFailures(now = new Date(this.now())): Promise<void> {
     return this.enqueue(async () => {
       for (const snapshot of await this.store.listProjects()) {
@@ -1118,9 +1220,165 @@ export class WorkflowEngine {
   private async reconcileInternal(): Promise<void> {
     await this.alignPlanningConcurrency();
     await this.dispatchScheduledModelRetries(new Date(this.now()));
+    await this.dispatchScheduledTaskResumes(new Date(this.now()));
     await this.dispatchTaskContinuations();
     await this.startPendingTaskSelection();
     await this.markProjectsWithoutWorkIdle();
+  }
+
+  private async dispatchScheduledTaskResumes(
+    now: Date,
+    threadId?: string,
+    includeDeferred = false,
+  ): Promise<void> {
+    const snapshots = await this.store.listProjects();
+    const activeCountByProject = new Map(
+      snapshots.map(({ project, tasks }) => [project.id, countActiveTasks(tasks)]),
+    );
+    const integrationLeases = activeIntegrationRepositories(snapshots);
+    const candidates = snapshots
+      .filter(
+        ({ project }) =>
+          project.status === "active" && project.scheduling === "running",
+      )
+      .flatMap(({ project, tasks }) =>
+        tasks
+          .filter((task) =>
+            isScheduledTaskResumeDue(task, now, threadId, includeDeferred),
+          )
+          .map((task) => ({ project, task })),
+      )
+      .sort(compareScheduledTaskResumes);
+
+    for (const candidate of candidates) {
+      const concurrencyLimit = projectConcurrencyLimit(
+        candidate.project,
+        this.maxConcurrentTasks,
+      );
+      const activeCount = activeCountByProject.get(candidate.project.id) ?? 0;
+      if (activeCount >= concurrencyLimit) continue;
+
+      const current = await this.store.findTask(candidate.task.id);
+      if (
+        !current ||
+        current.project.status !== "active" ||
+        current.project.scheduling !== "running" ||
+        !isScheduledTaskResumeDue(current.task, now, threadId, includeDeferred)
+      ) {
+        continue;
+      }
+      const repository = resolve(current.project.repositoryPath);
+      if (
+        current.task.requestedAction === "integrate" &&
+        integrationLeases.has(repository)
+      ) {
+        continue;
+      }
+
+      const resumed = await this.startScheduledTaskResume(
+        current.project,
+        current.task,
+      );
+      if (!hasActiveTaskExecution(resumed)) continue;
+      activeCountByProject.set(current.project.id, activeCount + 1);
+      if (current.task.requestedAction === "integrate") {
+        integrationLeases.add(repository);
+      }
+    }
+  }
+
+  private async startScheduledTaskResume(
+    project: Project,
+    task: Task,
+  ): Promise<Task> {
+    const execution = task.currentExecution!;
+    const schedule = execution.scheduledResume!;
+    if (!execution.threadId) {
+      return this.blockTaskAfterRecoveryFailure(
+        project,
+        task,
+        "计划恢复缺少可继续的原任务对话。",
+      );
+    }
+
+    try {
+      const request = await this.taskDispatchRequest(project, task);
+      await this.dispatcher.resumeThread(request, execution.threadId);
+      const dispatch = await this.dispatcher.resumeScheduledTurn(
+        request,
+        execution.threadId,
+        schedule.resumePrompt,
+      );
+      if (dispatch.status === "conversation_active") {
+        const deferred: Task = {
+          ...task,
+          currentExecution: {
+            ...execution,
+            scheduledResume: { ...schedule, wakeAttemptedAt: this.now() },
+          },
+          updatedAt: this.now(),
+        };
+        await this.store.saveTask(project.id, deferred);
+        await this.recordEvent({
+          type: "task.scheduled_resume_deferred",
+          projectId: project.id,
+          taskId: task.id,
+          attemptId: execution.attemptId,
+          threadId: execution.threadId,
+          decision: "wait_for_conversation_idle",
+          before: taskLifecycleState(task),
+          after: taskLifecycleState(deferred),
+        });
+        return deferred;
+      }
+
+      const turnStartedAt = this.now();
+      const running: Task = {
+        ...task,
+        status: statusForTaskAction(execution.action),
+        currentExecution: {
+          ...execution,
+          status: "running",
+          turnId: dispatch.turnId,
+          turnStartedAt,
+          leaseExpiresAt: this.leaseExpiration(),
+        },
+        updatedAt: turnStartedAt,
+      };
+      delete running.currentExecution?.scheduledResume;
+      delete running.currentExecution?.submittedActivityId;
+      delete running.currentExecution?.turnCompletedAt;
+      delete running.currentExecution?.finishedAt;
+      await this.store.saveTask(project.id, running);
+      await this.recordEvent({
+        type: "task.scheduled_resume_started",
+        projectId: project.id,
+        taskId: task.id,
+        attemptId: execution.attemptId,
+        threadId: execution.threadId,
+        turnId: dispatch.turnId,
+        before: taskLifecycleState(task),
+        after: taskLifecycleState(running),
+        data: { resumeAt: schedule.resumeAt, trigger: "deadline_or_manual" },
+      });
+      await this.recordTaskLifecycleActivity(
+        project,
+        running,
+        "scheduled_resume_started",
+        "计划等待结束，已在原任务对话中继续执行。",
+        turnStartedAt,
+        { resumeAt: schedule.resumeAt },
+      );
+      return running;
+    } catch (error) {
+      const current = (await this.requireTask(task.id)).task;
+      const reason = error instanceof Error ? error.message : String(error);
+      return this.blockTaskAfterRecoveryFailure(
+        project,
+        current,
+        `计划恢复失败：${reason}`,
+      );
+    }
   }
 
   private async dispatchScheduledModelRetries(now: Date): Promise<void> {
@@ -1630,8 +1888,14 @@ export class WorkflowEngine {
     project: Project,
     task: Task,
     report: TaskReport,
+    reportSubmittedAt: string,
   ): Promise<Task> {
-    const completed = applyTaskReport(task, report, this.now());
+    const completed = applyTaskReport(
+      task,
+      report,
+      this.now(),
+      reportSubmittedAt,
+    );
     await this.store.saveTask(project.id, completed);
     await this.recordEvent({
       type: eventForTask(completed),
@@ -1960,7 +2224,12 @@ export class WorkflowEngine {
   private async recordTaskLifecycleActivity(
     project: Project,
     task: Task,
-    type: "execution_recovered" | "execution_failed" | "cancelled",
+    type:
+      | "scheduled_resume_started"
+      | "scheduled_resume_rescheduled"
+      | "execution_recovered"
+      | "execution_failed"
+      | "cancelled",
     summary: string,
     occurredAt: string,
     evidence?: NonNullable<TaskActivity["evidence"]>,
@@ -2055,6 +2324,21 @@ export class WorkflowEngine {
   private async requireTask(taskId: string): Promise<{ project: Project; task: Task }> {
     const found = await this.store.findTask(taskId);
     if (!found) throw new Error(`Task ${taskId} was not found`);
+    return found;
+  }
+
+  private async requireScheduledTaskResume(
+    taskId: string,
+  ): Promise<{ project: Project; task: Task }> {
+    const found = await this.requireTask(taskId);
+    if (
+      found.task.currentExecution?.status !== "waiting_for_resume" ||
+      !found.task.currentExecution.scheduledResume
+    ) {
+      throw new WorkflowConflictError(
+        `Task ${taskId} is not waiting for a scheduled resume`,
+      );
+    }
     return found;
   }
 
@@ -2221,6 +2505,37 @@ function compareTaskDispatchCandidates(
   );
 }
 
+function compareScheduledTaskResumes(
+  left: { project: Project; task: Task },
+  right: { project: Project; task: Task },
+): number {
+  return (
+    Date.parse(left.task.currentExecution!.scheduledResume!.resumeAt) -
+      Date.parse(right.task.currentExecution!.scheduledResume!.resumeAt) ||
+    left.project.id.localeCompare(right.project.id) ||
+    left.task.order - right.task.order ||
+    left.task.id.localeCompare(right.task.id)
+  );
+}
+
+function isScheduledTaskResumeDue(
+  task: Task,
+  now: Date,
+  threadId?: string,
+  includeDeferred = false,
+): boolean {
+  const execution = task.currentExecution;
+  return Boolean(
+    task.requestedAction &&
+      execution?.status === "waiting_for_resume" &&
+      execution.scheduledResume &&
+      (!threadId
+        ? includeDeferred || !execution.scheduledResume.wakeAttemptedAt
+        : execution.threadId === threadId) &&
+      Date.parse(execution.scheduledResume.resumeAt) <= now.getTime(),
+  );
+}
+
 function comparePlanningCandidates(
   left: ProjectSnapshot,
   right: ProjectSnapshot,
@@ -2242,7 +2557,16 @@ function completedProjectExecution(
   };
 }
 
+function statusForTaskAction(action: NonNullable<Task["requestedAction"]>): Task["status"] {
+  if (action === "review") return "reviewing";
+  if (action === "integrate") return "integrating";
+  return "developing";
+}
+
 function eventForTask(task: Task): string {
+  if (task.currentExecution?.status === "waiting_for_resume") {
+    return "task.scheduled_resume_waiting";
+  }
   switch (task.status) {
     case "reviewing":
       return "task.review_requested";
@@ -2292,6 +2616,27 @@ function requireCancellationReason(reason: string): string {
     throw new WorkflowConflictError("Cancellation requires a reason");
   }
   return normalized;
+}
+
+const rfc3339AbsoluteTime =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function requireFutureRfc3339(value: string, now: string): string {
+  if (!rfc3339AbsoluteTime.test(value) || !Number.isFinite(Date.parse(value))) {
+    throw new WorkflowConflictError("resumeAt must be an RFC 3339 absolute time");
+  }
+  if (Date.parse(value) <= Date.parse(now)) {
+    throw new WorkflowConflictError("resumeAt must be in the future");
+  }
+  return new Date(value).toISOString();
+}
+
+function resetScheduledWakeAttempt(
+  schedule: NonNullable<Task["currentExecution"]>["scheduledResume"] & {},
+  resumeAt: string,
+) {
+  const { wakeAttemptedAt: _wakeAttemptedAt, ...waiting } = schedule;
+  return { ...waiting, resumeAt };
 }
 
 function commandResultTarget(result: unknown): {

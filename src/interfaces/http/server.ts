@@ -62,6 +62,8 @@ const taskReportSchema = z.object({
   tests: z.string().optional(),
   findings: z.array(z.string()).optional(),
   question: z.string().optional(),
+  resumeAt: z.string().optional(),
+  resumePrompt: z.string().optional(),
 });
 
 const projectReportSchema = z.object({
@@ -133,6 +135,12 @@ const commandSchema = z.discriminatedUnion("type", [
     type: z.literal("task.control"),
     payload: z.discriminatedUnion("action", [
       z.object({ taskId: z.string().min(1), action: z.literal("retry") }),
+      z.object({ taskId: z.string().min(1), action: z.literal("continue") }),
+      z.object({
+        taskId: z.string().min(1),
+        action: z.literal("reschedule"),
+        resumeAt: z.string().min(1),
+      }),
       z.object({
         taskId: z.string().min(1),
         action: z.literal("cancel"),

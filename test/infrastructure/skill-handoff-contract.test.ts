@@ -31,4 +31,17 @@ describe("non-execution Skill handoff", () => {
       expect(instructions).toContain("取消理由");
     }
   });
+
+  it("documents scheduled blockers as a same-execution Codrive lifecycle", async () => {
+    const control = await readFile(resolve("skills/codrive-control/SKILL.md"), "utf8");
+    const task = await readFile(resolve("skills/codrive-task/SKILL.md"), "utf8");
+
+    for (const instructions of [control, task]) {
+      expect(instructions).toContain("resumeAt");
+      expect(instructions).toContain("resumePrompt");
+      expect(instructions).toContain("RFC 3339");
+      expect(instructions).toContain("attempt");
+      expect(instructions).toContain("原对话");
+    }
+  });
 });
