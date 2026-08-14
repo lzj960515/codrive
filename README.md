@@ -73,6 +73,8 @@ The board also provides runtime settings for per-project concurrency, the primar
 
 Codrive persists lifecycle state and enforces scheduling boundaries; Codex handles the work that requires judgment. Projects have independent concurrency limits, and planning runs again when its facts change rather than whenever a slot happens to become free.
 
+Review findings represent real delivery blockers in supported product and operational paths, not unconditional rework instructions. The development conversation fixes valid issues or records evidence for findings that do not apply; the same independent review conversation then reevaluates the current candidate and that evidence.
+
 Waiting and recovery are part of the same workflow. A task can pause until a specific time without holding project capacity, capacity errors can move work to a fallback model, and interrupted work can resume from its persisted conversation and execution state. The task timeline records these transitions and surfaces only decisions or failures that need attention.
 
 ## Codex conversations
