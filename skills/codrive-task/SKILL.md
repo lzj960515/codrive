@@ -34,7 +34,9 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 ## 连续任务工作区
 
-Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查对话始终显示在 Codex App 的同一个项目下。对话目录表示产品归属；`context.workspacePath` 和 `context.delivery` 是从活动历史推导的当前工作树与 Git 事实。开发、审查、返工和合入的文件、Git 与测试操作都在任务工作树中完成。
+Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查对话始终显示在 Codex App 的同一个项目下。每个任务拥有两个稳定角色的对话：开发对话负责开发、返工和合入，独立的 Review 对话负责候选审查与复审。新的 Review round 继续同一个 Review 对话，使审查者能够结合返工、开发反证和上一轮结论重新判断。
+
+对话目录表示产品归属；`context.workspacePath` 和 `context.delivery` 是从活动历史推导的当前工作树与 Git 事实。开发、审查、返工和合入的文件、Git 与测试操作都在任务工作树中完成。
 
 - `context` 返回 `workspacePath` 时，先进入该工作树，再执行当前阶段。提交与审查基线使用 `context.delivery`，并用实际 Git 状态确认。
 - 首次开发尚未记录 `workspacePath` 时，先检查规范路径 `<repository>/.worktrees/codrive/<project-id>/<task-id>`；已有工作树就继续使用，没有时再创建。
@@ -65,15 +67,17 @@ Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查
 
 ## 返工 `rework`
 
-从 `activities` 末尾向前找到最近一条 `review_changes_requested`，读取其中的 `evidence.findings`，在现有工作树修复所有阻塞问题。运行测试并提交新的候选，随后汇报 `completed`。
+从 `activities` 末尾向前找到最近一条 `review_changes_requested`，读取其中的 `evidence.findings`。结合任务契约、实际交付物和业务证据独立判断每条 finding：成立的问题完成修改，不适用的问题形成有证据的回复，需要新产品语义的问题汇报 `needs_input` 请求决定。
+
+处理完所有 findings 后运行与实际改动相称的验证。汇报 `completed` 时提供当前 `candidateCommit` 和测试证据，并在 `summary` 中清楚记录已修改的问题和未修改 finding 的反证。有效回复可以保留原候选提交；Review 对话会在下一轮复审中重新判断。
 
 ## 审查 `review`
 
-从任务契约、验收标准、完整活动历史、`context.delivery.candidateCommit` 和实际 Git 状态独立判断。验证功能、测试、明显回归、安全和数据风险。
+从任务契约、验收标准、完整活动历史、`context.delivery.candidateCommit` 和实际交付物状态还原真实交付场景。根据交付物性质独立检查目标是否完成、验收证据是否可信，以及明显回归、安全和数据风险。只有能通过受支持的使用方式触发并真实影响当前交付的问题才成为阻塞；纯理论可能性保留为非阻塞观察，不进入 `findings`。
 
 - 满足交付标准时汇报 `approved`，把审查时的主分支提交写入 `reviewedMainCommit`。
 - 存在阻塞问题时汇报 `changes_requested`，`findings` 只列可操作问题。
-- 风格偏好和非必要扩展建议不阻塞交付。
+- 复审时读取执行者对 findings 的处理与反证，重新判断旧结论；当前没有阻塞问题时直接批准。
 
 ## 合入 `integrate`
 
@@ -94,7 +98,7 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 每份报告包含 `context` 返回的 `attemptId`、当前阶段允许的 `outcome` 和简明 `summary`。报告 JSON 输入形式保持稳定；Codrive 将每次成功报告追加为一条不可变活动。各阶段同时提供后续流程依赖的事实：
 
 - `develop` 完成：`workspacePath`、`baseCommit`、`candidateCommit`、`tests`。
-- `rework` 完成：`candidateCommit`、`tests`。
+- `rework` 完成：`candidateCommit`、`tests`，并在 `summary` 中记录 findings 的处理结论。
 - `review` 通过：`reviewedMainCommit`、`tests`。
 - `review` 退回：非空 `findings` 和已执行的验证。
 - `integrate` 完成：`mergedCommit`、`tests`。

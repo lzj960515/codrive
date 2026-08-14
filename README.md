@@ -28,7 +28,7 @@ Codex still understands the repository, writes and reviews code, runs tests, res
 ## Why Codrive?
 
 - **Visible work.** Every development and review task appears in Codex App.
-- **Focused context.** Development keeps its conversation; each review starts with a clean independent context.
+- **Focused context.** Development and review use separate conversations; each task's review conversation continues across review rounds.
 - **Continuous delivery.** Approved work moves to integration, while requested changes return to the original development conversation.
 - **Dynamic planning.** Codex selects useful work from current product and repository facts instead of following a fixed dependency graph.
 - **Local ownership.** Product documents, task state, execution history, and credentials stay on your machine.
@@ -66,7 +66,7 @@ The board also provides runtime settings for per-project concurrency, the primar
 
 1. **Plan.** Codex turns a product goal into tasks and selects the next work from the latest product and repository facts.
 2. **Develop.** Each selected task runs in its own persistent Codex conversation and isolated Git worktree.
-3. **Review.** Every review starts in a fresh conversation. Findings return to the development conversation for rework.
+3. **Review.** The first review starts an independent conversation, and later review rounds continue it. Findings return to the development conversation for evidence-based rework.
 4. **Integrate.** Approved work is merged through the original task conversation, with one integration at a time per repository.
 
 Codrive persists lifecycle state and enforces scheduling boundaries; Codex handles the work that requires judgment. Projects have independent concurrency limits, and planning runs again when its facts change rather than whenever a slot happens to become free.
@@ -80,7 +80,7 @@ Waiting and recovery are part of the same workflow. A task can pause until a spe
 | Development | One persistent Codex conversation per task |
 | Rework | Continues the development conversation |
 | Integration | Continues the development conversation |
-| Review | Starts a fresh independent conversation for every round |
+| Review | Uses one independent persistent review conversation per task |
 | Task selection | Uses temporary conversations that stay out of the recent-task list |
 
 Task details link each execution and activity to its source conversation. They also show blockers, scheduled continuation, decision requests, test evidence, review findings, and Git results in one chronological timeline.

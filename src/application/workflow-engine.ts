@@ -1653,31 +1653,28 @@ export class WorkflowEngine {
     const execution = task.currentExecution!;
     const taskForTurn = this.prepareTaskForTurn(task);
     const request = await this.taskDispatchRequest(project, taskForTurn);
-    const { activity } = request;
     try {
       let withThread = taskForTurn;
       let threadId = execution.threadId;
       if (!threadId) {
-        const createsThread =
-          execution.action === "review" || !activity.developmentThreadId;
-        const createdThreadId = await this.dispatcher.openThread(request);
-        threadId = createdThreadId;
+        const conversation = await this.dispatcher.attachConversation(request);
+        threadId = conversation.threadId;
         withThread = {
           ...taskForTurn,
           currentExecution: {
             ...taskForTurn.currentExecution!,
-            threadId: createdThreadId,
+            threadId,
           },
           updatedAt: this.now(),
         };
         await this.store.saveTask(project.id, withThread);
-        if (createsThread) {
+        if (conversation.disposition === "created") {
           await this.recordEvent({
             type: "thread.created",
             projectId: project.id,
             taskId: task.id,
             attemptId: execution.attemptId,
-            threadId: createdThreadId,
+            threadId,
             before: taskLifecycleState(taskForTurn),
             after: taskLifecycleState(withThread),
           });

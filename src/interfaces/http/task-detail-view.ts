@@ -51,7 +51,7 @@ export async function createTaskDetailView(
       currentExecution,
       modelRouting: task.currentExecution?.modelRouting ?? null,
       cancellation: task.cancellation ?? null,
-      reviewCount: projection.reviewCount,
+      reviewCount: projection.conversations.reviewCount,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     },

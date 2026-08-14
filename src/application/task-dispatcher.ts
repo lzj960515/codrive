@@ -11,8 +11,15 @@ export type TurnDispatchResult =
   | { status: "started"; turnId: string }
   | { status: "conversation_active" };
 
+export interface TaskConversationAttachment {
+  threadId: string;
+  disposition: "created" | "resumed";
+}
+
 export interface TaskDispatcher {
-  openThread(request: DispatchRequest): Promise<string>;
+  attachConversation(
+    request: DispatchRequest,
+  ): Promise<TaskConversationAttachment>;
   resumeThread(request: DispatchRequest, threadId: string): Promise<void>;
   startTurn(
     request: DispatchRequest,

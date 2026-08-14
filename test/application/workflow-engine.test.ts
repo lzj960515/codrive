@@ -308,6 +308,47 @@ describe("WorkflowEngine", () => {
     },
   );
 
+  it("keeps one independent review conversation across review rounds", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    store.subscribe((event) => events.push(event as unknown as Record<string, unknown>));
+    const created = await registerProject(1);
+    const taskId = created.tasks[0]!.id;
+
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [taskId],
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Implemented",
+      workspacePath: "/workspace/game/.worktrees/task",
+      candidateCommit: "candidate_1",
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "changes_requested",
+      summary: "One blocker remains",
+      findings: ["Preserve stable identity"],
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Resolved the blocker",
+      candidateCommit: "candidate_2",
+    });
+
+    const reviewTurns = taskDispatcher.started.filter(
+      ({ task }) => task.currentExecution?.action === "review",
+    );
+    expect(reviewTurns).toHaveLength(2);
+    expect(reviewTurns[1]!.threadId).toBe(reviewTurns[0]!.threadId);
+
+    const createdTaskThreads = events.filter(
+      (event) => event.type === "thread.created" && event.taskId === taskId,
+    );
+    expect(createdTaskThreads).toHaveLength(2);
+  });
+
   it("advances planning only after a task completes its full pipeline", async () => {
     const created = await registerProject(2);
     const taskId = created.tasks[0]!.id;

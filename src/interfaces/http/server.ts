@@ -384,6 +384,7 @@ async function taskContext(
 ) {
   const activities = await store.listTaskActivities(project.id, task.id);
   const activity = projectTaskActivities(activities);
+  const { delivery } = activity;
   return {
     taskId: task.id,
     projectId: project.id,
@@ -397,12 +398,12 @@ async function taskContext(
     taskDocument: store.taskPath(project.id, task.id),
     repositoryPath: project.repositoryPath,
     projectContextNotes: project.contextNotes ?? [],
-    workspacePath: activity.workspacePath ?? null,
+    workspacePath: delivery.workspacePath ?? null,
     delivery: {
-      baseCommit: activity.baseCommit ?? null,
-      candidateCommit: activity.candidateCommit ?? null,
-      reviewedMainCommit: activity.reviewedMainCommit ?? null,
-      mergedCommit: activity.mergedCommit ?? null,
+      baseCommit: delivery.baseCommit ?? null,
+      candidateCommit: delivery.candidateCommit ?? null,
+      reviewedMainCommit: delivery.reviewedMainCommit ?? null,
+      mergedCommit: delivery.mergedCommit ?? null,
     },
     activities,
   };

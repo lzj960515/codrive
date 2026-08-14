@@ -174,7 +174,7 @@ export class ProjectStore {
       const taskRoots = await Promise.all(
         snapshot.tasks.map(async ({ id }) =>
           projectTaskActivities(await this.listTaskActivities(snapshot.project.id, id))
-            .workspacePath,
+            .delivery.workspacePath,
         ),
       );
       if (

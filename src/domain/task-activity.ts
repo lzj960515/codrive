@@ -48,15 +48,23 @@ export interface CreateTaskLifecycleActivityInput {
   evidence?: TaskActivityEvidence;
 }
 
-export interface TaskActivityProjection {
+export interface TaskDeliveryProjection {
   workspacePath?: string;
   baseCommit?: string;
   candidateCommit?: string;
   reviewedMainCommit?: string;
   mergedCommit?: string;
+}
+
+export interface TaskConversationProjection {
   developmentThreadId?: string;
   reviewThreadId?: string;
   reviewCount: number;
+}
+
+export interface TaskActivityProjection {
+  delivery: TaskDeliveryProjection;
+  conversations: TaskConversationProjection;
   latestDecisionRequest: TaskActivity | null;
 }
 
@@ -135,26 +143,37 @@ export function projectTaskActivities(
   activities: readonly TaskActivity[],
 ): TaskActivityProjection {
   const projection: TaskActivityProjection = {
-    reviewCount: 0,
+    delivery: {},
+    conversations: { reviewCount: 0 },
     latestDecisionRequest: null,
   };
   const reviewAttempts = new Set<string>();
 
   for (const activity of activities) {
     const evidence = activity.evidence;
-    if (evidence?.workspacePath) projection.workspacePath = evidence.workspacePath;
-    if (evidence?.baseCommit) projection.baseCommit = evidence.baseCommit;
-    if (evidence?.candidateCommit) projection.candidateCommit = evidence.candidateCommit;
-    if (evidence?.reviewedMainCommit) {
-      projection.reviewedMainCommit = evidence.reviewedMainCommit;
+    if (evidence?.workspacePath) {
+      projection.delivery.workspacePath = evidence.workspacePath;
     }
-    if (evidence?.mergedCommit) projection.mergedCommit = evidence.mergedCommit;
+    if (evidence?.baseCommit) {
+      projection.delivery.baseCommit = evidence.baseCommit;
+    }
+    if (evidence?.candidateCommit) {
+      projection.delivery.candidateCommit = evidence.candidateCommit;
+    }
+    if (evidence?.reviewedMainCommit) {
+      projection.delivery.reviewedMainCommit = evidence.reviewedMainCommit;
+    }
+    if (evidence?.mergedCommit) {
+      projection.delivery.mergedCommit = evidence.mergedCommit;
+    }
 
     if (activity.action === "review") {
       if (activity.attemptId) reviewAttempts.add(activity.attemptId);
-      if (activity.threadId) projection.reviewThreadId = activity.threadId;
+      if (activity.threadId) {
+        projection.conversations.reviewThreadId = activity.threadId;
+      }
     } else if (activity.threadId) {
-      projection.developmentThreadId = activity.threadId;
+      projection.conversations.developmentThreadId = activity.threadId;
     }
 
     if (activity.type === "decision_requested") {
@@ -167,7 +186,7 @@ export function projectTaskActivities(
     }
   }
 
-  projection.reviewCount = reviewAttempts.size;
+  projection.conversations.reviewCount = reviewAttempts.size;
   return projection;
 }
 

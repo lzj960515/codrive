@@ -98,9 +98,12 @@ function request(currentTask: Task, activity = {}) {
     project,
     task: currentTask,
     activity: {
-      reviewCount: 0,
+      delivery: {},
+      conversations: {
+        reviewCount: 0,
+        ...activity,
+      },
       latestDecisionRequest: null,
-      ...activity,
     },
   };
 }
@@ -111,11 +114,11 @@ describe("CodexTaskDispatcher", () => {
     const dispatcher = new CodexTaskDispatcher(gateway);
     const currentRequest = request(task());
 
-    const threadId = await dispatcher.openThread(currentRequest);
-    const turn = await dispatcher.startTurn(currentRequest, threadId);
+    const conversation = await dispatcher.attachConversation(currentRequest);
+    const turn = await dispatcher.startTurn(currentRequest, conversation.threadId);
 
-    expect({ threadId, turn }).toEqual({
-      threadId: "thread_1",
+    expect({ conversation, turn }).toEqual({
+      conversation: { threadId: "thread_1", disposition: "created" },
       turn: { status: "started", turnId: "turn_1" },
     });
     expect(gateway.calls).toEqual([
@@ -171,9 +174,15 @@ describe("CodexTaskDispatcher", () => {
       },
     });
 
-    await dispatcher.openThread(request(reviewing, { developmentThreadId: "development_thread" }));
-    await dispatcher.openThread(request(reworking, { developmentThreadId: "development_thread" }));
-    await dispatcher.openThread(request(integrating, { developmentThreadId: "development_thread" }));
+    await dispatcher.attachConversation(
+      request(reviewing, { developmentThreadId: "development_thread" }),
+    );
+    await dispatcher.attachConversation(
+      request(reworking, { developmentThreadId: "development_thread" }),
+    );
+    await dispatcher.attachConversation(
+      request(integrating, { developmentThreadId: "development_thread" }),
+    );
 
     expect(gateway.calls).toEqual([
       {
@@ -194,26 +203,85 @@ describe("CodexTaskDispatcher", () => {
     ]);
   });
 
-  it("resumes a persisted execution under the project even when it has a worktree", async () => {
+  it("reuses the saved review conversation for later reviews of the same task", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
-    const persisted = task({
+    const reviewing = task({
+      status: "reviewing",
+      requestedAction: "review",
       currentExecution: {
-        attemptId: "attempt_1",
-        action: "develop",
+        attemptId: "review_2",
+        action: "review",
         status: "pending",
         startedAt: timestamp,
         modelRouting: modelRouting(),
-        threadId: "persisted_thread",
       },
     });
 
-    await dispatcher.openThread(request(persisted));
+    const conversation = await dispatcher.attachConversation(
+      request(reviewing, {
+        developmentThreadId: "development_thread",
+        reviewThreadId: "review_thread",
+        reviewCount: 1,
+      }),
+    );
+
+    expect(conversation).toEqual({
+      threadId: "review_thread",
+      disposition: "resumed",
+    });
+    expect(gateway.calls).toEqual([
+      {
+        method: "resumeThread",
+        args: ["review_thread", project.repositoryPath],
+      },
+    ]);
+  });
+
+  it("does not share a review conversation between different tasks", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = new CodexTaskDispatcher(gateway);
+    const reviewing = task({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        attemptId: "review_1",
+        action: "review",
+        status: "pending",
+        startedAt: timestamp,
+        modelRouting: modelRouting(),
+      },
+    });
+    const otherTask = task({
+      id: "task_2",
+      title: "Second loop",
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        attemptId: "review_1_other",
+        action: "review",
+        status: "pending",
+        startedAt: timestamp,
+        modelRouting: modelRouting(),
+      },
+    });
+
+    await dispatcher.attachConversation(
+      request(reviewing, { reviewThreadId: "task_1_review", reviewCount: 1 }),
+    );
+    await dispatcher.attachConversation(request(otherTask));
 
     expect(gateway.calls).toEqual([
       {
         method: "resumeThread",
-        args: ["persisted_thread", "/workspace/game"],
+        args: ["task_1_review", project.repositoryPath],
+      },
+      {
+        method: "startThread",
+        args: [
+          project.repositoryPath,
+          "[Codrive Review #1] Tiny Game · Second loop",
+        ],
       },
     ]);
   });
@@ -263,12 +331,57 @@ describe("CodexTaskDispatcher", () => {
     ]);
   });
 
+  it("leaves optional capability selection to Codex for review and rework turns", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = new CodexTaskDispatcher(gateway);
+    const reviewing = task({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        attemptId: "review_1",
+        action: "review",
+        status: "pending",
+        startedAt: timestamp,
+        modelRouting: modelRouting(),
+      },
+    });
+    const reworking = task({
+      requestedAction: "rework",
+      currentExecution: {
+        attemptId: "rework_1",
+        action: "rework",
+        status: "pending",
+        startedAt: timestamp,
+        modelRouting: modelRouting(),
+      },
+    });
+
+    await dispatcher.startTurn(request(reviewing), "review_thread");
+    await dispatcher.startTurn(request(reworking), "development_thread");
+
+    expect(gateway.calls.map((call) => call.args[2])).toEqual([
+      "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+      "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+    ]);
+  });
+
   it("uses the saved AI checkpoint and stable task identity for a scheduled resume", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
+    const reviewing = task({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        attemptId: "review_1",
+        action: "review",
+        status: "waiting_for_resume",
+        startedAt: timestamp,
+        modelRouting: modelRouting(),
+      },
+    });
 
     const turn = await dispatcher.resumeScheduledTurn(
-      request(task()),
+      request(reviewing),
       "thread_1",
       "Inspect build 42, retain the current worktree, and continue the review.",
     );

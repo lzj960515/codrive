@@ -147,14 +147,18 @@ describe("task activities", () => {
     ];
 
     expect(projectTaskActivities(activities)).toEqual({
-      workspacePath: "/workspace/.worktrees/task_1",
-      baseCommit: "base_1",
-      candidateCommit: "candidate_2",
-      reviewedMainCommit: "main_2",
-      mergedCommit: "merged_1",
-      developmentThreadId: "development_thread",
-      reviewThreadId: "review_thread_2",
-      reviewCount: 2,
+      delivery: {
+        workspacePath: "/workspace/.worktrees/task_1",
+        baseCommit: "base_1",
+        candidateCommit: "candidate_2",
+        reviewedMainCommit: "main_2",
+        mergedCommit: "merged_1",
+      },
+      conversations: {
+        developmentThreadId: "development_thread",
+        reviewThreadId: "review_thread_2",
+        reviewCount: 2,
+      },
       latestDecisionRequest: null,
     });
   });

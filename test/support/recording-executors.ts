@@ -1,6 +1,7 @@
 import type { ProjectExecutor } from "../../src/application/project-executor.js";
 import type {
   DispatchRequest,
+  TaskConversationAttachment,
   TaskDispatcher,
   TurnDispatchResult,
 } from "../../src/application/task-dispatcher.js";
@@ -37,9 +38,22 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
   ) => Promise<void>;
   conversationActive = false;
 
-  async openThread(request: DispatchRequest): Promise<string> {
+  async attachConversation(
+    request: DispatchRequest,
+  ): Promise<TaskConversationAttachment> {
     this.opened.push(request);
-    return `task_thread_${this.opened.length}`;
+    const conversations = request.activity.conversations;
+    const existingThreadId =
+      request.task.currentExecution?.action === "review"
+        ? conversations.reviewThreadId
+        : conversations.developmentThreadId;
+    if (existingThreadId) {
+      return { threadId: existingThreadId, disposition: "resumed" };
+    }
+    return {
+      threadId: `task_thread_${this.opened.length}`,
+      disposition: "created",
+    };
   }
 
   async resumeThread(request: DispatchRequest, threadId: string): Promise<void> {

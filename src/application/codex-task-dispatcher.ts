@@ -2,6 +2,7 @@ import type { Project, Task } from "../domain/types.js";
 import type { CodexGateway } from "./codex-gateway.js";
 import type {
   DispatchRequest,
+  TaskConversationAttachment,
   TaskDispatcher,
   TurnDispatchResult,
 } from "./task-dispatcher.js";
@@ -9,25 +10,23 @@ import type {
 export class CodexTaskDispatcher implements TaskDispatcher {
   constructor(private readonly codex: CodexGateway) {}
 
-  async openThread(request: DispatchRequest): Promise<string> {
+  async attachConversation(
+    request: DispatchRequest,
+  ): Promise<TaskConversationAttachment> {
     const cwd = conversationDirectory(request);
-    const existingThreadId = request.task.currentExecution?.threadId;
+    const existingThreadId = conversationThreadId(request);
     if (existingThreadId) {
       await this.codex.resumeThread(existingThreadId, cwd);
-      return existingThreadId;
+      return { threadId: existingThreadId, disposition: "resumed" };
     }
 
-    if (request.task.currentExecution?.action === "review") {
-      return this.codex.startThread(
-        cwd,
-        threadTitle(request.project, request.task, request.activity.reviewCount),
-      );
-    }
-    if (request.activity.developmentThreadId) {
-      await this.codex.resumeThread(request.activity.developmentThreadId, cwd);
-      return request.activity.developmentThreadId;
-    }
-    return this.codex.startThread(cwd, threadTitle(request.project, request.task));
+    const title = threadTitle(
+      request.project,
+      request.task,
+      request.activity.conversations.reviewCount,
+    );
+    const threadId = await this.codex.startThread(cwd, title);
+    return { threadId, disposition: "created" };
   }
 
   async resumeThread(request: DispatchRequest, threadId: string): Promise<void> {
@@ -96,6 +95,13 @@ export class CodexTaskDispatcher implements TaskDispatcher {
       turnId: await this.codex.startTurn(threadId, cwd, prompt, model),
     };
   }
+}
+
+function conversationThreadId(request: DispatchRequest): string | undefined {
+  const action = request.task.currentExecution?.action;
+  return action === "review"
+    ? request.activity.conversations.reviewThreadId
+    : request.activity.conversations.developmentThreadId;
 }
 
 function conversationDirectory({ project }: DispatchRequest): string {
