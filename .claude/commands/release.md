@@ -1,12 +1,15 @@
 ---
-description: Verify, version, publish, and push the Codrive npm package
+description: Verify, version, push, and monitor the Codrive npm release
 argument-hint: [patch|minor]
 allowed-tools: Bash, Read
 ---
 
 # Codrive Release Command
 
-Codrive is an npm-only release. It has no database migration or deployment step.
+Codrive is an npm-only release. It has no database migration or deployment
+step. The local command verifies and versions the release, then pushes its Git
+commit and tag. The `Release` GitHub Actions workflow owns npm authentication
+and publication through the protected `npm` environment.
 
 ## Version input
 
@@ -15,7 +18,9 @@ Codrive is an npm-only release. It has no database migration or deployment step.
 - `patch` for backward-compatible fixes.
 - `minor` for backward-compatible features.
 
-Use `patch` when no argument is provided. Commit the release candidate before starting this workflow so `npm version` creates a dedicated version commit and tag.
+Use `patch` when no argument is provided. Commit the release candidate before
+starting this workflow so `npm version` creates a dedicated version commit and
+tag.
 
 ## Execution steps
 
@@ -27,16 +32,17 @@ git status --short --branch
 git merge-base --is-ancestor origin/main HEAD
 ```
 
-Run the release from `main` with a clean worktree. The local branch may be ahead of `origin/main`, but it must contain the current remote branch.
+Run the release from `main` with a clean worktree. The local branch may be
+ahead of `origin/main`, but it must contain the current remote branch.
 
-### 2. Confirm npm access and current version
+### 2. Confirm the current version
 
 ```bash
-npm whoami
 npm view codrive version --json
 ```
 
-The local `package.json` version must equal the published npm version before bumping. Resolve authentication or version drift before creating a release commit.
+The local `package.json` version must equal the published npm version before
+bumping. Resolve version drift before creating a release commit.
 
 ### 3. Verify the package
 
@@ -53,55 +59,62 @@ Read the command results and stop before versioning when any check fails.
 
 ```bash
 npm version <patch|minor> -m "chore(release): bump version to %s"
+version="$(node -p "require('./package.json').version")"
 ```
 
-This updates `package.json`, creates a Conventional Commit, and creates the matching `v<version>` Git tag.
+This updates `package.json`, creates a Conventional Commit, and creates the
+matching `v<version>` Git tag.
 
-### 5. Publish through npm's interactive authentication lifecycle
-
-Run the publish command in a persistent interactive TTY with stdin and stdout
-attached. Enable the execution tool's PTY/TTY option and retain its session so
-input and later output continue through the same `npm publish` process.
-
-```bash
-npm publish --access public
-```
-
-npm 11 handles publish-time Web OTP only when both streams are TTYs. When the
-live process prints `Press ENTER to open in the browser...`, write one newline
-to that same session. npm owns the authentication URL, opens the exact URL in
-the system browser, polls its completion URL, and then retries the registry
-request with the returned one-time token.
-
-Keep waiting on the same `npm publish` process while the user completes any
-required npm login or authorization in the opened browser. Treat
-`+ codrive@<version>` and a zero exit code as the publish result. Browser
-automation is not part of this release flow: authentication URLs are opaque
-runtime state and tool output can redact their identity before another browser
-receives them.
-
-### 6. Push the release commit and tag
+### 5. Push the release commit and tag
 
 ```bash
 git push origin main --follow-tags
 ```
 
+The tag push triggers the `Release` GitHub Actions workflow. That workflow
+checks that the tag matches `package.json`, repeats package verification, and
+publishes with `NPM_TOKEN` from the `npm` environment.
+
+### 6. Follow the automated publication
+
+```bash
+release_commit="$(git rev-parse "v${version}^{commit}")"
+gh run list --workflow release.yml --commit "$release_commit" --limit 1 --json databaseId,status,conclusion,url
+run_id="$(gh run list --workflow release.yml --commit "$release_commit" --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run watch "$run_id" --exit-status
+```
+
+GitHub can take a few seconds to expose a newly triggered run. Repeat the two
+`gh run list` commands until they return its database ID, then watch that exact
+run to completion.
+
 ### 7. Verify the published release
 
 ```bash
-npm view codrive@<version> version dist-tags.latest --json
-git ls-remote --tags origin refs/tags/v<version>
+gh run view "$run_id" --json status,conclusion,url,headSha
+npm view "codrive@${version}" version dist-tags.latest --json
+git ls-remote --tags origin "refs/tags/v${version}"
 git status --short --branch
 ```
 
+Confirm that the workflow succeeded, npm reports the new version as `latest`,
+the remote tag points to the release commit, and the local worktree is clean.
+
 ## Failure semantics
 
-- When `npm whoami` fails, restore npm access before `npm version`.
-- When a publish attempt reports Web OTP without waiting, rerun `npm publish` for the same version in an interactive TTY and complete npm's in-process browser flow.
-- When browser authorization needs user interaction, keep the publish session alive and ask the user to finish that exact npm page.
-- When `npm publish` exits ambiguously, query `npm view codrive@<version> version --json` before deciding whether the registry accepted it.
-- When the registry has not accepted the version, preserve the local version commit and tag, fix the cause, and retry the same version.
-- When npm accepts the version but Git push fails, retry the same push. Keep npm and Git on one version instead of bumping again.
+- When local verification fails, fix the release candidate and repeat the
+  checks before `npm version`.
+- When the Git push fails, retry the same push so the existing release commit
+  and tag stay paired.
+- When the workflow fails, run `gh run view "$run_id" --log-failed` and query
+  `npm view "codrive@${version}" version --json` before choosing recovery.
+- When npm has not accepted the version and the failure is transient or comes
+  from environment configuration, repair that boundary and rerun the same
+  workflow with `gh run rerun "$run_id" --failed`.
+- When a failure requires changing tagged source, keep the version commit and
+  pushed tag unchanged while defining an explicit tag-recovery plan.
+- When npm already reports the version, preserve that version and reconcile
+  Git and workflow evidence without creating another version bump.
 
 ---
 
