@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { CodexTaskDispatcher } from "./application/codex-task-dispatcher.js";
 import { CodexProjectExecutor } from "./application/codex-project-executor.js";
 import { LifecycleRecorder } from "./application/lifecycle-recorder.js";
+import { PackageVersionCheckScheduler } from "./application/package-version-check-scheduler.js";
 import { RecoveryManager } from "./application/recovery-manager.js";
 import { SystemSettingsService } from "./application/system-settings-service.js";
 import { SystemUpdateService } from "./application/system-update-service.js";
@@ -31,6 +32,7 @@ export class CodriveServer {
   private config: CodriveConfig | null = null;
   private log: CodriveLog | null = null;
   private updateRecoveryTimer: NodeJS.Timeout | null = null;
+  private versionChecks: PackageVersionCheckScheduler | null = null;
   private ready = false;
 
   constructor(stateDirectory?: string) {
@@ -92,6 +94,15 @@ export class CodriveServer {
         currentVersion: version,
         stateDirectory: this.config.stateDirectory,
       });
+      this.versionChecks = new PackageVersionCheckScheduler({
+        versions,
+        onError: (error) => {
+          this.log?.error(
+            "updates",
+            error instanceof Error ? error.message : String(error),
+          );
+        },
+      });
       const upgradeStore = new UpgradeStateStore(this.config.stateDirectory);
       const upgrades = new UpgradeCoordinator({
         store: upgradeStore,
@@ -115,6 +126,7 @@ export class CodriveServer {
         versions,
         upgrades,
         skillInstaller,
+        this.versionChecks,
       );
       this.http = createHttpServer({
         store,
@@ -122,6 +134,7 @@ export class CodriveServer {
         skillInstaller,
         settingsService,
         systemUpdateService,
+        systemUpdateEvents: this.versionChecks,
         currentVersion: version,
         accessToken: this.config.accessToken,
         isReady: () => this.ready,
@@ -137,12 +150,7 @@ export class CodriveServer {
       this.recovery = new RecoveryManager(store, workflow, this.codex);
       await this.recovery.start();
       this.ready = true;
-      void versions.refresh().catch((error: unknown) => {
-        this.log?.error(
-          "updates",
-          error instanceof Error ? error.message : String(error),
-        );
-      });
+      await this.versionChecks.start();
       const url = `http://${this.config.host}:${this.config.port}`;
       this.log.info(`Codrive is running at ${url}`);
       return {
@@ -164,6 +172,8 @@ export class CodriveServer {
     this.ready = false;
     if (this.updateRecoveryTimer) clearInterval(this.updateRecoveryTimer);
     this.updateRecoveryTimer = null;
+    this.versionChecks?.stop();
+    this.versionChecks = null;
     this.recovery?.stop();
     this.recovery = null;
     await this.http?.close();

@@ -1,9 +1,10 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import type { WorkflowEngine } from "../../application/workflow-engine.js";
+import type { VersionStatusEventSource } from "../../application/package-version-check-scheduler.js";
 import type { SystemSettingsService } from "../../application/system-settings-service.js";
 import type { SystemUpdateService } from "../../application/system-update-service.js";
+import type { WorkflowEngine } from "../../application/workflow-engine.js";
 import {
   InvalidTaskReportError,
   ServiceNotReadyError,
@@ -28,6 +29,7 @@ export interface HttpServerDependencies {
     SystemUpdateService,
     "read" | "refresh" | "start" | "installSkills"
   >;
+  systemUpdateEvents?: VersionStatusEventSource;
   currentVersion?: string;
   accessToken: string;
   isReady?: () => boolean;
@@ -364,10 +366,17 @@ export function createHttpServer(
       connection: "keep-alive",
     });
     response.write(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
-    const unsubscribe = dependencies.store.subscribe((event) => {
+    const writeEvent = (event: unknown) => {
       response.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    const unsubscribeStore = dependencies.store.subscribe(writeEvent);
+    const unsubscribeSystemUpdates = dependencies.systemUpdateEvents?.subscribe(
+      writeEvent,
+    );
+    request.raw.once("close", () => {
+      unsubscribeStore();
+      unsubscribeSystemUpdates?.();
     });
-    request.raw.once("close", unsubscribe);
   });
 
   return server;

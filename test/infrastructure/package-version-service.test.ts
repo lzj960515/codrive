@@ -41,7 +41,10 @@ describe("PackageVersionService", () => {
       },
       now: () => new Date("2026-08-13T05:10:00.000Z"),
     });
-    expect(await restored.refresh()).toMatchObject({ latestVersion: "0.7.0" });
+    expect(await restored.refresh()).toMatchObject({
+      latestVersion: "0.7.0",
+      checking: false,
+    });
     expect(calls).toBe(1);
   });
 
@@ -96,5 +99,48 @@ describe("PackageVersionService", () => {
       lastCheckedAt: expect.any(String),
       checkError: { code: "invalid_registry_response" },
     });
+  });
+
+  it("deduplicates concurrent forced refreshes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-version-"));
+    let resolveLatest!: (version: string) => void;
+    let notifyLatestStarted!: () => void;
+    const latestStarted = new Promise<void>((resolve) => {
+      notifyLatestStarted = resolve;
+    });
+    let now = new Date("2026-08-14T00:00:00.000Z");
+    let calls = 0;
+    const service = new PackageVersionService({
+      currentVersion: "0.6.0",
+      stateDirectory: directory,
+      resolveLatestVersion: () => {
+        calls += 1;
+        notifyLatestStarted();
+        return new Promise((resolve) => {
+          resolveLatest = resolve;
+        });
+      },
+      now: () => now,
+    });
+
+    const first = service.refresh({ force: true });
+    const second = service.refresh({ force: true });
+    await latestStarted;
+    await expect(service.read()).resolves.toMatchObject({ checking: true });
+    now = new Date("2026-08-14T00:05:00.000Z");
+    resolveLatest("0.7.0");
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({
+        latestVersion: "0.7.0",
+        lastCheckedAt: "2026-08-14T00:05:00.000Z",
+      }),
+      expect.objectContaining({
+        latestVersion: "0.7.0",
+        lastCheckedAt: "2026-08-14T00:05:00.000Z",
+      }),
+    ]);
+    expect(calls).toBe(1);
+    await expect(service.read()).resolves.toMatchObject({ checking: false });
   });
 });

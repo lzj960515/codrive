@@ -2,9 +2,13 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
+import {
+  PackageVersionCheckScheduler,
+  type VersionStatusChangedEvent,
+} from "../../src/application/package-version-check-scheduler.js";
 import { SystemSettingsService } from "../../src/application/system-settings-service.js";
 import { SystemUpdateService } from "../../src/application/system-update-service.js";
 import { UpgradeCoordinator } from "../../src/application/upgrade-coordinator.js";
@@ -34,8 +38,10 @@ describe("HTTP API", () => {
   let server: ReturnType<typeof createHttpServer>;
   let skillInstaller: SkillInstaller;
   let settingsService: SystemSettingsService;
+  let versionChecks: PackageVersionCheckScheduler;
   let errors: string[];
   let upgradeLaunches: unknown[];
+  let publishSystemUpdate: (event: VersionStatusChangedEvent) => void;
 
   beforeEach(async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-http-"));
@@ -59,6 +65,7 @@ describe("HTTP API", () => {
       stateDirectory,
       resolveLatestVersion: async () => "0.7.0",
     });
+    versionChecks = new PackageVersionCheckScheduler({ versions });
     const upgrades = new UpgradeCoordinator({
       store: new UpgradeStateStore(stateDirectory),
       versions,
@@ -89,6 +96,12 @@ describe("HTTP API", () => {
     });
     errors = [];
     upgradeLaunches = [];
+    const systemUpdateListeners = new Set<
+      (event: VersionStatusChangedEvent) => void
+    >();
+    publishSystemUpdate = (event) => {
+      for (const listener of systemUpdateListeners) listener(event);
+    };
     server = createHttpServer({
       store,
       workflow: engine,
@@ -98,7 +111,14 @@ describe("HTTP API", () => {
         versions,
         upgrades,
         skillInstaller,
+        versionChecks,
       ),
+      systemUpdateEvents: {
+        subscribe: (listener) => {
+          systemUpdateListeners.add(listener);
+          return () => systemUpdateListeners.delete(listener);
+        },
+      },
       currentVersion: "0.6.0",
       accessToken: "secret",
       onError: (message) => errors.push(message),
@@ -271,6 +291,7 @@ describe("HTTP API", () => {
   });
 
   it("checks npm on demand and accepts one fixed-version update operation", async () => {
+    const checkNow = vi.spyOn(versionChecks, "checkNow");
     const checked = await command({
       type: "system.check_for_updates",
       payload: {},
@@ -305,6 +326,35 @@ describe("HTTP API", () => {
       accepted.json().upgrade.operationId,
     );
     expect(upgradeLaunches).toHaveLength(1);
+    expect(checkNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams background version status changes to an already-open board", async () => {
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    const address = server.server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("HTTP test server did not expose a TCP address");
+    }
+    const controller = new AbortController();
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/events?token=secret`,
+      { signal: controller.signal },
+    );
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+
+    try {
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      const connected = decoder.decode((await reader.read()).value);
+      expect(connected).toContain('"type":"connected"');
+
+      publishSystemUpdate({ type: "system.version_status_changed" });
+      const update = decoder.decode((await reader.read()).value);
+      expect(update).toContain('"type":"system.version_status_changed"');
+    } finally {
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+    }
   });
 
   it("reads and updates concurrency and model routing through the settings boundary", async () => {

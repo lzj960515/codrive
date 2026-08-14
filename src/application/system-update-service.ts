@@ -2,6 +2,7 @@ import { SystemUpdateConflictError } from "../domain/errors.js";
 import { isActiveUpgradePhase } from "../domain/system-update.js";
 import type { PackageVersionService } from "../infrastructure/package-version-service.js";
 import type { SkillInstaller } from "../infrastructure/skill-installer.js";
+import type { PackageVersionCheckTrigger } from "./package-version-check-scheduler.js";
 import type { UpgradeCoordinator } from "./upgrade-coordinator.js";
 
 export class SystemUpdateService {
@@ -9,6 +10,7 @@ export class SystemUpdateService {
     private readonly versions: PackageVersionService,
     private readonly upgrades: UpgradeCoordinator,
     private readonly skills: SkillInstaller,
+    private readonly versionChecks: PackageVersionCheckTrigger,
   ) {}
 
   async read() {
@@ -21,7 +23,7 @@ export class SystemUpdateService {
   }
 
   async refresh() {
-    await this.versions.refresh({ force: true });
+    await this.versionChecks.checkNow();
     return this.read();
   }
 

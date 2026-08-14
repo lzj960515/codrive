@@ -52,7 +52,9 @@ Codrive prints the local board URL and log location. Open the board, then:
 Use Codrive to add a leaderboard to this project, then start development after I confirm the plan.
 ```
 
-The update window shows the installed version, the latest stable release, and the status of the four managed Skills. It can install an exact release, restart the local service, synchronize the bundled Skills, and verify the new version. The command-line equivalent is:
+While the service is running, Codrive checks the npm latest stable release about once per hour. An open board receives the result without a page refresh and shows an update prompt when a newer version is available. **Check again** refreshes the status immediately and starts a new hourly interval.
+
+The update window shows the installed version, the latest stable release, the last check time, and the status of the four managed Skills. Automatic checks only update this status: installation still requires your confirmation. The window can then install an exact release, restart the local service, synchronize the bundled Skills, and verify the new version. The command-line equivalent is:
 
 ```bash
 codrive upgrade

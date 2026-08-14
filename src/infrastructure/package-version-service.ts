@@ -50,22 +50,28 @@ export class PackageVersionService {
   }
 
   async refresh(options: { force?: boolean } = {}): Promise<PackageVersionStatus> {
-    const cache = await this.readCache();
-    if (!options.force && cache && this.isFresh(cache)) {
-      return this.createStatus(cache, cache.checkError);
-    }
     if (this.inFlight) return this.inFlight;
-    this.inFlight = this.fetchAndCache(cache).finally(() => {
+    this.inFlight = this.refreshCache(options).finally(() => {
       this.inFlight = null;
     });
     return this.inFlight;
   }
 
+  private async refreshCache(
+    options: { force?: boolean },
+  ): Promise<PackageVersionStatus> {
+    const cache = await this.readCache();
+    if (!options.force && cache && this.isFresh(cache)) {
+      return this.createStatus(cache, cache.checkError, null, false);
+    }
+    return this.fetchAndCache(cache);
+  }
+
   private async fetchAndCache(cache: VersionCache | null): Promise<PackageVersionStatus> {
-    const checkedAt = this.now().toISOString();
     try {
       const latestVersion = (await this.resolveLatestVersion()).trim();
       assertStableSemanticVersion(latestVersion);
+      const checkedAt = this.now().toISOString();
       const nextCache = {
         latestVersion,
         lastCheckedAt: checkedAt,
@@ -76,6 +82,7 @@ export class PackageVersionService {
       return this.createStatus(nextCache, null, null, false);
     } catch (error) {
       const checkError = classifyVersionError(error);
+      const checkedAt = this.now().toISOString();
       const failedCache: VersionCache = {
         latestVersion: cache?.latestVersion ?? null,
         lastCheckedAt: checkedAt,
