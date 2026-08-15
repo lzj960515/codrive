@@ -1,8 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import websocket from "@fastify/websocket";
 import { z } from "zod";
 
-import type { SystemUpdateEventSource } from "../../application/system-update-events.js";
+import type { VersionStatusEventSource } from "../../application/package-version-check-scheduler.js";
 import type { SystemSettingsService } from "../../application/system-settings-service.js";
 import type { SystemUpdateService } from "../../application/system-update-service.js";
 import type { WorkflowEngine } from "../../application/workflow-engine.js";
@@ -19,7 +18,6 @@ import { renderBoardPage } from "./board.js";
 import { createBoardView } from "./board-view.js";
 import { createProjectDetailView } from "./project-detail-view.js";
 import { createTaskDetailView } from "./task-detail-view.js";
-import { LiveSyncServer } from "./live-sync-server.js";
 import { projectTaskActivities } from "../../domain/task-activity.js";
 
 export interface HttpServerDependencies {
@@ -31,7 +29,7 @@ export interface HttpServerDependencies {
     SystemUpdateService,
     "read" | "refresh" | "start" | "installSkills"
   >;
-  systemUpdateEvents?: SystemUpdateEventSource;
+  systemUpdateEvents?: VersionStatusEventSource;
   currentVersion?: string;
   accessToken: string;
   isReady?: () => boolean;
@@ -177,8 +175,6 @@ export function createHttpServer(
   dependencies: HttpServerDependencies,
 ): FastifyInstance {
   const server = Fastify({ logger: false });
-  const liveSync = new LiveSyncServer(dependencies);
-  void server.register(websocket);
 
   server.addHook("onRequest", async (request, reply) => {
     const path = new URL(request.url, "http://localhost").pathname;
@@ -332,14 +328,10 @@ export function createHttpServer(
     const command = commandSchema.parse(request.body);
     if (command.type === "system.install_skills") {
       if (dependencies.systemUpdateService) {
-        const result = await dependencies.systemUpdateService.installSkills();
-        liveSync.publish({ type: "system.changed", scope: "system" });
-        return result;
+        return dependencies.systemUpdateService.installSkills();
       }
       await dependencies.skillInstaller.install();
-      const result = { skills: await dependencies.skillInstaller.getStatus() };
-      liveSync.publish({ type: "system.changed", scope: "system" });
-      return result;
+      return { skills: await dependencies.skillInstaller.getStatus() };
     }
     if (command.type === "system.check_for_updates") {
       if (!dependencies.systemUpdateService) {
@@ -354,13 +346,10 @@ export function createHttpServer(
       const update = await dependencies.systemUpdateService.start(
         command.payload.targetVersion,
       );
-      liveSync.publish({ type: "system.changed", scope: "system" });
       return reply.code(202).send(update);
     }
     if (command.type === "system.update_settings") {
-      const settings = await dependencies.settingsService.update(command.payload);
-      liveSync.publish({ type: "settings.changed", scope: "settings" });
-      return settings;
+      return dependencies.settingsService.update(command.payload);
     }
     return dependencies.workflow.execute(
       command as CodriveCommand,
@@ -368,9 +357,25 @@ export function createHttpServer(
     );
   });
 
-  void server.register(async (liveServer) => {
-    liveServer.get("/api/live", { websocket: true }, (socket) => {
-      liveSync.connect(socket);
+  server.get("/api/events", async (request, reply) => {
+    reply.hijack();
+    const response = reply.raw;
+    response.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    response.write(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
+    const writeEvent = (event: unknown) => {
+      response.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    const unsubscribeStore = dependencies.store.subscribe(writeEvent);
+    const unsubscribeSystemUpdates = dependencies.systemUpdateEvents?.subscribe(
+      writeEvent,
+    );
+    request.raw.once("close", () => {
+      unsubscribeStore();
+      unsubscribeSystemUpdates?.();
     });
   });
 

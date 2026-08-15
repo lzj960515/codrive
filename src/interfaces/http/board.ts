@@ -20,7 +20,7 @@ export function renderBoardPage(accessToken: string): string {
       </div>
       <div class="local-status"><span></span> 运行中</div>
       <div class="sidebar-heading"><span>项目</span><span id="project-count">0</span></div>
-      <nav id="projects" class="project-list" aria-label="Codrive 项目" data-preserve-scroll="projects"></nav>
+      <nav id="projects" class="project-list" aria-label="Codrive 项目"></nav>
       <div class="sidebar-footer">
         <a class="sidebar-settings" href="/settings">
           <span>⚙</span><span>运行设置<small>并发与模型路由</small></span>
@@ -39,14 +39,14 @@ export function renderBoardPage(accessToken: string): string {
     </main>
 
     <aside id="task-detail" class="task-detail" aria-hidden="true" aria-label="任务详情">
-      <div id="task-detail-content" class="task-detail-content" data-preserve-scroll="task-detail"></div>
+      <div id="task-detail-content" class="task-detail-content"></div>
     </aside>
   </div>
 
   <button id="nav-backdrop" class="nav-backdrop" type="button" aria-label="关闭项目列表"></button>
 
   <div id="update-dialog" class="update-backdrop" role="dialog" aria-modal="true" aria-labelledby="update-title" hidden>
-    <section class="update-panel" tabindex="-1" data-preserve-scroll="update-dialog">
+    <section class="update-panel" tabindex="-1">
       <header class="update-head">
         <div><div class="update-kicker">LOCAL RELEASE CONTROL</div><h2 id="update-title">Codrive 更新</h2></div>
         <button id="update-close" class="icon-button" type="button" aria-label="关闭 Codrive 更新">×</button>

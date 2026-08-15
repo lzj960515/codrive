@@ -1,11 +1,9 @@
 import { taskBoardLayout } from "./task-board-layout.js";
-import { renderLiveSyncClientRuntime } from "./live-sync-client.js";
 
 export function renderBoardClient(accessToken: string): string {
   const token = JSON.stringify(accessToken).replaceAll("<", "\\u003c");
   const layout = JSON.stringify(taskBoardLayout);
   return `<script>
-    ${renderLiveSyncClientRuntime()}
     const TOKEN = ${token};
     const boardLayout = ${layout};
     const columns = boardLayout.columns;
@@ -41,6 +39,7 @@ export function renderBoardClient(accessToken: string): string {
     let selectedProjectId = null;
     let selectedTaskId = null;
     let systemUpdate = null;
+    let updatePoll = null;
     let productDetail = null;
     let taskDetail = null;
     let systemSettings = null;
@@ -77,6 +76,20 @@ export function renderBoardClient(accessToken: string): string {
       succeeded: ["更新完成", 100],
       failed: ["更新未完成", 100]
     };
+
+    async function refreshSystem() {
+      try {
+        systemUpdate = await api("/api/system");
+        renderSystemUpdate();
+      } catch (error) {
+        if (systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase)) {
+          document.getElementById("update-status").textContent = "本机服务正在重启，恢复连接后会继续显示进度。";
+          scheduleUpdatePoll();
+          return;
+        }
+        document.getElementById("update-status").textContent = "暂时无法读取更新状态。";
+      }
+    }
 
     function renderSystemUpdate() {
       if (!systemUpdate) return;
@@ -152,6 +165,16 @@ export function renderBoardClient(accessToken: string): string {
       document.getElementById("update-check").disabled = Boolean(active) || Boolean(version?.checking);
       document.getElementById("update-status").textContent = updateActionError || upgrade?.error?.summary || version?.checkError?.summary || "";
       document.getElementById("update-fallback").hidden = upgrade?.phase !== "failed" && !version?.checkError;
+      if (active || version?.checking || !version?.lastCheckedAt) scheduleUpdatePoll();
+      else if (updatePoll) {
+        window.clearTimeout(updatePoll);
+        updatePoll = null;
+      }
+    }
+
+    function scheduleUpdatePoll() {
+      if (updatePoll) window.clearTimeout(updatePoll);
+      updatePoll = window.setTimeout(refreshSystem, 1000);
     }
 
     async function checkForUpdates() {
@@ -199,59 +222,39 @@ export function renderBoardClient(accessToken: string): string {
       document.getElementById("update-trigger").focus();
     }
 
-    const currentSnapshot = () => snapshots.find(snapshot => snapshot.project.id === selectedProjectId);
-
-    const currentLiveSyncState = () => ({
-      route,
-      selectedProjectId,
-      selectedTaskId
-    });
-
-    async function refreshFromPlan(plan) {
-      const [nextSnapshots, nextProductDetail, nextSettings, nextTaskDetail, nextSystem] = await Promise.all([
-        plan.board ? api("/api/board") : Promise.resolve(null),
-        plan.projectId ? api("/api/projects/"+encodeURIComponent(plan.projectId)) : Promise.resolve(null),
-        plan.settings ? api("/api/system/settings") : Promise.resolve(null),
-        plan.taskId ? api("/api/tasks/"+encodeURIComponent(plan.taskId)) : Promise.resolve(null),
-        plan.system ? api("/api/system") : Promise.resolve(null)
-      ]);
-      const uiState = captureLiveUiState(document, window);
-      if (nextSnapshots) {
-        snapshots = nextSnapshots;
+    async function refresh() {
+      try {
+        const requests = [api("/api/board")];
+        if (route.type === "project") requests.push(api("/api/projects/"+encodeURIComponent(route.projectId)));
+        if (route.type === "settings") requests.push(api("/api/system/settings"));
+        const results = await Promise.all(requests);
+        snapshots = results[0];
+        productDetail = route.type === "project" ? results[1] : null;
+        systemSettings = route.type === "settings" ? results[1] : null;
+        document.getElementById("offline").style.display = "none";
         if (route.type === "project") selectedProjectId = route.projectId;
         if (!selectedProjectId || !snapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
           selectedProjectId = snapshots[0]?.project.id ?? null;
           selectedTaskId = null;
-          taskDetail = null;
         }
         const snapshot = currentSnapshot();
         if (selectedTaskId && !snapshot?.tasks.some(task => task.id === selectedTaskId)) {
           selectedTaskId = null;
           taskDetail = null;
         }
-        renderProjects();
-        if (route.type === "board") renderWorkspace();
+        if (route.type === "board" && selectedTaskId) {
+          taskDetail = await api("/api/tasks/"+encodeURIComponent(selectedTaskId));
+        }
+        render();
+      } catch {
+        const activeUpgrade = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase);
+        const offline = document.getElementById("offline");
+        offline.textContent = activeUpgrade ? "Codrive 正在重启，页面会自动恢复连接..." : "正在重新连接本机服务...";
+        offline.style.display = "block";
       }
-      if (nextProductDetail && route.type === "project" && plan.projectId === route.projectId) {
-        productDetail = nextProductDetail;
-        renderProductDetail();
-      }
-      if (nextSettings && route.type === "settings") {
-        systemSettings = nextSettings;
-        renderSettings();
-      }
-      if (nextTaskDetail && selectedTaskId === plan.taskId && route.type === "board") {
-        taskDetail = nextTaskDetail;
-        renderTaskDetail();
-      } else if (route.type === "board" && !selectedTaskId) {
-        clearTaskDetail();
-      }
-      if (nextSystem) {
-        systemUpdate = nextSystem;
-        renderSystemUpdate();
-      }
-      restoreLiveUiState(document, window, uiState);
     }
+
+    const currentSnapshot = () => snapshots.find(snapshot => snapshot.project.id === selectedProjectId);
 
     function render() {
       renderProjects();
@@ -267,7 +270,7 @@ export function renderBoardClient(accessToken: string): string {
       const host = document.getElementById("projects");
       host.innerHTML = snapshots.length
         ? snapshots.map(({ project, tasks }) =>
-            '<button class="project-button '+(project.id === selectedProjectId ? 'active' : '')+'" type="button" data-project="'+escapeHtml(project.id)+'" data-live-sync-key="project:'+escapeHtml(project.id)+'" aria-pressed="'+(project.id === selectedProjectId)+'">'+
+            '<button class="project-button '+(project.id === selectedProjectId ? 'active' : '')+'" type="button" data-project="'+escapeHtml(project.id)+'" aria-pressed="'+(project.id === selectedProjectId)+'">'+
               '<span class="project-glyph">'+escapeHtml(initials(project.name))+'</span>'+
               '<span class="project-label"><b>'+escapeHtml(project.name)+'</b><small>'+escapeHtml(label(project.displayStatus))+'</small></span>'+
               '<span class="project-total">'+tasks.length+'</span>'+
@@ -302,18 +305,18 @@ export function renderBoardClient(accessToken: string): string {
       const done = tasks.filter(task => task.status === "done").length;
       const terminal = project.status === "cancelled";
       const actions = terminal ? [] : [project.scheduling === "paused"
-        ? '<button class="action-button" data-project-action="resume" data-live-sync-key="project-action:resume">继续</button>'
-        : '<button class="action-button" data-project-action="pause" data-live-sync-key="project-action:pause">暂停</button>'];
-      actions.unshift('<a class="action-button" data-live-sync-key="project-detail" href="/projects/'+encodeURIComponent(project.id)+'">产品详情</a>');
-      if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry" data-live-sync-key="project-action:retry">重试失败执行</button>');
-      if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan" data-live-sync-key="project-action:replan">重新判断任务</button>');
+        ? '<button class="action-button" data-project-action="resume">继续</button>'
+        : '<button class="action-button" data-project-action="pause">暂停</button>'];
+      actions.unshift('<a class="action-button" href="/projects/'+encodeURIComponent(project.id)+'">产品详情</a>');
+      if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
+      if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
       const attention = project.attention;
       const attentionCopy = attention?.question || attention?.summary;
       const cancellationReason = project.cancellation?.reason || (project.status === "cancelled" ? "历史取消记录未保存理由。" : null);
       const planningBanner = cancellationReason
-        ? '<div class="planning-notice cancellation"><b>取消理由</b><span title="'+escapeHtml(cancellationReason)+'">'+escapeHtml(cancellationReason)+'</span><a data-live-sync-key="project-notice-detail" href="/projects/'+encodeURIComponent(project.id)+'">查看详情</a></div>'
+        ? '<div class="planning-notice cancellation"><b>取消理由</b><span title="'+escapeHtml(cancellationReason)+'">'+escapeHtml(cancellationReason)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'">查看详情</a></div>'
         : attentionCopy
-        ? '<div class="planning-notice '+escapeHtml(attention.kind)+'"><b>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</b><span title="'+escapeHtml(attentionCopy)+'">'+escapeHtml(attentionCopy)+'</span><a data-live-sync-key="project-notice-detail" href="/projects/'+encodeURIComponent(project.id)+'#attention">查看详情</a></div>'
+        ? '<div class="planning-notice '+escapeHtml(attention.kind)+'"><b>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</b><span title="'+escapeHtml(attentionCopy)+'">'+escapeHtml(attentionCopy)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'#attention">查看详情</a></div>'
         : '';
       host.innerHTML =
         '<header class="workspace-header">'+
@@ -321,13 +324,13 @@ export function renderBoardClient(accessToken: string): string {
             '<div class="project-identity">'+
               '<button id="mobile-projects" class="mobile-projects" type="button" aria-label="打开项目列表">☰</button>'+
               '<span class="project-status-dot"></span>'+
-              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1><a data-live-sync-key="project-title" href="/projects/'+encodeURIComponent(project.id)+'">'+escapeHtml(project.name)+'</a></h1>'+planningBanner+'</div>'+
+              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1><a href="/projects/'+encodeURIComponent(project.id)+'">'+escapeHtml(project.name)+'</a></h1>'+planningBanner+'</div>'+
             '</div>'+
             '<div class="project-actions">'+actions.join("")+'</div>'+
           '</div>'+
           '<div class="project-stats"><span><b>'+tasks.length+'</b>总任务</span><span><b>'+active+'</b>进行中</span><span><b>'+waiting+'</b>等待</span><span><b>'+done+'</b>已完成</span></div>'+
         '</header>'+
-        '<div class="board-wrap" data-preserve-scroll="board"><div class="board">'+columns.map(([key, columnLabel]) => {
+        '<div class="board-wrap"><div class="board">'+columns.map(([key, columnLabel]) => {
           const cards = tasks.filter(task => bucket(task.status) === key);
           return '<section class="column" data-column="'+key+'"><div class="column-head"><span><i></i>'+columnLabel+'</span><b>'+cards.length+'</b></div><div class="column-body">'+
             (cards.length ? cards.map(taskCard).join("") : '<div class="column-empty">暂无任务</div>')+
@@ -338,6 +341,7 @@ export function renderBoardClient(accessToken: string): string {
       host.querySelectorAll("[data-project-action]").forEach(button => {
         button.onclick = async () => {
           await command("project.control", { projectId: project.id, action: button.dataset.projectAction });
+          await refresh();
         };
       });
       host.querySelectorAll("[data-task]").forEach(button => {
@@ -354,7 +358,7 @@ export function renderBoardClient(accessToken: string): string {
       const copy = task.cancellation?.reason || task.description;
       const alert = ["waiting_for_input", "blocked", "changes_requested"].includes(task.status) ? "task-alert" : "";
       const visibleStatus = ["retry_scheduled", "waiting_for_resume"].includes(task.executionStatus) ? task.executionStatus : task.status;
-      return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-live-sync-key="task:'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
+      return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
         '<span class="task-card-top"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(visibleStatus))+'</span></span>'+
         '<h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(copy)+'</p>'+
         '<span class="task-card-footer"><span class="task-action">'+escapeHtml(label(task.requestedAction || task.status || "queued"))+'</span><span>'+escapeHtml(formatTime(task.updatedAt))+'</span></span>'+
@@ -369,13 +373,13 @@ export function renderBoardClient(accessToken: string): string {
         '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
       ).join("");
       host.innerHTML =
-        '<div class="page-screen settings-screen" data-preserve-scroll="page">'+
-          '<header class="settings-header"><a class="eyebrow-link" data-live-sync-key="settings-back" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数和模型路由。</p></div></header>'+
+        '<div class="page-screen settings-screen">'+
+          '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数和模型路由。</p></div></header>'+
           '<form id="settings-form" class="settings-form settings-panel">'+
             '<label class="setting-field"><span><b>每个项目的并发任务数</b><small>每个项目独立计算容量，不同项目互不占用槽位。</small></span><input name="maxConcurrentTasks" type="number" min="1" max="32" required value="'+settings.maxConcurrentTasks+'"></label>'+
             '<label class="setting-field"><span><b>默认模型</b><small>新任务、审查、合入与项目规划优先使用这个模型。</small></span><select name="primary">'+options(settings.models.primary)+'</select></label>'+
             '<label class="setting-field"><span><b>备用模型</b><small>默认模型容量重试三次后切换到这里；冷却后会在下一次自然 turn 探测默认模型。</small></span><select name="fallback">'+options(settings.models.fallback)+'</select></label>'+
-            '<div class="settings-actions"><button class="primary-button" data-live-sync-key="settings-submit" type="submit">保存并应用</button><span id="settings-status" role="status"></span></div>'+
+            '<div class="settings-actions"><button class="primary-button" type="submit">保存并应用</button><span id="settings-status" role="status"></span></div>'+
           '</form>'+
         '</div>';
       document.getElementById("settings-form").onsubmit = async event => {
@@ -415,8 +419,8 @@ export function renderBoardClient(accessToken: string): string {
         ? '<ul class="context-notes">'+project.contextNotes.map(note => '<li>'+escapeHtml(note)+'</li>').join("")+'</ul>'
         : '<p class="empty-copy">尚未记录产品决定或补充上下文。</p>';
       host.innerHTML =
-        '<div class="page-screen product-screen" data-preserve-scroll="page">'+
-          '<header class="page-hero product-hero"><a class="eyebrow-link" data-live-sync-key="product-back" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><a class="action-button" data-live-sync-key="product-settings" href="/settings">运行设置</a></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
+        '<div class="page-screen product-screen">'+
+          '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><a class="action-button" href="/settings">运行设置</a></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
           '<div class="product-grid">'+
             '<div class="product-main">'+notice+
               '<section class="product-panel"><div class="panel-heading"><span>产品文档</span><b>PROJECT.md</b></div><article class="markdown-body">'+renderMarkdown(productDocument)+'</article></section>'+
@@ -473,25 +477,25 @@ export function renderBoardClient(accessToken: string): string {
         ? '<div class="cancellation-card"><b>取消理由</b><p>'+escapeHtml(task.cancellation?.reason || "历史取消记录未保存理由。")+'</p>'+(task.cancellation ? '<small>'+escapeHtml(label(task.cancellation.decisionBasis))+' · '+escapeHtml(label(task.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(task.cancellation.cancelledAt))+'</small>' : '<small>该任务在取消理由成为必填项之前结束。</small>')+'</div>'
         : '';
       const scheduledResume = task.currentExecution?.scheduledResume
-        ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="action-button" type="button" data-continue-now data-live-sync-key="task-continue">提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at data-live-sync-key="task-resume-at"></label><button class="action-button" type="button" data-reschedule data-live-sync-key="task-reschedule">保存时间</button></div></section>'
+        ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="action-button" type="button" data-continue-now>提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at></label><button class="action-button" type="button" data-reschedule>保存时间</button></div></section>'
         : '';
       const currentConversation = task.currentExecution
         ? '<section class="current-conversation">'+
             '<div class="current-conversation-copy"><span>当前对话</span><div><b>'+escapeHtml(label(task.currentExecution.action))+'</b><i aria-hidden="true">·</i><strong>'+escapeHtml(label(task.currentExecution.status))+'</strong></div></div>'+
-            (task.currentExecution.threadId ? '<a class="detail-link primary" data-live-sync-key="task-current-conversation" href="codex://threads/'+escapeHtml(task.currentExecution.threadId)+'">'+(task.currentExecution.status === "waiting_for_input" ? "前往当前对话回复" : "打开当前对话")+' <span>↗</span></a>' : '')+
+            (task.currentExecution.threadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(task.currentExecution.threadId)+'">'+(task.currentExecution.status === "waiting_for_input" ? "前往当前对话回复" : "打开当前对话")+' <span>↗</span></a>' : '')+
           '</section>'
         : '';
       const activityTimeline = activities.length
         ? '<ol class="activity-timeline">'+activities.map((activity, index, all) => activityCard(activity, index, all, currentDecisionRequest?.id)).join("")+'</ol>'
         : '<div class="activity-empty"><b>尚无进展记录</b><span>节点完成汇报后会按时间出现在这里。</span></div>';
       const controls = [
-        task.status === "blocked" && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry data-live-sync-key="task-retry">重试</button>' : ''
+        task.status === "blocked" && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry>重试</button>' : ''
       ].filter(Boolean).join("");
       host.innerHTML =
         '<header class="detail-head"><strong>任务详情</strong><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
         '<div class="detail-body">'+
           '<div class="detail-status"><span></span>'+escapeHtml(label(task.status))+'</div>'+
-          '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id data-live-sync-key="task-copy-id" aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
+          '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
           (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+scheduledResume+currentConversation+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
@@ -519,9 +523,11 @@ export function renderBoardClient(accessToken: string): string {
       });
       host.querySelector("[data-retry]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "retry" });
+        await refresh();
       });
       host.querySelector("[data-continue-now]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "continue" });
+        await refresh();
       });
       host.querySelector("[data-reschedule]")?.addEventListener("click", async () => {
         const localValue = host.querySelector("[data-reschedule-at]").value;
@@ -531,6 +537,7 @@ export function renderBoardClient(accessToken: string): string {
           action: "reschedule",
           resumeAt: new Date(localValue).toISOString()
         });
+        await refresh();
       });
     }
 
@@ -545,7 +552,7 @@ export function renderBoardClient(accessToken: string): string {
         ["合入提交", evidence.mergedCommit]
       ].filter(([, value]) => value);
       const question = evidence.question
-        ? '<div class="activity-question '+(isCurrentDecision ? "current" : "historical")+'"><b>'+(isCurrentDecision ? "当前需要决定" : "历史决定请求")+'</b><p>'+escapeHtml(evidence.question)+'</p>'+(isCurrentDecision && activity.threadId ? '<a class="detail-link primary" data-live-sync-key="activity-decision:'+escapeHtml(activity.id)+'" href="codex://threads/'+escapeHtml(activity.threadId)+'">前往对应对话回复 <span>↗</span></a>' : '<small>'+(isCurrentDecision ? "当前执行未关联 Codex 对话。" : "此问题保留为历史活动。")+'</small>')+'</div>'
+        ? '<div class="activity-question '+(isCurrentDecision ? "current" : "historical")+'"><b>'+(isCurrentDecision ? "当前需要决定" : "历史决定请求")+'</b><p>'+escapeHtml(evidence.question)+'</p>'+(isCurrentDecision && activity.threadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(activity.threadId)+'">前往对应对话回复 <span>↗</span></a>' : '<small>'+(isCurrentDecision ? "当前执行未关联 Codex 对话。" : "此问题保留为历史活动。")+'</small>')+'</div>'
         : '';
       const findings = evidence.findings?.length
         ? '<div class="activity-evidence-block"><b>审查发现</b><ul>'+evidence.findings.map(finding => '<li>'+escapeHtml(finding)+'</li>').join("")+'</ul></div>'
@@ -558,7 +565,7 @@ export function renderBoardClient(accessToken: string): string {
         : '';
       const hasEvidence = question || findings || tests || git;
       const conversation = activity.threadId
-        ? '<a class="activity-conversation-link" data-activity-thread data-live-sync-key="activity-conversation:'+escapeHtml(activity.id)+'" href="codex://threads/'+escapeHtml(activity.threadId)+'">打开对话 <span>↗</span></a>'
+        ? '<a class="activity-conversation-link" data-activity-thread href="codex://threads/'+escapeHtml(activity.threadId)+'">打开对话 <span>↗</span></a>'
         : '';
       return '<li class="activity-item '+escapeHtml(activity.type)+'" '+(index === all.length - 1 ? 'data-latest-activity' : '')+'><span class="activity-node"></span><article class="activity-card"><header><b>'+escapeHtml(label(activity.type))+'</b><div class="activity-card-actions">'+conversation+'<time>'+escapeHtml(formatTime(activity.occurredAt))+'</time></div></header><p class="activity-summary">'+escapeHtml(activity.summary)+'</p>'+(hasEvidence ? '<div class="activity-evidence">'+question+findings+tests+git+'</div>' : '')+'</article></li>';
     }
@@ -589,44 +596,16 @@ export function renderBoardClient(accessToken: string): string {
       else if (document.body.classList.contains("nav-open")) document.body.classList.remove("nav-open");
       else if (!document.getElementById("update-dialog").hidden) closeUpdateDialog();
     });
-    function renderLiveConnectionStatus(status) {
+    const events = new EventSource("/api/events?token="+encodeURIComponent(TOKEN));
+    events.onmessage = () => { refresh(); refreshSystem(); };
+    events.onerror = () => {
       const offline = document.getElementById("offline");
-      if (status === "connected") {
-        offline.style.display = "none";
-        return;
-      }
-      const activeUpgrade = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase);
-      offline.textContent = status === "protocol_error"
-        ? "实时同步协议错误，正在重新同步权威状态..."
-        : activeUpgrade
-          ? "Codrive 正在升级重启，页面会自动恢复连接..."
-          : status === "connecting"
-            ? "正在建立本机实时连接..."
-            : "实时连接中断，正在重新连接...";
+      offline.textContent = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase)
+        ? "Codrive 正在重启，页面会自动恢复连接..."
+        : "正在重新连接本机服务...";
       offline.style.display = "block";
-    }
-
-    const liveProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const liveSync = createLiveSyncController({
-      createSocket: () => new WebSocket(liveProtocol+"//"+window.location.host+"/api/live?token="+encodeURIComponent(TOKEN)),
-      applyEvent: event => refreshFromPlan(liveSyncRefreshPlan(event, currentLiveSyncState())),
-      resync: () => refreshFromPlan(liveSyncRefreshPlan(null, currentLiveSyncState())),
-      onStatus: renderLiveConnectionStatus
-    });
-    let bootstrapTimer = null;
-    async function bootstrapBoard() {
-      try {
-        await refreshFromPlan(liveSyncRefreshPlan(null, currentLiveSyncState()));
-        liveSync.start();
-      } catch {
-        renderLiveConnectionStatus("reconnecting");
-        bootstrapTimer = window.setTimeout(bootstrapBoard, 1000);
-      }
-    }
-    window.addEventListener("beforeunload", () => {
-      if (bootstrapTimer) window.clearTimeout(bootstrapTimer);
-      liveSync.stop();
-    }, { once: true });
-    bootstrapBoard();
+    };
+    refreshSystem();
+    refresh();
   </script>`;
 }

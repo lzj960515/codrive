@@ -43,7 +43,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@fastify/websocket": "11.3.0",
     "@openai/codex": "0.146.0",
     "fastify": "5.11.0",
     "proper-lockfile": "4.1.2",
