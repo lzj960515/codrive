@@ -1,9 +1,11 @@
 import { taskBoardLayout } from "./task-board-layout.js";
+import { renderLiveSyncClientRuntime } from "./live-sync-client.js";
 
 export function renderBoardClient(accessToken: string): string {
   const token = JSON.stringify(accessToken).replaceAll("<", "\\u003c");
   const layout = JSON.stringify(taskBoardLayout);
   return `<script>
+    ${renderLiveSyncClientRuntime()}
     const TOKEN = ${token};
     const boardLayout = ${layout};
     const columns = boardLayout.columns;
@@ -39,7 +41,6 @@ export function renderBoardClient(accessToken: string): string {
     let selectedProjectId = null;
     let selectedTaskId = null;
     let systemUpdate = null;
-    let updatePoll = null;
     let productDetail = null;
     let taskDetail = null;
     let systemSettings = null;
@@ -76,20 +77,6 @@ export function renderBoardClient(accessToken: string): string {
       succeeded: ["更新完成", 100],
       failed: ["更新未完成", 100]
     };
-
-    async function refreshSystem() {
-      try {
-        systemUpdate = await api("/api/system");
-        renderSystemUpdate();
-      } catch (error) {
-        if (systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase)) {
-          document.getElementById("update-status").textContent = "本机服务正在重启，恢复连接后会继续显示进度。";
-          scheduleUpdatePoll();
-          return;
-        }
-        document.getElementById("update-status").textContent = "暂时无法读取更新状态。";
-      }
-    }
 
     function renderSystemUpdate() {
       if (!systemUpdate) return;
@@ -165,16 +152,6 @@ export function renderBoardClient(accessToken: string): string {
       document.getElementById("update-check").disabled = Boolean(active) || Boolean(version?.checking);
       document.getElementById("update-status").textContent = updateActionError || upgrade?.error?.summary || version?.checkError?.summary || "";
       document.getElementById("update-fallback").hidden = upgrade?.phase !== "failed" && !version?.checkError;
-      if (active || version?.checking || !version?.lastCheckedAt) scheduleUpdatePoll();
-      else if (updatePoll) {
-        window.clearTimeout(updatePoll);
-        updatePoll = null;
-      }
-    }
-
-    function scheduleUpdatePoll() {
-      if (updatePoll) window.clearTimeout(updatePoll);
-      updatePoll = window.setTimeout(refreshSystem, 1000);
     }
 
     async function checkForUpdates() {
@@ -222,39 +199,59 @@ export function renderBoardClient(accessToken: string): string {
       document.getElementById("update-trigger").focus();
     }
 
-    async function refresh() {
-      try {
-        const requests = [api("/api/board")];
-        if (route.type === "project") requests.push(api("/api/projects/"+encodeURIComponent(route.projectId)));
-        if (route.type === "settings") requests.push(api("/api/system/settings"));
-        const results = await Promise.all(requests);
-        snapshots = results[0];
-        productDetail = route.type === "project" ? results[1] : null;
-        systemSettings = route.type === "settings" ? results[1] : null;
-        document.getElementById("offline").style.display = "none";
+    const currentSnapshot = () => snapshots.find(snapshot => snapshot.project.id === selectedProjectId);
+
+    const currentLiveSyncState = () => ({
+      route,
+      selectedProjectId,
+      selectedTaskId
+    });
+
+    async function refreshFromPlan(plan) {
+      const [nextSnapshots, nextProductDetail, nextSettings, nextTaskDetail, nextSystem] = await Promise.all([
+        plan.board ? api("/api/board") : Promise.resolve(null),
+        plan.projectId ? api("/api/projects/"+encodeURIComponent(plan.projectId)) : Promise.resolve(null),
+        plan.settings ? api("/api/system/settings") : Promise.resolve(null),
+        plan.taskId ? api("/api/tasks/"+encodeURIComponent(plan.taskId)) : Promise.resolve(null),
+        plan.system ? api("/api/system") : Promise.resolve(null)
+      ]);
+      const uiState = captureLiveUiState(document, window);
+      if (nextSnapshots) {
+        snapshots = nextSnapshots;
         if (route.type === "project") selectedProjectId = route.projectId;
         if (!selectedProjectId || !snapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
           selectedProjectId = snapshots[0]?.project.id ?? null;
           selectedTaskId = null;
+          taskDetail = null;
         }
         const snapshot = currentSnapshot();
         if (selectedTaskId && !snapshot?.tasks.some(task => task.id === selectedTaskId)) {
           selectedTaskId = null;
           taskDetail = null;
         }
-        if (route.type === "board" && selectedTaskId) {
-          taskDetail = await api("/api/tasks/"+encodeURIComponent(selectedTaskId));
-        }
-        render();
-      } catch {
-        const activeUpgrade = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase);
-        const offline = document.getElementById("offline");
-        offline.textContent = activeUpgrade ? "Codrive 正在重启，页面会自动恢复连接..." : "正在重新连接本机服务...";
-        offline.style.display = "block";
+        renderProjects();
+        if (route.type === "board") renderWorkspace();
       }
+      if (nextProductDetail && route.type === "project" && plan.projectId === route.projectId) {
+        productDetail = nextProductDetail;
+        renderProductDetail();
+      }
+      if (nextSettings && route.type === "settings") {
+        systemSettings = nextSettings;
+        renderSettings();
+      }
+      if (nextTaskDetail && selectedTaskId === plan.taskId && route.type === "board") {
+        taskDetail = nextTaskDetail;
+        renderTaskDetail();
+      } else if (route.type === "board" && !selectedTaskId) {
+        clearTaskDetail();
+      }
+      if (nextSystem) {
+        systemUpdate = nextSystem;
+        renderSystemUpdate();
+      }
+      restoreLiveUiState(document, window, uiState);
     }
-
-    const currentSnapshot = () => snapshots.find(snapshot => snapshot.project.id === selectedProjectId);
 
     function render() {
       renderProjects();
@@ -330,7 +327,7 @@ export function renderBoardClient(accessToken: string): string {
           '</div>'+
           '<div class="project-stats"><span><b>'+tasks.length+'</b>总任务</span><span><b>'+active+'</b>进行中</span><span><b>'+waiting+'</b>等待</span><span><b>'+done+'</b>已完成</span></div>'+
         '</header>'+
-        '<div class="board-wrap"><div class="board">'+columns.map(([key, columnLabel]) => {
+        '<div class="board-wrap" data-preserve-scroll="board"><div class="board">'+columns.map(([key, columnLabel]) => {
           const cards = tasks.filter(task => bucket(task.status) === key);
           return '<section class="column" data-column="'+key+'"><div class="column-head"><span><i></i>'+columnLabel+'</span><b>'+cards.length+'</b></div><div class="column-body">'+
             (cards.length ? cards.map(taskCard).join("") : '<div class="column-empty">暂无任务</div>')+
@@ -341,7 +338,6 @@ export function renderBoardClient(accessToken: string): string {
       host.querySelectorAll("[data-project-action]").forEach(button => {
         button.onclick = async () => {
           await command("project.control", { projectId: project.id, action: button.dataset.projectAction });
-          await refresh();
         };
       });
       host.querySelectorAll("[data-task]").forEach(button => {
@@ -373,7 +369,7 @@ export function renderBoardClient(accessToken: string): string {
         '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
       ).join("");
       host.innerHTML =
-        '<div class="page-screen settings-screen">'+
+        '<div class="page-screen settings-screen" data-preserve-scroll="page">'+
           '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数和模型路由。</p></div></header>'+
           '<form id="settings-form" class="settings-form settings-panel">'+
             '<label class="setting-field"><span><b>每个项目的并发任务数</b><small>每个项目独立计算容量，不同项目互不占用槽位。</small></span><input name="maxConcurrentTasks" type="number" min="1" max="32" required value="'+settings.maxConcurrentTasks+'"></label>'+
@@ -419,7 +415,7 @@ export function renderBoardClient(accessToken: string): string {
         ? '<ul class="context-notes">'+project.contextNotes.map(note => '<li>'+escapeHtml(note)+'</li>').join("")+'</ul>'
         : '<p class="empty-copy">尚未记录产品决定或补充上下文。</p>';
       host.innerHTML =
-        '<div class="page-screen product-screen">'+
+        '<div class="page-screen product-screen" data-preserve-scroll="page">'+
           '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><a class="action-button" href="/settings">运行设置</a></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
           '<div class="product-grid">'+
             '<div class="product-main">'+notice+
@@ -523,11 +519,9 @@ export function renderBoardClient(accessToken: string): string {
       });
       host.querySelector("[data-retry]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "retry" });
-        await refresh();
       });
       host.querySelector("[data-continue-now]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "continue" });
-        await refresh();
       });
       host.querySelector("[data-reschedule]")?.addEventListener("click", async () => {
         const localValue = host.querySelector("[data-reschedule-at]").value;
@@ -537,7 +531,6 @@ export function renderBoardClient(accessToken: string): string {
           action: "reschedule",
           resumeAt: new Date(localValue).toISOString()
         });
-        await refresh();
       });
     }
 
@@ -596,16 +589,44 @@ export function renderBoardClient(accessToken: string): string {
       else if (document.body.classList.contains("nav-open")) document.body.classList.remove("nav-open");
       else if (!document.getElementById("update-dialog").hidden) closeUpdateDialog();
     });
-    const events = new EventSource("/api/events?token="+encodeURIComponent(TOKEN));
-    events.onmessage = () => { refresh(); refreshSystem(); };
-    events.onerror = () => {
+    function renderLiveConnectionStatus(status) {
       const offline = document.getElementById("offline");
-      offline.textContent = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase)
-        ? "Codrive 正在重启，页面会自动恢复连接..."
-        : "正在重新连接本机服务...";
+      if (status === "connected") {
+        offline.style.display = "none";
+        return;
+      }
+      const activeUpgrade = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase);
+      offline.textContent = status === "protocol_error"
+        ? "实时同步协议错误，正在重新同步权威状态..."
+        : activeUpgrade
+          ? "Codrive 正在升级重启，页面会自动恢复连接..."
+          : status === "connecting"
+            ? "正在建立本机实时连接..."
+            : "实时连接中断，正在重新连接...";
       offline.style.display = "block";
-    };
-    refreshSystem();
-    refresh();
+    }
+
+    const liveProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const liveSync = createLiveSyncController({
+      createSocket: () => new WebSocket(liveProtocol+"//"+window.location.host+"/api/live?token="+encodeURIComponent(TOKEN)),
+      applyEvent: event => refreshFromPlan(liveSyncRefreshPlan(event, currentLiveSyncState())),
+      resync: () => refreshFromPlan(liveSyncRefreshPlan(null, currentLiveSyncState())),
+      onStatus: renderLiveConnectionStatus
+    });
+    let bootstrapTimer = null;
+    async function bootstrapBoard() {
+      try {
+        await refreshFromPlan(liveSyncRefreshPlan(null, currentLiveSyncState()));
+        liveSync.start();
+      } catch {
+        renderLiveConnectionStatus("reconnecting");
+        bootstrapTimer = window.setTimeout(bootstrapBoard, 1000);
+      }
+    }
+    window.addEventListener("beforeunload", () => {
+      if (bootstrapTimer) window.clearTimeout(bootstrapTimer);
+      liveSync.stop();
+    }, { once: true });
+    bootstrapBoard();
   </script>`;
 }

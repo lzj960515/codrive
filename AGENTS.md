@@ -12,6 +12,7 @@ Codrive is a local, single-user orchestration service that connects filesystem-b
 - `SystemSettingsService` owns validated runtime concurrency and model configuration changes.
 - `src/infrastructure` owns filesystem persistence, App Server transport, and Skill installation.
 - `src/interfaces` owns the HTTP API, CLI, and local board.
+- `src/domain/live-sync.ts` owns the versioned live event envelope and store-event scope mapping; `src/interfaces/http/live-sync-server.ts` owns per-connection sequencing, subscriptions, and cleanup.
 - `skills` contains the product's installable Codex Skills.
 
 Project-level Codex turns decide which backlog tasks should start from current product and repository facts. Codrive validates IDs, task availability, each project's concurrency budget, and the repository integration lease. Codex reevaluates task relationships during every selection.
@@ -22,7 +23,7 @@ Task recovery reattaches the persisted conversation and starts a new turn in the
 
 Scheduled blockers are persisted task-execution waits. They keep the action, attempt, conversation, model route, absolute deadline, reason, and AI resume checkpoint while releasing project capacity and the repository integration lease. `WorkflowEngine` owns due, early, rescheduled, paused, cancelled, and duplicate-wakeup decisions; `RecoveryManager` only maintains exact deadline wakeups and startup/reconnect compensation.
 
-The HTTP surface has four read boundaries: board projection, product detail, runtime settings, and Skill context. Writes use the unified `/api/commands` endpoint. State transitions belong to `WorkflowEngine`, and validated runtime configuration belongs to `SystemSettingsService`, not route handlers.
+The HTTP surface has four read boundaries: board projection, product detail, runtime settings, and Skill context. Writes use the unified `/api/commands` endpoint. The authenticated `/api/live` WebSocket carries versioned, connection-ordered change scopes only; reconnects and gaps return to the relevant HTTP authority. State transitions belong to `WorkflowEngine`, and validated runtime configuration belongs to `SystemSettingsService`, not route handlers.
 
 Keep Git worktree creation, coding, review, conflict resolution, commits, merges, and cleanup inside Codex task instructions. Codrive persists state and dispatches conversations; it does not implement those Git workflows.
 

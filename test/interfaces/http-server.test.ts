@@ -14,6 +14,7 @@ import { SystemUpdateService } from "../../src/application/system-update-service
 import { UpgradeCoordinator } from "../../src/application/upgrade-coordinator.js";
 import { createTaskReportActivity } from "../../src/domain/task-activity.js";
 import type {
+  CodriveEvent,
   ProjectSnapshot,
   TaskAction,
   TaskReport,
@@ -32,7 +33,7 @@ import {
 } from "../support/recording-executors.js";
 
 describe("HTTP API", () => {
-  let store: ProjectStore;
+  let store: SubscriptionCountingProjectStore;
   let engine: WorkflowEngine;
   let taskDispatcher: RecordingTaskDispatcher;
   let server: ReturnType<typeof createHttpServer>;
@@ -42,12 +43,13 @@ describe("HTTP API", () => {
   let errors: string[];
   let upgradeLaunches: unknown[];
   let publishSystemUpdate: (event: VersionStatusChangedEvent) => void;
+  let systemUpdateListeners: Set<(event: VersionStatusChangedEvent) => void>;
 
   beforeEach(async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-http-"));
     const configStore = new ConfigStore(stateDirectory);
     await configStore.loadOrCreate();
-    store = new ProjectStore(stateDirectory);
+    store = new SubscriptionCountingProjectStore(stateDirectory);
     taskDispatcher = new RecordingTaskDispatcher();
     engine = new WorkflowEngine(
       store,
@@ -96,7 +98,7 @@ describe("HTTP API", () => {
     });
     errors = [];
     upgradeLaunches = [];
-    const systemUpdateListeners = new Set<
+    systemUpdateListeners = new Set<
       (event: VersionStatusChangedEvent) => void
     >();
     publishSystemUpdate = (event) => {
@@ -329,32 +331,117 @@ describe("HTTP API", () => {
     expect(checkNow).toHaveBeenCalledTimes(1);
   });
 
-  it("streams background version status changes to an already-open board", async () => {
+  it("authenticates the live WebSocket with the local access token", async () => {
     await server.listen({ host: "127.0.0.1", port: 0 });
     const address = server.server.address();
     if (!address || typeof address === "string") {
       throw new Error("HTTP test server did not expose a TCP address");
     }
-    const controller = new AbortController();
-    const response = await fetch(
-      `http://127.0.0.1:${address.port}/api/events?token=secret`,
-      { signal: controller.signal },
-    );
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
 
-    try {
-      expect(response.headers.get("content-type")).toContain("text/event-stream");
-      const connected = decoder.decode((await reader.read()).value);
-      expect(connected).toContain('"type":"connected"');
-
-      publishSystemUpdate({ type: "system.version_status_changed" });
-      const update = decoder.decode((await reader.read()).value);
-      expect(update).toContain('"type":"system.version_status_changed"');
-    } finally {
-      controller.abort();
-      await reader.cancel().catch(() => undefined);
+    for (const suffix of ["", "?token=wrong"]) {
+      const response = await fetch(`${baseUrl}/api/live${suffix}`);
+      expect(response.status).toBe(401);
     }
+
+    const connection = await connectLiveSync(address.port, "secret");
+    expect(await connection.next()).toEqual({
+      schemaVersion: 1,
+      sequence: 1,
+      type: "live.connected",
+      scope: "connection",
+    });
+    connection.socket.close();
+  });
+
+  it("orders scoped store and system changes independently for every connection", async () => {
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    const address = server.server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("HTTP test server did not expose a TCP address");
+    }
+    const first = await connectLiveSync(address.port, "secret");
+    const second = await connectLiveSync(address.port, "secret");
+    await Promise.all([first.next(), second.next()]);
+    expect(store.activeSubscriptions).toBe(2);
+    expect(systemUpdateListeners.size).toBe(2);
+
+    await store.appendEvent({
+      eventId: "event_task",
+      type: "task.execution_started",
+      projectId: "project_1",
+      taskId: "task_1",
+      occurredAt: "2026-08-15T10:00:00.000Z",
+    });
+    expect(await first.next()).toEqual({
+      schemaVersion: 1,
+      sequence: 2,
+      type: "task.changed",
+      scope: "task",
+      projectId: "project_1",
+      taskId: "task_1",
+    });
+    expect(await second.next()).toEqual({
+      schemaVersion: 1,
+      sequence: 2,
+      type: "task.changed",
+      scope: "task",
+      projectId: "project_1",
+      taskId: "task_1",
+    });
+
+    publishSystemUpdate({ type: "system.version_status_changed" });
+    expect(await first.next()).toMatchObject({
+      schemaVersion: 1,
+      sequence: 3,
+      type: "system.changed",
+      scope: "system",
+    });
+    expect(await second.next()).toMatchObject({ sequence: 3 });
+
+    first.socket.close();
+    await vi.waitFor(() => {
+      expect(store.activeSubscriptions).toBe(1);
+      expect(systemUpdateListeners.size).toBe(1);
+    });
+    second.socket.close();
+    await vi.waitFor(() => {
+      expect(store.activeSubscriptions).toBe(0);
+      expect(systemUpdateListeners.size).toBe(0);
+    });
+  });
+
+  it("publishes settings changes without reviving the removed SSE route", async () => {
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    const address = server.server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("HTTP test server did not expose a TCP address");
+    }
+    const connection = await connectLiveSync(address.port, "secret");
+    await connection.next();
+
+    const updated = await command({
+      type: "system.update_settings",
+      payload: {
+        maxConcurrentTasks: 2,
+        models: {
+          primary: "gpt-5.6-terra",
+          fallback: "gpt-5.6-sol",
+        },
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(await connection.next()).toMatchObject({
+      sequence: 2,
+      type: "settings.changed",
+      scope: "settings",
+    });
+
+    const removedSse = await fetch(
+      `http://127.0.0.1:${address.port}/api/events?token=secret`,
+    );
+    expect(removedSse.status).toBe(404);
+    connection.socket.close();
   });
 
   it("reads and updates concurrency and model routing through the settings boundary", async () => {
@@ -690,9 +777,10 @@ describe("HTTP API", () => {
       store,
       workflow: engine,
       skillInstaller,
+      settingsService,
       accessToken: "secret",
       isReady: () => false,
-    } as Parameters<typeof createHttpServer>[0]);
+    });
     await startingServer.ready();
     try {
       const health = await startingServer.inject({
@@ -1406,7 +1494,11 @@ describe("HTTP API", () => {
     expect(page.body).toContain('system.start_upgrade');
     expect(page.body).toContain('system.check_for_updates');
     expect(page.body).toContain("Codrive 与 Skills 已对齐");
-    expect(page.body).toContain("Codrive 正在重启，页面会自动恢复连接");
+    expect(page.body).toContain("Codrive 正在升级重启，页面会自动恢复连接");
+    expect(page.body).toContain("new WebSocket");
+    expect(page.body).toContain('"/api/live?token="');
+    expect(page.body).not.toContain("new EventSource");
+    expect(page.body).not.toContain("/api/events");
     expect(page.body).toContain('id="update-timeline"');
     expect(page.body).not.toContain('codrive:skills-dismissed');
     expect(page.body).not.toContain("Codrive 设置有更新");
@@ -1557,3 +1649,57 @@ describe("HTTP API", () => {
     expect(detail).not.toHaveProperty("conversations");
   });
 });
+
+class SubscriptionCountingProjectStore extends ProjectStore {
+  activeSubscriptions = 0;
+
+  override subscribe(listener: (event: CodriveEvent) => void): () => void {
+    this.activeSubscriptions += 1;
+    const unsubscribe = super.subscribe(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.activeSubscriptions -= 1;
+      unsubscribe();
+    };
+  }
+}
+
+async function connectLiveSync(port: number, token: string) {
+  const socket = new WebSocket(
+    `ws://127.0.0.1:${port}/api/live?token=${encodeURIComponent(token)}`,
+  );
+  const messages: unknown[] = [];
+  const waiters: Array<(message: unknown) => void> = [];
+  socket.addEventListener("message", (message) => {
+    const value = JSON.parse(String(message.data)) as unknown;
+    const waiter = waiters.shift();
+    if (waiter) waiter(value);
+    else messages.push(value);
+  });
+  await new Promise<void>((resolveOpen, rejectOpen) => {
+    socket.addEventListener("open", () => resolveOpen(), { once: true });
+    socket.addEventListener(
+      "error",
+      () => rejectOpen(new Error("Live sync WebSocket did not open")),
+      { once: true },
+    );
+  });
+  return {
+    socket,
+    next: () =>
+      messages.length > 0
+        ? Promise.resolve(messages.shift())
+        : new Promise<unknown>((resolveMessage, rejectMessage) => {
+            const timeout = setTimeout(
+              () => rejectMessage(new Error("Timed out waiting for a live sync event")),
+              2_000,
+            );
+            waiters.push((message) => {
+              clearTimeout(timeout);
+              resolveMessage(message);
+            });
+          }),
+  };
+}
