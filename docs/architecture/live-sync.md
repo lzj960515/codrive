@@ -17,7 +17,7 @@ Every message uses schema version `1` and contains:
 | `projectId` | Required for project and task scopes. |
 | `taskId` | Required for task scope. |
 
-`ProjectStore` events containing a task ID become `task.changed`; other store events become `project.changed`. Runtime settings writes become `settings.changed`; version checks and accepted system update commands become `system.changed`. Upgrade service restarts are recovered by the same reconnect resynchronization. Execution Presence can later use the existing task-scoped `presence.changed` event without creating another transport.
+`ProjectStore` events containing a task ID become `task.changed`; other store events become `project.changed`. Runtime settings writes become `settings.changed`; version checks, accepted system update commands, and every persisted upgrade phase become `system.changed`. The service observes `system-upgrade.json` independently of the detached worker and uses its durable `phaseStartedAt` history to publish phases crossed between observations. Upgrade service restarts are recovered by the same reconnect resynchronization. Execution Presence can later use the existing task-scoped `presence.changed` event without creating another transport.
 
 ## Client refresh boundaries
 
@@ -30,7 +30,7 @@ Every message uses schema version `1` and contains:
 
 Initial load reads the board, current route projection, and system status over HTTP. The first `live.connected` baseline repeats that route-scoped read once, closing the gap between bootstrap and subscription; the browser then applies WebSocket events serially. A sequence gap, unsupported message, or successful reconnect triggers the same HTTP resynchronization and establishes a new connection baseline.
 
-Before a scoped render, the client records dirty form values, active-field selection, and marked scroll containers. It restores that transient UI state after replacing authoritative data, so task selection, the detail drawer, update dialog, focus, unfinished input, and scroll positions survive normal events and reconnects.
+Before a scoped render, the client records dirty form values, editable selection, the stable key of the active element, and marked scroll containers. Recreated project buttons, task cards, actions, and navigation links carry stable focus keys. The client restores that transient UI state after replacing authoritative data, so task selection, the detail drawer, update dialog, focus, unfinished input, and scroll positions survive normal events and reconnects.
 
 ## Connection lifecycle
 

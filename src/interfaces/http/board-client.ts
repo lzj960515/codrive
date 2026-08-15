@@ -267,7 +267,7 @@ export function renderBoardClient(accessToken: string): string {
       const host = document.getElementById("projects");
       host.innerHTML = snapshots.length
         ? snapshots.map(({ project, tasks }) =>
-            '<button class="project-button '+(project.id === selectedProjectId ? 'active' : '')+'" type="button" data-project="'+escapeHtml(project.id)+'" aria-pressed="'+(project.id === selectedProjectId)+'">'+
+            '<button class="project-button '+(project.id === selectedProjectId ? 'active' : '')+'" type="button" data-project="'+escapeHtml(project.id)+'" data-live-sync-key="project:'+escapeHtml(project.id)+'" aria-pressed="'+(project.id === selectedProjectId)+'">'+
               '<span class="project-glyph">'+escapeHtml(initials(project.name))+'</span>'+
               '<span class="project-label"><b>'+escapeHtml(project.name)+'</b><small>'+escapeHtml(label(project.displayStatus))+'</small></span>'+
               '<span class="project-total">'+tasks.length+'</span>'+
@@ -302,18 +302,18 @@ export function renderBoardClient(accessToken: string): string {
       const done = tasks.filter(task => task.status === "done").length;
       const terminal = project.status === "cancelled";
       const actions = terminal ? [] : [project.scheduling === "paused"
-        ? '<button class="action-button" data-project-action="resume">继续</button>'
-        : '<button class="action-button" data-project-action="pause">暂停</button>'];
-      actions.unshift('<a class="action-button" href="/projects/'+encodeURIComponent(project.id)+'">产品详情</a>');
-      if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
-      if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
+        ? '<button class="action-button" data-project-action="resume" data-live-sync-key="project-action:resume">继续</button>'
+        : '<button class="action-button" data-project-action="pause" data-live-sync-key="project-action:pause">暂停</button>'];
+      actions.unshift('<a class="action-button" data-live-sync-key="project-detail" href="/projects/'+encodeURIComponent(project.id)+'">产品详情</a>');
+      if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry" data-live-sync-key="project-action:retry">重试失败执行</button>');
+      if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan" data-live-sync-key="project-action:replan">重新判断任务</button>');
       const attention = project.attention;
       const attentionCopy = attention?.question || attention?.summary;
       const cancellationReason = project.cancellation?.reason || (project.status === "cancelled" ? "历史取消记录未保存理由。" : null);
       const planningBanner = cancellationReason
-        ? '<div class="planning-notice cancellation"><b>取消理由</b><span title="'+escapeHtml(cancellationReason)+'">'+escapeHtml(cancellationReason)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'">查看详情</a></div>'
+        ? '<div class="planning-notice cancellation"><b>取消理由</b><span title="'+escapeHtml(cancellationReason)+'">'+escapeHtml(cancellationReason)+'</span><a data-live-sync-key="project-notice-detail" href="/projects/'+encodeURIComponent(project.id)+'">查看详情</a></div>'
         : attentionCopy
-        ? '<div class="planning-notice '+escapeHtml(attention.kind)+'"><b>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</b><span title="'+escapeHtml(attentionCopy)+'">'+escapeHtml(attentionCopy)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'#attention">查看详情</a></div>'
+        ? '<div class="planning-notice '+escapeHtml(attention.kind)+'"><b>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</b><span title="'+escapeHtml(attentionCopy)+'">'+escapeHtml(attentionCopy)+'</span><a data-live-sync-key="project-notice-detail" href="/projects/'+encodeURIComponent(project.id)+'#attention">查看详情</a></div>'
         : '';
       host.innerHTML =
         '<header class="workspace-header">'+
@@ -321,7 +321,7 @@ export function renderBoardClient(accessToken: string): string {
             '<div class="project-identity">'+
               '<button id="mobile-projects" class="mobile-projects" type="button" aria-label="打开项目列表">☰</button>'+
               '<span class="project-status-dot"></span>'+
-              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1><a href="/projects/'+encodeURIComponent(project.id)+'">'+escapeHtml(project.name)+'</a></h1>'+planningBanner+'</div>'+
+              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1><a data-live-sync-key="project-title" href="/projects/'+encodeURIComponent(project.id)+'">'+escapeHtml(project.name)+'</a></h1>'+planningBanner+'</div>'+
             '</div>'+
             '<div class="project-actions">'+actions.join("")+'</div>'+
           '</div>'+
@@ -354,7 +354,7 @@ export function renderBoardClient(accessToken: string): string {
       const copy = task.cancellation?.reason || task.description;
       const alert = ["waiting_for_input", "blocked", "changes_requested"].includes(task.status) ? "task-alert" : "";
       const visibleStatus = ["retry_scheduled", "waiting_for_resume"].includes(task.executionStatus) ? task.executionStatus : task.status;
-      return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
+      return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-live-sync-key="task:'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
         '<span class="task-card-top"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(visibleStatus))+'</span></span>'+
         '<h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(copy)+'</p>'+
         '<span class="task-card-footer"><span class="task-action">'+escapeHtml(label(task.requestedAction || task.status || "queued"))+'</span><span>'+escapeHtml(formatTime(task.updatedAt))+'</span></span>'+
@@ -370,12 +370,12 @@ export function renderBoardClient(accessToken: string): string {
       ).join("");
       host.innerHTML =
         '<div class="page-screen settings-screen" data-preserve-scroll="page">'+
-          '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数和模型路由。</p></div></header>'+
+          '<header class="settings-header"><a class="eyebrow-link" data-live-sync-key="settings-back" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数和模型路由。</p></div></header>'+
           '<form id="settings-form" class="settings-form settings-panel">'+
             '<label class="setting-field"><span><b>每个项目的并发任务数</b><small>每个项目独立计算容量，不同项目互不占用槽位。</small></span><input name="maxConcurrentTasks" type="number" min="1" max="32" required value="'+settings.maxConcurrentTasks+'"></label>'+
             '<label class="setting-field"><span><b>默认模型</b><small>新任务、审查、合入与项目规划优先使用这个模型。</small></span><select name="primary">'+options(settings.models.primary)+'</select></label>'+
             '<label class="setting-field"><span><b>备用模型</b><small>默认模型容量重试三次后切换到这里；冷却后会在下一次自然 turn 探测默认模型。</small></span><select name="fallback">'+options(settings.models.fallback)+'</select></label>'+
-            '<div class="settings-actions"><button class="primary-button" type="submit">保存并应用</button><span id="settings-status" role="status"></span></div>'+
+            '<div class="settings-actions"><button class="primary-button" data-live-sync-key="settings-submit" type="submit">保存并应用</button><span id="settings-status" role="status"></span></div>'+
           '</form>'+
         '</div>';
       document.getElementById("settings-form").onsubmit = async event => {
@@ -416,7 +416,7 @@ export function renderBoardClient(accessToken: string): string {
         : '<p class="empty-copy">尚未记录产品决定或补充上下文。</p>';
       host.innerHTML =
         '<div class="page-screen product-screen" data-preserve-scroll="page">'+
-          '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><a class="action-button" href="/settings">运行设置</a></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
+          '<header class="page-hero product-hero"><a class="eyebrow-link" data-live-sync-key="product-back" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><a class="action-button" data-live-sync-key="product-settings" href="/settings">运行设置</a></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
           '<div class="product-grid">'+
             '<div class="product-main">'+notice+
               '<section class="product-panel"><div class="panel-heading"><span>产品文档</span><b>PROJECT.md</b></div><article class="markdown-body">'+renderMarkdown(productDocument)+'</article></section>'+
@@ -473,25 +473,25 @@ export function renderBoardClient(accessToken: string): string {
         ? '<div class="cancellation-card"><b>取消理由</b><p>'+escapeHtml(task.cancellation?.reason || "历史取消记录未保存理由。")+'</p>'+(task.cancellation ? '<small>'+escapeHtml(label(task.cancellation.decisionBasis))+' · '+escapeHtml(label(task.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(task.cancellation.cancelledAt))+'</small>' : '<small>该任务在取消理由成为必填项之前结束。</small>')+'</div>'
         : '';
       const scheduledResume = task.currentExecution?.scheduledResume
-        ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="action-button" type="button" data-continue-now>提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at></label><button class="action-button" type="button" data-reschedule>保存时间</button></div></section>'
+        ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="action-button" type="button" data-continue-now data-live-sync-key="task-continue">提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at data-live-sync-key="task-resume-at"></label><button class="action-button" type="button" data-reschedule data-live-sync-key="task-reschedule">保存时间</button></div></section>'
         : '';
       const currentConversation = task.currentExecution
         ? '<section class="current-conversation">'+
             '<div class="current-conversation-copy"><span>当前对话</span><div><b>'+escapeHtml(label(task.currentExecution.action))+'</b><i aria-hidden="true">·</i><strong>'+escapeHtml(label(task.currentExecution.status))+'</strong></div></div>'+
-            (task.currentExecution.threadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(task.currentExecution.threadId)+'">'+(task.currentExecution.status === "waiting_for_input" ? "前往当前对话回复" : "打开当前对话")+' <span>↗</span></a>' : '')+
+            (task.currentExecution.threadId ? '<a class="detail-link primary" data-live-sync-key="task-current-conversation" href="codex://threads/'+escapeHtml(task.currentExecution.threadId)+'">'+(task.currentExecution.status === "waiting_for_input" ? "前往当前对话回复" : "打开当前对话")+' <span>↗</span></a>' : '')+
           '</section>'
         : '';
       const activityTimeline = activities.length
         ? '<ol class="activity-timeline">'+activities.map((activity, index, all) => activityCard(activity, index, all, currentDecisionRequest?.id)).join("")+'</ol>'
         : '<div class="activity-empty"><b>尚无进展记录</b><span>节点完成汇报后会按时间出现在这里。</span></div>';
       const controls = [
-        task.status === "blocked" && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry>重试</button>' : ''
+        task.status === "blocked" && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry data-live-sync-key="task-retry">重试</button>' : ''
       ].filter(Boolean).join("");
       host.innerHTML =
         '<header class="detail-head"><strong>任务详情</strong><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
         '<div class="detail-body">'+
           '<div class="detail-status"><span></span>'+escapeHtml(label(task.status))+'</div>'+
-          '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
+          '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id data-live-sync-key="task-copy-id" aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
           (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+scheduledResume+currentConversation+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
@@ -545,7 +545,7 @@ export function renderBoardClient(accessToken: string): string {
         ["合入提交", evidence.mergedCommit]
       ].filter(([, value]) => value);
       const question = evidence.question
-        ? '<div class="activity-question '+(isCurrentDecision ? "current" : "historical")+'"><b>'+(isCurrentDecision ? "当前需要决定" : "历史决定请求")+'</b><p>'+escapeHtml(evidence.question)+'</p>'+(isCurrentDecision && activity.threadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(activity.threadId)+'">前往对应对话回复 <span>↗</span></a>' : '<small>'+(isCurrentDecision ? "当前执行未关联 Codex 对话。" : "此问题保留为历史活动。")+'</small>')+'</div>'
+        ? '<div class="activity-question '+(isCurrentDecision ? "current" : "historical")+'"><b>'+(isCurrentDecision ? "当前需要决定" : "历史决定请求")+'</b><p>'+escapeHtml(evidence.question)+'</p>'+(isCurrentDecision && activity.threadId ? '<a class="detail-link primary" data-live-sync-key="activity-decision:'+escapeHtml(activity.id)+'" href="codex://threads/'+escapeHtml(activity.threadId)+'">前往对应对话回复 <span>↗</span></a>' : '<small>'+(isCurrentDecision ? "当前执行未关联 Codex 对话。" : "此问题保留为历史活动。")+'</small>')+'</div>'
         : '';
       const findings = evidence.findings?.length
         ? '<div class="activity-evidence-block"><b>审查发现</b><ul>'+evidence.findings.map(finding => '<li>'+escapeHtml(finding)+'</li>').join("")+'</ul></div>'
@@ -558,7 +558,7 @@ export function renderBoardClient(accessToken: string): string {
         : '';
       const hasEvidence = question || findings || tests || git;
       const conversation = activity.threadId
-        ? '<a class="activity-conversation-link" data-activity-thread href="codex://threads/'+escapeHtml(activity.threadId)+'">打开对话 <span>↗</span></a>'
+        ? '<a class="activity-conversation-link" data-activity-thread data-live-sync-key="activity-conversation:'+escapeHtml(activity.id)+'" href="codex://threads/'+escapeHtml(activity.threadId)+'">打开对话 <span>↗</span></a>'
         : '';
       return '<li class="activity-item '+escapeHtml(activity.type)+'" '+(index === all.length - 1 ? 'data-latest-activity' : '')+'><span class="activity-node"></span><article class="activity-card"><header><b>'+escapeHtml(label(activity.type))+'</b><div class="activity-card-actions">'+conversation+'<time>'+escapeHtml(formatTime(activity.occurredAt))+'</time></div></header><p class="activity-summary">'+escapeHtml(activity.summary)+'</p>'+(hasEvidence ? '<div class="activity-evidence">'+question+findings+tests+git+'</div>' : '')+'</article></li>';
     }

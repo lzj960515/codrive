@@ -1,16 +1,18 @@
 import type { PackageVersionStatus } from "../domain/system-update.js";
 import type { PackageVersionService } from "../infrastructure/package-version-service.js";
+import type {
+  SystemUpdateChangedEvent,
+  SystemUpdateEventSource,
+  VersionStatusChangedEvent,
+} from "./system-update-events.js";
 
-export interface VersionStatusChangedEvent {
-  type: "system.version_status_changed";
-}
+export type {
+  SystemUpdateEventSource,
+  VersionStatusChangedEvent,
+} from "./system-update-events.js";
 
 export interface PackageVersionCheckTrigger {
   checkNow(): Promise<PackageVersionStatus>;
-}
-
-export interface VersionStatusEventSource {
-  subscribe(listener: (event: VersionStatusChangedEvent) => void): () => void;
 }
 
 export interface PackageVersionCheckSchedulerOptions {
@@ -23,12 +25,12 @@ export interface PackageVersionCheckSchedulerOptions {
 const defaultCheckIntervalMs = 60 * 60 * 1_000;
 
 export class PackageVersionCheckScheduler
-  implements PackageVersionCheckTrigger, VersionStatusEventSource
+  implements PackageVersionCheckTrigger, SystemUpdateEventSource
 {
   private readonly intervalMs: number;
   private readonly now: () => Date;
   private readonly listeners = new Set<
-    (event: VersionStatusChangedEvent) => void
+    (event: SystemUpdateChangedEvent) => void
   >();
   private timer: NodeJS.Timeout | null = null;
   private scheduleRevision = 0;
@@ -82,7 +84,7 @@ export class PackageVersionCheckScheduler
     }
   }
 
-  subscribe(listener: (event: VersionStatusChangedEvent) => void): () => void {
+  subscribe(listener: (event: SystemUpdateChangedEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }

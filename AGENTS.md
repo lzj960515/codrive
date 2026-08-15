@@ -9,6 +9,7 @@ Codrive is a local, single-user orchestration service that connects filesystem-b
 - `ProjectExecutionCoordinator` owns temporary task-selection turns.
 - `model-routing.ts` owns capacity-failure classification, persisted retry state, exponential backoff, and fallback routing for every Codex turn.
 - `PackageVersionCheckScheduler` owns startup compensation, the persisted hourly npm check cadence, and live board status events; `PackageVersionService` owns npm access, validation, caching, and in-flight deduplication.
+- `UpgradeStateChangeMonitor` observes persisted upgrade phases across the detached worker and service processes, then feeds them into the shared system update event source.
 - `SystemSettingsService` owns validated runtime concurrency and model configuration changes.
 - `src/infrastructure` owns filesystem persistence, App Server transport, and Skill installation.
 - `src/interfaces` owns the HTTP API, CLI, and local board.

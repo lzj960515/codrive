@@ -51,7 +51,7 @@ export interface PreservedLiveUiState {
     value: string;
     checked: boolean;
   }>;
-  activeFieldKey: string | null;
+  activeElementKey: string | null;
   selectionStart: number | null;
   selectionEnd: number | null;
   scroll: Array<{ key: string; left: number; top: number }>;
@@ -283,18 +283,23 @@ export function captureLiveUiState(
     field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
     index: number,
   ) => field.id || field.dataset.liveSyncKey || `${field.name || "field"}:${index}`;
+  const activeElement = document.activeElement as HTMLElement | null;
   const activeIndex = editable.indexOf(
-    document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+    activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
   );
-  const active = activeIndex >= 0 ? editable[activeIndex]! : null;
+  const activeField = activeIndex >= 0 ? editable[activeIndex]! : null;
   const selectionStart =
-    active && "selectionStart" in active ? active.selectionStart : null;
+    activeField && "selectionStart" in activeField
+      ? activeField.selectionStart
+      : null;
   const selectionEnd =
-    active && "selectionEnd" in active ? active.selectionEnd : null;
+    activeField && "selectionEnd" in activeField
+      ? activeField.selectionEnd
+      : null;
   const preserveField = (
     field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
   ) => {
-    if (field === active) return true;
+    if (field === activeField) return true;
     if ("defaultChecked" in field && field.checked !== field.defaultChecked) {
       return true;
     }
@@ -318,7 +323,9 @@ export function captureLiveUiState(
           }]
         : [],
     ),
-    activeFieldKey: active ? fieldKey(active, activeIndex) : null,
+    activeElementKey: activeField
+      ? `field:${fieldKey(activeField, activeIndex)}`
+      : stableLiveUiElementKey(activeElement),
     selectionStart,
     selectionEnd,
     scroll: Array.from(
@@ -354,18 +361,29 @@ export function restoreLiveUiState(
     field.value = saved.value;
     if ("checked" in field) field.checked = saved.checked;
   }
-  const activeIndex = editable.findIndex(
-    (field, index) => fieldKey(field, index) === state.activeFieldKey,
+  const activeFieldIndex = editable.findIndex(
+    (field, index) =>
+      `field:${fieldKey(field, index)}` === state.activeElementKey,
   );
-  const active = activeIndex >= 0 ? editable[activeIndex]! : null;
-  active?.focus();
+  const activeField =
+    activeFieldIndex >= 0 ? editable[activeFieldIndex]! : null;
+  const activeElement =
+    activeField ??
+    Array.from(
+      document.querySelectorAll<HTMLElement>("[id], [data-live-sync-key]"),
+    ).find(
+      (element) =>
+        stableLiveUiElementKey(element) === state.activeElementKey,
+    ) ??
+    null;
+  activeElement?.focus();
   if (
-    active &&
-    "setSelectionRange" in active &&
+    activeField &&
+    "setSelectionRange" in activeField &&
     state.selectionStart !== null &&
     state.selectionEnd !== null
   ) {
-    active.setSelectionRange(state.selectionStart, state.selectionEnd);
+    activeField.setSelectionRange(state.selectionStart, state.selectionEnd);
   }
   const scrollPositions = new Map(state.scroll.map((item) => [item.key, item]));
   for (const [index, element] of Array.from(
@@ -381,10 +399,21 @@ export function restoreLiveUiState(
   window.scrollTo(state.windowX, state.windowY);
 }
 
+export function stableLiveUiElementKey(
+  element: Pick<HTMLElement, "id" | "dataset"> | null,
+): string | null {
+  if (!element) return null;
+  if (element.id) return `id:${element.id}`;
+  return element.dataset.liveSyncKey
+    ? `live:${element.dataset.liveSyncKey}`
+    : null;
+}
+
 export function renderLiveSyncClientRuntime(): string {
   return [
     `const liveSyncRefreshPlan = ${liveSyncRefreshPlan.toString()};`,
     `const createLiveSyncController = ${createLiveSyncController.toString()};`,
+    `const stableLiveUiElementKey = ${stableLiveUiElementKey.toString()};`,
     `const captureLiveUiState = ${captureLiveUiState.toString()};`,
     `const restoreLiveUiState = ${restoreLiveUiState.toString()};`,
   ].join("\n");

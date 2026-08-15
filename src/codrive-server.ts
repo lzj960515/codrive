@@ -8,7 +8,9 @@ import { LifecycleRecorder } from "./application/lifecycle-recorder.js";
 import { PackageVersionCheckScheduler } from "./application/package-version-check-scheduler.js";
 import { RecoveryManager } from "./application/recovery-manager.js";
 import { SystemSettingsService } from "./application/system-settings-service.js";
+import { mergeSystemUpdateEventSources } from "./application/system-update-events.js";
 import { SystemUpdateService } from "./application/system-update-service.js";
+import { UpgradeStateChangeMonitor } from "./application/upgrade-state-change-monitor.js";
 import { UpgradeCoordinator } from "./application/upgrade-coordinator.js";
 import { WorkflowEngine } from "./application/workflow-engine.js";
 import { CodexAppServerClient } from "./infrastructure/codex-app-server-client.js";
@@ -33,6 +35,7 @@ export class CodriveServer {
   private log: CodriveLog | null = null;
   private updateRecoveryTimer: NodeJS.Timeout | null = null;
   private versionChecks: PackageVersionCheckScheduler | null = null;
+  private upgradeStateChanges: UpgradeStateChangeMonitor | null = null;
   private ready = false;
 
   constructor(stateDirectory?: string) {
@@ -113,6 +116,16 @@ export class CodriveServer {
         stateDirectory: this.config.stateDirectory,
       });
       await upgrades.reconcile();
+      this.upgradeStateChanges = new UpgradeStateChangeMonitor({
+        store: upgradeStore,
+        onError: (error) => {
+          this.log?.error(
+            "updates",
+            error instanceof Error ? error.message : String(error),
+          );
+        },
+      });
+      await this.upgradeStateChanges.start();
       this.updateRecoveryTimer = setInterval(() => {
         void upgrades.reconcile().catch((error: unknown) => {
           this.log?.error(
@@ -134,7 +147,10 @@ export class CodriveServer {
         skillInstaller,
         settingsService,
         systemUpdateService,
-        systemUpdateEvents: this.versionChecks,
+        systemUpdateEvents: mergeSystemUpdateEventSources(
+          this.versionChecks,
+          this.upgradeStateChanges,
+        ),
         currentVersion: version,
         accessToken: this.config.accessToken,
         isReady: () => this.ready,
@@ -174,6 +190,8 @@ export class CodriveServer {
     this.updateRecoveryTimer = null;
     this.versionChecks?.stop();
     this.versionChecks = null;
+    this.upgradeStateChanges?.stop();
+    this.upgradeStateChanges = null;
     this.recovery?.stop();
     this.recovery = null;
     await this.http?.close();

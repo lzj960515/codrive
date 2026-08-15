@@ -212,6 +212,27 @@ describe("board live sync client", () => {
     expect(scroll).toMatchObject({ scrollLeft: 90, scrollTop: 25 });
     expect(window.scrollTo).toHaveBeenCalledWith(12, 34);
   });
+
+  it("restores focus to a stable button after scoped markup replacement", () => {
+    const original = fakeControl("task:task_1");
+    const replacement = fakeControl("task:task_1");
+    let focusable = original;
+    const document = {
+      activeElement: original,
+      querySelectorAll(selector: string) {
+        if (selector === "input, textarea, select") return [];
+        if (selector === "[data-preserve-scroll]") return [];
+        return [focusable];
+      },
+    };
+    const window = { scrollX: 0, scrollY: 0, scrollTo: vi.fn() };
+
+    const state = captureLiveUiState(document as never, window as never);
+    focusable = replacement;
+    restoreLiveUiState(document as never, window as never, state);
+
+    expect(replacement.focus).toHaveBeenCalledOnce();
+  });
 });
 
 function event(
@@ -254,6 +275,14 @@ function fakeField(id: string, value: string) {
     dataset: {} as Record<string, string>,
     focus: vi.fn(),
     setSelectionRange: vi.fn(),
+  };
+}
+
+function fakeControl(key: string) {
+  return {
+    id: "",
+    dataset: { liveSyncKey: key },
+    focus: vi.fn(),
   };
 }
 

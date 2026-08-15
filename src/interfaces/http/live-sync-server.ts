@@ -1,6 +1,6 @@
 import type { WebSocket } from "@fastify/websocket";
 
-import type { VersionStatusEventSource } from "../../application/package-version-check-scheduler.js";
+import type { SystemUpdateEventSource } from "../../application/system-update-events.js";
 import {
   createLiveSyncEnvelope,
   liveSyncChangeForStoreEvent,
@@ -10,7 +10,7 @@ import type { ProjectStore } from "../../infrastructure/project-store.js";
 
 export interface LiveSyncServerDependencies {
   store: Pick<ProjectStore, "subscribe">;
-  systemUpdateEvents?: VersionStatusEventSource;
+  systemUpdateEvents?: SystemUpdateEventSource;
 }
 
 export class LiveSyncServer {

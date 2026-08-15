@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
 import { z } from "zod";
 
-import type { VersionStatusEventSource } from "../../application/package-version-check-scheduler.js";
+import type { SystemUpdateEventSource } from "../../application/system-update-events.js";
 import type { SystemSettingsService } from "../../application/system-settings-service.js";
 import type { SystemUpdateService } from "../../application/system-update-service.js";
 import type { WorkflowEngine } from "../../application/workflow-engine.js";
@@ -31,7 +31,7 @@ export interface HttpServerDependencies {
     SystemUpdateService,
     "read" | "refresh" | "start" | "installSkills"
   >;
-  systemUpdateEvents?: VersionStatusEventSource;
+  systemUpdateEvents?: SystemUpdateEventSource;
   currentVersion?: string;
   accessToken: string;
   isReady?: () => boolean;
