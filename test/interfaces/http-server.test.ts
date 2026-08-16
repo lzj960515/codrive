@@ -792,7 +792,7 @@ describe("HTTP API", () => {
     );
   });
 
-  it("accepts planned blocker fields and exposes early-continue controls", async () => {
+  it("accepts a new decision report after an early planned continuation", async () => {
     const created = await registerProject();
     const task = created.tasks[0]!;
     const execution = {
@@ -878,6 +878,46 @@ describe("HTTP API", () => {
     expect(continued.json().currentExecution).toMatchObject({
       attemptId: execution.attemptId,
       status: "running",
+    });
+
+    const resumedTurnId = continued.json().currentExecution.turnId as string;
+    const decision = await skillCommand({
+      type: "task.report",
+      payload: {
+        taskId: task.id,
+        attemptId: execution.attemptId,
+        outcome: "needs_input",
+        summary: "The resumed work needs one product decision",
+        question: "Keep the compatibility mode?",
+      },
+    });
+    expect(decision.statusCode).toBe(200);
+    const decisionActivityId = decision.json().currentExecution
+      .submittedActivityId as string;
+    await engine.completeTurn(task.id, execution.attemptId, resumedTurnId);
+
+    const waitingForDecision = await server.inject({
+      method: "GET",
+      url: `/api/tasks/${task.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    expect(waitingForDecision.json()).toMatchObject({
+      task: {
+        status: "waiting_for_input",
+        currentExecution: { status: "waiting_for_input" },
+      },
+      currentDecisionRequest: {
+        id: decisionActivityId,
+        type: "decision_requested",
+        attemptId: execution.attemptId,
+      },
+      activities: expect.arrayContaining([
+        expect.objectContaining({ type: "blocked" }),
+        expect.objectContaining({
+          id: decisionActivityId,
+          type: "decision_requested",
+        }),
+      ]),
     });
   });
 

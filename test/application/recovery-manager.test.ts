@@ -500,28 +500,50 @@ describe("RecoveryManager", () => {
   it("compensates an overdue planned blocker once during startup", async () => {
     const found = (await store.findTask(taskId))!;
     const execution = found.task.currentExecution!;
-    await store.saveTask(found.project.id, {
-      ...found.task,
-      status: "blocked",
-      currentExecution: {
-        ...execution,
-        status: "waiting_for_resume",
-        scheduledResume: {
-          reason: "Wait for the build",
-          resumeAt: "2026-08-02T23:59:00.000Z",
-          resumePrompt: "Inspect the build and continue.",
-        },
-      },
+    await workflow.submitReport({
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "blocked",
+      summary: "Wait for the build",
+      resumeAt: "2026-08-03T00:01:00.000Z",
+      resumePrompt: "Inspect the build and continue.",
     });
+    await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+    const blockedActivityId = (await store.findTask(taskId))!.task
+      .currentExecution!.submittedActivityId;
 
     await recovery.start();
-    await recovery.recoverUnattendedWork(new Date("2026-08-03T00:00:00.000Z"));
+    await recovery.recoverUnattendedWork(new Date("2026-08-03T00:02:00.000Z"));
 
     expect(taskDispatcher.scheduledResumes).toHaveLength(1);
     expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
       attemptId: execution.attemptId,
       status: "running",
     });
+    const reported = await workflow.submitReport({
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "completed",
+      summary: "Implemented after startup resumed the wait",
+      workspacePath: "/workspace/game/.worktrees/loop",
+      candidateCommit: "candidate_after_restart",
+    });
+    const completedActivityId = reported.currentExecution!.submittedActivityId;
+    expect(completedActivityId).toBeDefined();
+    expect(completedActivityId).not.toBe(blockedActivityId);
+    const reportActivities = (
+      await store.listTaskActivities(found.project.id, taskId)
+    ).filter(
+      ({ attemptId, outcome }) =>
+        attemptId === execution.attemptId && outcome !== undefined,
+    );
+    expect(reportActivities).toHaveLength(2);
+    expect(reportActivities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: blockedActivityId, outcome: "blocked" }),
+        expect.objectContaining({ outcome: "completed" }),
+      ]),
+    );
     recovery.stop();
   });
 

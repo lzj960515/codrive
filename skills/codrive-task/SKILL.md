@@ -118,6 +118,8 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 
 `resumePrompt` 是写给恢复后自己的执行检查点，简明包含：届时要重新检查的外部或仓库事实、等待前已经完成的工作与验证、继续当前阶段的明确下一步。恢复消息还会携带固定任务 ID 和 `$codrive-task` 入口，不在检查点中复制完整任务文档。
 
+恢复 turn 成功启动后，会在同一 action、attempt 和 thread 中形成新的报告机会。使用 context 返回的原 `attemptId` 提交恢复结果；等待前的 blocked 报告继续作为不可变活动保留，不占用新 turn 的报告机会。当前报告机会内重复提交完全相同的报告保持幂等，提交不同结果仍按冲突处理。
+
 计划阻塞报告格式：
 
 ```json

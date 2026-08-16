@@ -20,7 +20,7 @@ Every execution persists the model selected when it starts. Capacity failures pr
 
 Task recovery reattaches the persisted conversation and starts a new turn in the current attempt, action, and model route. Successful recovery is auditable through task activities; an unavailable persisted conversation produces an explicit blocked recovery result.
 
-Scheduled blockers are persisted task-execution waits. They keep the action, attempt, conversation, model route, absolute deadline, reason, and AI resume checkpoint while releasing project capacity and the repository integration lease. `WorkflowEngine` owns due, early, rescheduled, paused, cancelled, and duplicate-wakeup decisions; `RecoveryManager` only maintains exact deadline wakeups and startup/reconnect compensation.
+Scheduled blockers are persisted task-execution waits. They keep the action, attempt, conversation, model route, absolute deadline, reason, and AI resume checkpoint while releasing project capacity and the repository integration lease. A resumed turn opens a new report opportunity within the same attempt: `currentExecution.submittedActivityId` scopes idempotency and conflicts to the current opportunity, while every earlier blocked report remains an immutable activity. `WorkflowEngine` owns due, early, rescheduled, paused, cancelled, duplicate-wakeup, and report-opportunity decisions; `RecoveryManager` only maintains exact deadline wakeups and startup/reconnect compensation.
 
 The HTTP surface has four read boundaries: board projection, product detail, runtime settings, and Skill context. Writes use the unified `/api/commands` endpoint. State transitions belong to `WorkflowEngine`, and validated runtime configuration belongs to `SystemSettingsService`, not route handlers.
 

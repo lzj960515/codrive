@@ -405,12 +405,11 @@ export class WorkflowEngine {
         found.project.id,
         report.taskId,
       );
-      const previousActivity = activities
-        .filter(
-          ({ attemptId, outcome }) =>
-            attemptId === report.attemptId && outcome !== undefined,
-        )
-        .at(-1);
+      const previousActivity = reportActivityForIdempotency(
+        activities,
+        execution,
+        report.attemptId,
+      );
       if (previousActivity) {
         if (taskActivityMatchesReport(previousActivity, report)) return found.task;
         if (execution?.status !== "waiting_for_input") {
@@ -2575,6 +2574,25 @@ function eventForTask(task: Task): string {
     default:
       return "task.updated";
   }
+}
+
+function reportActivityForIdempotency(
+  activities: readonly TaskActivity[],
+  execution: Task["currentExecution"],
+  attemptId: string,
+): TaskActivity | undefined {
+  if (execution?.attemptId === attemptId) {
+    // 计划恢复保留 attempt，但会为新 turn 清空当前报告指针。
+    return execution.submittedActivityId
+      ? activities.find(({ id }) => id === execution.submittedActivityId)
+      : undefined;
+  }
+  return activities
+    .filter(
+      ({ attemptId: activityAttemptId, outcome }) =>
+        activityAttemptId === attemptId && outcome !== undefined,
+    )
+    .at(-1);
 }
 
 function commandSummary(command: CodriveCommand): Record<string, unknown> {
