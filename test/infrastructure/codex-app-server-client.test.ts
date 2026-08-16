@@ -70,6 +70,15 @@ describe("CodexAppServerClient", () => {
       await expect(client.readTurnStatus(threadId, turnId)).resolves.toBe(
         "inProgress",
       );
+      await expect(client.readTurnSnapshot(threadId, turnId)).resolves.toEqual({
+        threadStatus: "active",
+        activeTurnIds: ["turn_1"],
+        turn: {
+          id: "turn_1",
+          status: "inProgress",
+          items: [{ type: "fileChange", status: "inProgress" }],
+        },
+      });
       await expect(client.readTurnActivity(threadId, turnId)).resolves.toEqual({
         status: "inProgress",
         activity: {
@@ -77,6 +86,18 @@ describe("CodexAppServerClient", () => {
           occurredAt: "2026-08-16T01:00:00.000Z",
         },
       });
+      for (const status of ["completed", "interrupted", "failed"] as const) {
+        await expect(
+          client.readTurnSnapshot(threadId, `turn_${status}`),
+        ).resolves.toMatchObject({
+          threadStatus: "active",
+          activeTurnIds: ["turn_1"],
+          turn: { id: `turn_${status}`, status },
+        });
+      }
+      await expect(
+        client.readTurnSnapshot(threadId, "turn_missing"),
+      ).resolves.toMatchObject({ turn: null });
       await client.interruptTurn(threadId, turnId);
     } finally {
       await client.stop();
@@ -122,6 +143,11 @@ describe("CodexAppServerClient", () => {
     });
     expect(readThreads.map(({ params }) => params)).toEqual([
       { threadId: "thread_1" },
+      { threadId: "thread_1", includeTurns: true },
+      { threadId: "thread_1", includeTurns: true },
+      { threadId: "thread_1", includeTurns: true },
+      { threadId: "thread_1", includeTurns: true },
+      { threadId: "thread_1", includeTurns: true },
       { threadId: "thread_1", includeTurns: true },
       { threadId: "thread_1", includeTurns: true },
     ]);
@@ -173,7 +199,12 @@ lines.on("line", (line) => {
         ],
         nextCursor: "page_2"
       };
-  if (request.method === "thread/read") result = { thread: { status: { type: "active", activeFlags: [] }, turns: [{ id: "turn_1", status: "inProgress", startedAt: 1786842000, completedAt: null, items: [{ type: "fileChange", id: "item_1", changes: [{ path: "SECRET_PATH" }], status: "inProgress" }] }] } };
+  if (request.method === "thread/read") result = { thread: { status: { type: "active", activeFlags: [] }, turns: [
+    { id: "turn_1", status: "inProgress", startedAt: 1786842000, completedAt: null, items: [{ type: "fileChange", id: "item_1", changes: [{ path: "SECRET_PATH" }], status: "inProgress" }] },
+    { id: "turn_completed", status: "completed", startedAt: 1786841900, completedAt: 1786841950, items: [] },
+    { id: "turn_interrupted", status: "interrupted", startedAt: 1786841800, completedAt: 1786841850, items: [] },
+    { id: "turn_failed", status: "failed", startedAt: 1786841700, completedAt: 1786841750, items: [] }
+  ] } };
   process.stdout.write(JSON.stringify({ id: request.id, result }) + "\\n");
   if (request.method === "thread/start") {
     process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: "thread_1", turnId: "turn_1", startedAtMs: 1786842001000, item: { type: "commandExecution", id: "item_search", command: "SECRET_QUERY", commandActions: [{ type: "search", command: "SECRET_QUERY", query: "SECRET_QUERY", path: "/workspace" }] } } }) + "\\n");

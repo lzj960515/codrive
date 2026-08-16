@@ -176,10 +176,142 @@ describe("ExecutionActivityBridge", () => {
 
     await expect(fixture.bridge.read(fixture.task.id)).resolves.toBeNull();
   });
+
+  it("starts an in-memory silence window and claims an exact execution only once", async () => {
+    const fixture = await createFixture();
+    const startedAt = new Date("2026-08-16T01:00:00.000Z");
+    await fixture.bridge.initialize(startedAt);
+
+    expect(
+      fixture.bridge.claimSilentExecutions(
+        new Date("2026-08-16T01:09:59.999Z"),
+        10 * 60_000,
+      ),
+    ).toEqual([]);
+
+    const claims = fixture.bridge.claimSilentExecutions(
+      new Date("2026-08-16T01:10:00.000Z"),
+      10 * 60_000,
+    );
+    expect(claims).toEqual([
+      {
+        projectId: fixture.projectId,
+        taskId: fixture.task.id,
+        action: "develop",
+        attemptId: "attempt-current",
+        executionStatus: "running",
+        threadId: "thread-current",
+        turnId: "turn-current",
+        lastSeenAt: "2026-08-16T01:00:00.000Z",
+      },
+    ]);
+    expect(
+      fixture.bridge.claimSilentExecutions(
+        new Date("2026-08-16T01:10:00.000Z"),
+        10 * 60_000,
+      ),
+    ).toEqual([]);
+    expect(fixture.bridge.isSilenceClaimCurrent(claims[0]!)).toBe(true);
+  });
+
+  it("moves lastSeen for valid signals and resets the silence window after an active observation", async () => {
+    let now = new Date("2026-08-16T01:00:00.000Z");
+    const fixture = await createFixture({ now: () => now });
+    await fixture.bridge.initialize(now);
+
+    now = new Date("2026-08-16T01:09:00.000Z");
+    await fixture.bridge.recordHook({
+      schemaVersion: 1,
+      sessionId: "session-family",
+      turnId: "turn-current",
+      event: "PostToolUse",
+      toolName: "exec_command",
+      occurredAt: "2026-08-16T01:08:30.000Z",
+    });
+    expect(
+      fixture.bridge.claimSilentExecutions(
+        new Date("2026-08-16T01:18:59.999Z"),
+        10 * 60_000,
+      ),
+    ).toEqual([]);
+
+    const [claim] = fixture.bridge.claimSilentExecutions(
+      new Date("2026-08-16T01:19:00.000Z"),
+      10 * 60_000,
+    );
+    expect(claim?.lastSeenAt).toBe("2026-08-16T01:09:00.000Z");
+
+    fixture.bridge.finishSilenceCheck(claim!, {
+      observedAt: new Date("2026-08-16T01:19:00.000Z"),
+    });
+    expect(
+      fixture.bridge.claimSilentExecutions(
+        new Date("2026-08-16T01:28:59.999Z"),
+        10 * 60_000,
+      ),
+    ).toEqual([]);
+    expect(
+      fixture.bridge.claimSilentExecutions(
+        new Date("2026-08-16T01:29:00.000Z"),
+        10 * 60_000,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("invalidates a claimed silence window when the execution identity changes", async () => {
+    const fixture = await createFixture();
+    await fixture.bridge.initialize(new Date("2026-08-16T01:00:00.000Z"));
+    const [claim] = fixture.bridge.claimSilentExecutions(
+      new Date("2026-08-16T01:10:00.000Z"),
+      10 * 60_000,
+    );
+
+    await fixture.store.saveTask(fixture.projectId, {
+      ...fixture.task,
+      currentExecution: {
+        ...fixture.task.currentExecution!,
+        attemptId: "attempt-next",
+        turnId: "turn-next",
+      },
+    });
+    await fixture.bridge.synchronize(fixture.task.id);
+
+    expect(fixture.bridge.isSilenceClaimCurrent(claim!)).toBe(false);
+  });
+
+  it.each([
+    "retry_scheduled",
+    "waiting_for_input",
+    "waiting_for_resume",
+    "failed",
+    "interrupted",
+    "completed",
+  ] as const)("does not observe %s executions as silent running work", async (status) => {
+    const fixture = await createFixture();
+    await fixture.store.saveTask(fixture.projectId, {
+      ...fixture.task,
+      currentExecution: {
+        ...fixture.task.currentExecution!,
+        status,
+      },
+    });
+
+    await fixture.bridge.initialize(new Date("2026-08-16T01:00:00.000Z"));
+
+    expect(
+      fixture.bridge.claimSilentExecutions(
+        new Date("2026-08-16T02:00:00.000Z"),
+        10 * 60_000,
+      ),
+    ).toEqual([]);
+    expect(JSON.stringify((await fixture.store.findTask(fixture.task.id))!.task))
+      .not.toContain("lastSeen");
+  });
 });
 
 async function createFixture(options: {
   readTurnActivity?: () => Promise<CodexTurnActivity | null>;
+  now?: () => Date;
 } = {}) {
   const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-activity-"));
   const store = new ProjectStore(stateDirectory);
@@ -211,6 +343,7 @@ async function createFixture(options: {
   );
   const bridge = new ExecutionActivityBridge({
     store,
+    now: options.now,
     codex: {
       readTurnActivity,
       onActivity(listener) {

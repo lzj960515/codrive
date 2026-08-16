@@ -69,6 +69,8 @@ An open board uses an authenticated Socket.IO connection to watch only the selec
 
 While a task turn is running, its detail panel also shows one replaceable current-activity signal. Codrive combines safe App Server events with the managed Codex Hook and keeps the result only in process memory. The signal contains a category and execution identity, never prompts, reasoning, command arguments, output, paths, transcripts, or environment values.
 
+The same in-memory bridge keeps a last-seen window for the exact task execution. A service restart starts a fresh window instead of guessing that a quiet turn has stopped. After ten signal-free minutes, Codrive checks the saved thread and turn through App Server once per minute: a running turn starts a new ten-minute window, a completed turn enters the normal report path, and only an unambiguously interrupted or failed turn is eligible to resume. Missing, unreadable, contradictory, superseded, paused, or capacity-blocked work stays unchanged and is checked again later; Codrive does not create a persisted presence state.
+
 ## How it works
 
 ![Codrive product loop and scheduling architecture](https://raw.githubusercontent.com/lzj960515/codrive/main/docs/architecture/codrive-orchestration.png)
@@ -82,7 +84,7 @@ Codrive persists lifecycle state and enforces scheduling boundaries; Codex handl
 
 Review findings represent real delivery blockers in supported product and operational paths, not unconditional rework instructions. The development conversation fixes valid issues or records evidence for findings that do not apply; the same independent review conversation then reevaluates the current candidate and that evidence.
 
-Waiting and recovery are part of the same workflow. A task can pause until a specific time without holding project capacity, capacity errors can move work to a fallback model, and interrupted work can resume from its persisted conversation and execution state. The task timeline records these transitions and surfaces only decisions or failures that need attention.
+Waiting and recovery are part of the same workflow. A task can pause until a specific time without holding project capacity, capacity errors can move work to a fallback model, and an authoritatively interrupted task can resume from its persisted conversation and execution state. Recovery rechecks the exact action, attempt, thread, turn, project capacity, and integration lease before starting one replacement turn. The task timeline records actual recovery transitions and surfaces only decisions or failures that need attention.
 
 ## Codex conversations
 

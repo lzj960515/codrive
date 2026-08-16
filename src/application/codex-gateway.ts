@@ -36,6 +36,16 @@ export interface CodexTurnActivity {
   } | null;
 }
 
+export interface CodexTurnSnapshot {
+  threadStatus: "notLoaded" | "idle" | "systemError" | "active";
+  activeTurnIds: string[];
+  turn: {
+    id: string;
+    status: CodexTurnStatus;
+    items: Array<{ type: string; status: string | null }>;
+  } | null;
+}
+
 export interface CodexActivityGateway {
   readTurnActivity(
     threadId: string,
@@ -61,4 +71,5 @@ export interface CodexGateway {
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   isThreadActive(threadId: string): Promise<boolean>;
   readTurnStatus(threadId: string, turnId: string): Promise<CodexTurnStatus | null>;
+  readTurnSnapshot(threadId: string, turnId: string): Promise<CodexTurnSnapshot>;
 }

@@ -37,6 +37,9 @@ class RecordingGateway implements CodexGateway {
   async readTurnStatus(): Promise<null> {
     return null;
   }
+  async readTurnSnapshot() {
+    return { threadStatus: "idle" as const, activeTurnIds: [], turn: null };
+  }
   async listModels(): Promise<[]> {
     return [];
   }

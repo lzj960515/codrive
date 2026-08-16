@@ -8,6 +8,7 @@ import type {
   CodexGateway,
   CodexModelOption,
   CodexTurnActivity,
+  CodexTurnSnapshot,
   CodexTurnStatus,
 } from "../application/codex-gateway.js";
 import {
@@ -220,6 +221,34 @@ export class CodexAppServerClient implements CodexGateway, CodexActivityGateway 
     return response.thread.turns.find(({ id }) => id === turnId)?.status ?? null;
   }
 
+  async readTurnSnapshot(
+    threadId: string,
+    turnId: string,
+  ): Promise<CodexTurnSnapshot> {
+    await this.start();
+    const response = await this.requireConnection().request<ThreadReadResponse>(
+      "thread/read",
+      { threadId, includeTurns: true },
+    );
+    const turn = response.thread.turns.find(({ id }) => id === turnId);
+    return {
+      threadStatus: response.thread.status.type,
+      activeTurnIds: response.thread.turns
+        .filter(({ status }) => status === "inProgress")
+        .map(({ id }) => id),
+      turn: turn
+        ? {
+            id: turn.id,
+            status: turn.status,
+            items: turn.items.map((item) => ({
+              type: item.type,
+              status: safeItemStatus(item),
+            })),
+          }
+        : null,
+    };
+  }
+
   async readTurnActivity(
     threadId: string,
     turnId: string,
@@ -381,6 +410,11 @@ function categoryForThreadItem(item: unknown): ExecutionActivityCategory | null 
     default:
       return null;
   }
+}
+
+function safeItemStatus(item: unknown): string | null {
+  if (!isRecord(item)) return null;
+  return stringValue(item.status);
 }
 
 function turnTimestamp(params: Record<string, unknown>): string {

@@ -54,3 +54,37 @@ Every connect or reconnect restores the current watches and rereads those same H
 Socket.IO uses its built-in reconnect behavior and preserves connection-local event order. A disconnect shows the existing local-service recovery banner. Missed signals do not require a custom sequence or event log because the reconnect path rereads each visible authoritative HTTP scope.
 
 An absent or incorrect handshake token rejects the Socket.IO connection. Invalid IDs, extra request fields, a task outside the watched project, and unsupported watch payloads receive a failed acknowledgement without joining a room.
+
+## Execution activity and silence recovery
+
+The execution activity path has two consumers but one ephemeral source of truth:
+
+```text
+App Server item events ─┐
+                       ├─ ExecutionActivityBridge ─ latest safe activity ─ task room
+Managed Codex Hook ─────┘              │
+                                      └─ exact execution lastSeen
+                                                       │ 10 minutes silent
+                                                       v
+RecoveryManager minute scan ─ thread/read(includeTurns: true) ─ WorkflowEngine
+```
+
+`ExecutionActivityBridge` associates every accepted signal with the current project, task, action, attempt, thread, and turn. It keeps the replaceable activity and `lastSeen` only in process memory. An identity change starts a new observation, while a terminal or excluded execution removes the old observation. Startup initializes current `pending`, `running`, and `awaiting_report` turns at the startup time, so losing process memory never makes a persisted turn immediately recoverable.
+
+`RecoveryManager` claims each due observation before awaiting App Server, which prevents overlapping scans from checking or recovering the same window twice. A valid Hook or App Server signal invalidates an outstanding claim. Read failures and uncertain snapshots remain retryable without creating a task activity, execution field, or presence status.
+
+### Authoritative turn decisions
+
+The App Server gateway returns only the thread status, in-progress turn IDs, the exact turn status, and safe item type/status pairs. Prompt text, reasoning, tool arguments, output, paths, and other item content do not cross this boundary.
+
+| Exact snapshot | Decision |
+| --- | --- |
+| Thread active; saved turn is the only `inProgress` turn | Keep running and begin a new ten-minute window |
+| Thread idle; saved turn is `completed` | Use the existing completion and report path |
+| Thread idle; saved turn is `interrupted` or `failed` | Ask `WorkflowEngine` to recover the same execution |
+| Exact turn missing or App Server unreadable | Keep current state and retry later |
+| Thread and turn disagree, or another turn is active | Keep current state and retry later |
+
+Recovery is serialized by `WorkflowEngine`. Immediately before resuming, it compares the project, task, action, attempt, execution status, thread, and turn, then verifies that the project is active and running, its concurrency limit still covers the execution, and no other task owns the repository integration lease. A failed check leaves the current execution untouched. A successful check reuses the persisted conversation, attempt, action, and model route, starts at most one new turn, and records the existing `execution_recovered` lifecycle activity.
+
+Planned waits, model retry waits, user decisions, blocked or cancelled tasks, terminal executions, and paused projects never enter silence recovery. Stopping the service removes App Server, Store, and timer subscriptions; the next service start creates fresh observation windows.

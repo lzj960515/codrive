@@ -9,8 +9,13 @@ import {
   type NotificationSource,
   RecoveryManager,
 } from "../../src/application/recovery-manager.js";
+import { ExecutionActivityBridge } from "../../src/application/execution-activity-bridge.js";
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
-import type { CodexTurnStatus } from "../../src/application/codex-gateway.js";
+import type {
+  CodexActivityEvent,
+  CodexTurnSnapshot,
+  CodexTurnStatus,
+} from "../../src/application/codex-gateway.js";
 import type { JsonRpcNotification } from "../../src/infrastructure/json-rpc-connection.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import {
@@ -22,8 +27,16 @@ import {
 
 class StubNotifications implements NotificationSource {
   private readonly events = new EventEmitter();
+  private readonly activities = new EventEmitter();
   turnStatus: CodexTurnStatus | null = null;
   turnError: Error | null = null;
+  turnSnapshot: CodexTurnSnapshot = {
+    threadStatus: "idle",
+    activeTurnIds: [],
+    turn: null,
+  };
+  readonly snapshotReads: Array<{ threadId: string; turnId: string }> = [];
+  beforeSnapshotReturn?: (() => Promise<void>) | undefined;
 
   onNotification(listener: (notification: JsonRpcNotification) => void): () => void {
     this.events.on("notification", listener);
@@ -33,6 +46,25 @@ class StubNotifications implements NotificationSource {
   async readTurnStatus(): Promise<CodexTurnStatus | null> {
     if (this.turnError) throw this.turnError;
     return this.turnStatus;
+  }
+
+  async readTurnSnapshot(
+    threadId: string,
+    turnId: string,
+  ): Promise<CodexTurnSnapshot> {
+    if (this.turnError) throw this.turnError;
+    this.snapshotReads.push({ threadId, turnId });
+    await this.beforeSnapshotReturn?.();
+    return this.turnSnapshot;
+  }
+
+  async readTurnActivity(): Promise<null> {
+    return null;
+  }
+
+  onActivity(listener: (event: CodexActivityEvent) => void): () => void {
+    this.activities.on("activity", listener);
+    return () => this.activities.off("activity", listener);
   }
 }
 
@@ -794,6 +826,7 @@ describe("RecoveryManager", () => {
   });
 
   it("resumes an interrupted task in its current attempt and conversation", async () => {
+    notifications.turnStatus = "interrupted";
     const found = (await store.findTask(taskId))!;
     const before = found.task.currentExecution!;
     await store.saveTask(found.project.id, {
@@ -863,6 +896,7 @@ describe("RecoveryManager", () => {
   });
 
   it("blocks recovery instead of creating a new conversation when the persisted thread cannot resume", async () => {
+    notifications.turnStatus = "interrupted";
     const before = (await store.findTask(taskId))!.task.currentExecution!;
     taskDispatcher.beforeResumeThread = async () => {
       throw new Error("persisted thread is unavailable");
@@ -892,6 +926,7 @@ describe("RecoveryManager", () => {
   });
 
   it("probes primary when stable fallback recovery reaches its cooldown", async () => {
+    notifications.turnStatus = "interrupted";
     const found = (await store.findTask(taskId))!;
     const before = found.task.currentExecution!;
     await store.saveTask(found.project.id, {
@@ -935,6 +970,7 @@ describe("RecoveryManager", () => {
   });
 
   it("keeps a recovered half-open probe on the primary model", async () => {
+    notifications.turnStatus = "interrupted";
     const found = (await store.findTask(taskId))!;
     const before = found.task.currentExecution!;
     await store.saveTask(found.project.id, {
@@ -1021,6 +1057,453 @@ describe("RecoveryManager", () => {
         reason: "transport unavailable",
       }),
     );
+  });
+
+  it("starts a fresh ten-minute observation window before inspecting persisted running work", async () => {
+    const startedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => startedAt,
+    });
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+      now: () => startedAt,
+    });
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+    notifications.turnSnapshot = coherentSnapshot(execution.turnId!, "interrupted");
+
+    try {
+      await silentRecovery.start();
+
+      expect(notifications.snapshotReads).toEqual([]);
+      expect(taskDispatcher.resumed).toEqual([]);
+
+      await silentRecovery.recoverSilentTaskExecutions(
+        new Date("2026-08-03T00:09:59.999Z"),
+      );
+      expect(notifications.snapshotReads).toEqual([]);
+
+      await silentRecovery.recoverSilentTaskExecutions(
+        new Date("2026-08-03T00:10:00.000Z"),
+      );
+      expect(notifications.snapshotReads).toEqual([
+        { threadId: execution.threadId, turnId: execution.turnId },
+      ]);
+      expect(taskDispatcher.resumed).toHaveLength(1);
+    } finally {
+      silentRecovery.stop();
+      activityBridge.close();
+    }
+  });
+
+  it("restarts the silence window when the exact turn is still in progress", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+    notifications.turnSnapshot = coherentSnapshot(execution.turnId!, "inProgress");
+
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:00.000Z"),
+    );
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:19:59.999Z"),
+    );
+    expect(notifications.snapshotReads).toHaveLength(1);
+
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:20:00.000Z"),
+    );
+    expect(notifications.snapshotReads).toHaveLength(2);
+    expect(taskDispatcher.resumed).toEqual([]);
+    activityBridge.close();
+  });
+
+  it("sends a completed silent turn through the existing report path without resuming it", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+    notifications.turnSnapshot = coherentSnapshot(execution.turnId!, "completed");
+
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:00.000Z"),
+    );
+
+    expect(taskDispatcher.resumed).toEqual([]);
+    expect(taskDispatcher.reminders).toHaveLength(1);
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      status: "awaiting_report",
+      turnId: "task_reminder_1",
+    });
+    activityBridge.close();
+  });
+
+  it("defers a missing or contradictory exact turn and retries the observation later", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+    notifications.turnSnapshot = {
+      threadStatus: "active",
+      activeTurnIds: ["turn-new"],
+      turn: null,
+    };
+
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:00.000Z"),
+    );
+    expect(taskDispatcher.resumed).toEqual([]);
+    expect(await store.listTaskActivities((await store.findTask(taskId))!.project.id, taskId))
+      .toEqual([]);
+
+    notifications.turnSnapshot = coherentSnapshot(execution.turnId!, "failed");
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:59.999Z"),
+    );
+    expect(notifications.snapshotReads).toHaveLength(1);
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:11:00.000Z"),
+    );
+    expect(notifications.snapshotReads).toHaveLength(2);
+    expect(taskDispatcher.resumed).toHaveLength(1);
+    activityBridge.close();
+  });
+
+  it("does not resume a silent interrupted turn while its project is paused", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    const found = (await store.findTask(taskId))!;
+    await store.saveProject({ ...found.project, scheduling: "paused" });
+    notifications.turnSnapshot = coherentSnapshot(
+      found.task.currentExecution!.turnId!,
+      "interrupted",
+    );
+
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:00.000Z"),
+    );
+
+    expect(taskDispatcher.resumed).toEqual([]);
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: found.task.currentExecution!.attemptId,
+      turnId: found.task.currentExecution!.turnId,
+      status: "running",
+    });
+    activityBridge.close();
+  });
+
+  it("keeps a silent turn stopped when its project no longer has recovery capacity", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const found = (await store.findTask(taskId))!;
+    const [second] = await store.addTasks(found.project.id, [
+      { title: "Second", description: "Second", acceptanceCriteria: [] },
+    ]);
+    await store.saveTask(found.project.id, {
+      ...second!,
+      status: "developing",
+      requestedAction: "develop",
+      currentExecution: {
+        ...found.task.currentExecution!,
+        attemptId: "attempt-second",
+        threadId: "thread-second",
+        turnId: "turn-second",
+      },
+    });
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    notifications.turnSnapshot = coherentSnapshot(
+      found.task.currentExecution!.turnId!,
+      "interrupted",
+    );
+    const suppressed: string[] = [];
+    store.subscribe((event) => {
+      if (event.type === "recovery.execution_suppressed" && event.reason) {
+        suppressed.push(event.reason);
+      }
+    });
+
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:00.000Z"),
+    );
+
+    expect(taskDispatcher.resumed).toEqual([]);
+    expect(suppressed).toContain("project_capacity_unavailable");
+    activityBridge.close();
+  });
+
+  it("requires the repository integration lease before resuming a silent integrate turn", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const found = (await store.findTask(taskId))!;
+    const integrationExecution = {
+      ...found.task.currentExecution!,
+      action: "integrate" as const,
+    };
+    await store.saveTask(found.project.id, {
+      ...found.task,
+      status: "integrating",
+      requestedAction: "integrate",
+      currentExecution: integrationExecution,
+    });
+    const competing = await store.createProject({
+      name: "Competing integration",
+      repositoryPath: found.project.repositoryPath,
+      defaultBranch: "main",
+      productDocument: "# Competing\n",
+      tasks: [{ title: "Integrate", description: "Integrate", acceptanceCriteria: [] }],
+    });
+    await store.saveTask(competing.project.id, {
+      ...competing.tasks[0]!,
+      status: "integrating",
+      requestedAction: "integrate",
+      currentExecution: {
+        ...integrationExecution,
+        attemptId: "attempt-competing",
+        threadId: "thread-competing",
+        turnId: "turn-competing",
+      },
+    });
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    notifications.turnSnapshot = coherentSnapshot(
+      integrationExecution.turnId!,
+      "interrupted",
+    );
+    const suppressed: string[] = [];
+    store.subscribe((event) => {
+      if (event.type === "recovery.execution_suppressed" && event.reason) {
+        suppressed.push(event.reason);
+      }
+    });
+
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:00.000Z"),
+    );
+
+    expect(taskDispatcher.resumed).toEqual([]);
+    expect(suppressed).toContain("repository_integration_unavailable");
+    activityBridge.close();
+  });
+
+  it("allows only one competing silence scan to resume the exact failed turn", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+    notifications.turnSnapshot = coherentSnapshot(execution.turnId!, "failed");
+    const scanAt = new Date("2026-08-03T00:10:00.000Z");
+
+    await Promise.all([
+      silentRecovery.recoverSilentTaskExecutions(scanAt),
+      silentRecovery.recoverSilentTaskExecutions(scanAt),
+    ]);
+
+    expect(notifications.snapshotReads).toHaveLength(1);
+    expect(taskDispatcher.resumed).toHaveLength(1);
+    expect(await store.listTaskActivities((await store.findTask(taskId))!.project.id, taskId))
+      .toEqual([
+        expect.objectContaining({
+          type: "execution_recovered",
+          attemptId: execution.attemptId,
+          threadId: execution.threadId,
+        }),
+      ]);
+    activityBridge.close();
+  });
+
+  it("suppresses recovery when the persisted execution changes after the snapshot read", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    const found = (await store.findTask(taskId))!;
+    const execution = found.task.currentExecution!;
+    notifications.turnSnapshot = coherentSnapshot(execution.turnId!, "interrupted");
+    notifications.beforeSnapshotReturn = async () => {
+      notifications.beforeSnapshotReturn = undefined;
+      await store.saveTask(found.project.id, {
+        ...found.task,
+        currentExecution: {
+          ...execution,
+          turnId: "turn-new",
+          turnStartedAt: "2026-08-03T00:09:59.000Z",
+        },
+      });
+    };
+
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:00.000Z"),
+    );
+
+    expect(taskDispatcher.resumed).toEqual([]);
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      turnId: "turn-new",
+      status: "running",
+    });
+    activityBridge.close();
+  });
+
+  it("keeps the original turn identity when the conversation becomes active before recovery dispatch", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+    notifications.turnSnapshot = coherentSnapshot(execution.turnId!, "interrupted");
+    taskDispatcher.conversationActive = true;
+
+    await silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:00.000Z"),
+    );
+
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      status: execution.status,
+      threadId: execution.threadId,
+      turnId: execution.turnId,
+    });
+    expect(await store.listTaskActivities((await store.findTask(taskId))!.project.id, taskId))
+      .toEqual([]);
+    activityBridge.close();
+  });
+
+  it("does not let the legacy lease scan bypass an uncertain exact-turn snapshot", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    notifications.turnStatus = "interrupted";
+    notifications.turnSnapshot = {
+      threadStatus: "active",
+      activeTurnIds: ["turn-unknown"],
+      turn: null,
+    };
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+
+    await silentRecovery.recoverUnattendedWork(
+      new Date("2026-08-03T07:00:00.000Z"),
+    );
+
+    expect(taskDispatcher.resumed).toEqual([]);
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      turnId: execution.turnId,
+      status: execution.status,
+    });
+    activityBridge.close();
+  });
+
+  it("does not resume an in-flight silence check after the service stops", async () => {
+    const observedAt = new Date("2026-08-03T00:00:00.000Z");
+    const activityBridge = new ExecutionActivityBridge({
+      store,
+      codex: notifications,
+      now: () => observedAt,
+    });
+    await activityBridge.initialize(observedAt);
+    const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+    notifications.turnSnapshot = coherentSnapshot(execution.turnId!, "interrupted");
+    let releaseSnapshot!: () => void;
+    let markSnapshotStarted!: () => void;
+    const snapshotStarted = new Promise<void>((resolve) => {
+      markSnapshotStarted = resolve;
+    });
+    notifications.beforeSnapshotReturn = async () => {
+      markSnapshotStarted();
+      await new Promise<void>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+    };
+
+    const recoveryCheck = silentRecovery.recoverSilentTaskExecutions(
+      new Date("2026-08-03T00:10:00.000Z"),
+    );
+    await snapshotStarted;
+    silentRecovery.stop();
+    releaseSnapshot();
+    await recoveryCheck;
+
+    expect(taskDispatcher.resumed).toEqual([]);
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      turnId: execution.turnId,
+      status: execution.status,
+    });
+    activityBridge.close();
   });
 
   it("renews an expired lease while the App Server turn is active", async () => {
@@ -1160,6 +1643,9 @@ describe("RecoveryManager", () => {
       expect(projectExecutor.started[0]?.project.requestedAction).toBe(
         "select_tasks",
       );
+      timedRecovery.stop();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(periodicCheck).toHaveBeenCalledTimes(1);
     } finally {
       timedRecovery.stop();
       vi.useRealTimers();
@@ -1247,3 +1733,14 @@ describe("RecoveryManager", () => {
     expect(projectExecutor.started).toHaveLength(0);
   });
 });
+
+function coherentSnapshot(
+  turnId: string,
+  status: CodexTurnStatus,
+): CodexTurnSnapshot {
+  return {
+    threadStatus: status === "inProgress" ? "active" : "idle",
+    activeTurnIds: status === "inProgress" ? [turnId] : [],
+    turn: { id: turnId, status, items: [] },
+  };
+}

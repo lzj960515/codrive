@@ -21,6 +21,7 @@ import type {
   ProjectSnapshot,
   Task,
   TaskActivity,
+  TaskExecutionIdentity,
   TaskReport,
   LifecycleEventSource,
   ModelRoutingSettings,
@@ -62,6 +63,12 @@ export interface WorkflowEngineOptions {
   executionLeaseMs?: number;
   now?: () => string;
   createId?: (prefix: string) => string;
+}
+
+interface TaskTurnRecovery {
+  resumePersistedThread: true;
+  recoveredTurnId?: string;
+  previousTask?: Task;
 }
 
 const activeExecutionStatuses = new Set([
@@ -727,6 +734,20 @@ export class WorkflowEngine {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
       if (!found.task.requestedAction) return found.task;
+      if (
+        found.project.status !== "active" ||
+        found.project.scheduling !== "running"
+      ) {
+        await this.recordRecoverySuppressed(
+          found.project.id,
+          found.task,
+          expectedAttemptId,
+          found.project.scheduling !== "running"
+            ? "project_paused"
+            : "project_not_active",
+        );
+        return found.task;
+      }
       const execution = found.task.currentExecution;
       if (!execution || execution.attemptId !== expectedAttemptId) {
         await this.recordRecoverySuppressed(
@@ -771,28 +792,61 @@ export class WorkflowEngine {
     });
   }
 
-  resumeTaskAfterInterruption(
-    taskId: string,
-    expectedAttemptId: string,
-  ): Promise<Task> {
+  resumeTaskAfterInterruption(target: TaskExecutionIdentity): Promise<Task> {
     return this.enqueue(async () => {
-      const found = await this.requireTask(taskId);
-      if (found.task.currentExecution?.attemptId !== expectedAttemptId) {
+      const found = await this.requireTask(target.taskId);
+      const execution = found.task.currentExecution;
+      if (!matchesRecoveryTarget(found.project.id, found.task, target)) {
         await this.recordRecoverySuppressed(
           found.project.id,
           found.task,
-          expectedAttemptId,
+          target.attemptId,
           "execution_changed",
         );
         return found.task;
       }
-      const execution = found.task.currentExecution;
-      if (!found.task.requestedAction) {
+      if (
+        found.project.status !== "active" ||
+        found.project.scheduling !== "running" ||
+        found.task.status === "blocked" ||
+        !found.task.requestedAction
+      ) {
         await this.recordRecoverySuppressed(
           found.project.id,
           found.task,
-          expectedAttemptId,
-          "task_no_longer_active",
+          target.attemptId,
+          found.project.scheduling !== "running"
+            ? "project_paused"
+            : "task_no_longer_active",
+        );
+        return found.task;
+      }
+      const snapshots = await this.store.listProjects();
+      const snapshot = snapshots.find(
+        ({ project }) => project.id === found.project.id,
+      );
+      if (
+        !snapshot ||
+        countActiveTasks(snapshot.tasks) >
+          projectConcurrencyLimit(found.project, this.maxConcurrentTasks)
+      ) {
+        await this.recordRecoverySuppressed(
+          found.project.id,
+          found.task,
+          target.attemptId,
+          "project_capacity_unavailable",
+        );
+        return found.task;
+      }
+      if (
+        execution!.action === "integrate" &&
+        hasCompetingIntegrationLease(snapshots, found.project, found.task.id)
+      ) {
+        await this.recordRecoverySuppressed(
+          found.project.id,
+          found.task,
+          target.attemptId,
+          "repository_integration_unavailable",
         );
         return found.task;
       }
@@ -825,21 +879,10 @@ export class WorkflowEngine {
       delete pending.currentExecution?.turnStartedAt;
       delete pending.currentExecution?.turnCompletedAt;
       delete pending.currentExecution?.finishedAt;
-      await this.store.saveTask(found.project.id, pending);
-      await this.recordEvent({
-        type: "task.execution_recovery_started",
-        projectId: found.project.id,
-        taskId,
-        attemptId: execution.attemptId,
-        threadId: execution.threadId,
-        ...(execution.turnId ? { turnId: execution.turnId } : {}),
-        before: taskLifecycleState(found.task),
-        after: taskLifecycleState(pending),
-        data: { action: execution.action },
-      });
       const recovery = {
         resumePersistedThread: true,
         ...(execution.turnId ? { recoveredTurnId: execution.turnId } : {}),
+        previousTask: found.task,
       } as const;
       return execution.reportReminderCount
         ? this.continueTaskReportRequest(found.project, pending, recovery)
@@ -1666,7 +1709,7 @@ export class WorkflowEngine {
   private async continueTaskDispatch(
     project: Project,
     task: Task,
-    recovery?: { resumePersistedThread: true; recoveredTurnId?: string },
+    recovery?: TaskTurnRecovery,
   ): Promise<Task> {
     const execution = task.currentExecution!;
     const taskForTurn = this.prepareTaskForTurn(task);
@@ -1708,7 +1751,11 @@ export class WorkflowEngine {
         { ...request, task: withThread },
         threadId,
       );
-      if (dispatch.status === "conversation_active") return withThread;
+      if (dispatch.status === "conversation_active") {
+        return recovery?.previousTask
+          ? this.restoreTaskAfterRecoveryRace(project, recovery.previousTask)
+          : withThread;
+      }
 
       const turnId = dispatch.turnId;
       const turnStartedAt = this.now();
@@ -1724,6 +1771,9 @@ export class WorkflowEngine {
         updatedAt: turnStartedAt,
       };
       await this.store.saveTask(project.id, running);
+      if (recovery?.previousTask) {
+        await this.recordTaskRecoveryStarted(project, recovery.previousTask, running);
+      }
       await this.recordEvent({
         type: "turn.started",
         projectId: project.id,
@@ -1792,7 +1842,7 @@ export class WorkflowEngine {
   private async continueTaskReportRequest(
     project: Project,
     task: Task,
-    recovery?: { resumePersistedThread: true; recoveredTurnId?: string },
+    recovery?: TaskTurnRecovery,
   ): Promise<Task> {
     const execution = task.currentExecution!;
     try {
@@ -1808,7 +1858,11 @@ export class WorkflowEngine {
         request,
         execution.threadId!,
       );
-      if (dispatch.status === "conversation_active") return taskForTurn;
+      if (dispatch.status === "conversation_active") {
+        return recovery?.previousTask
+          ? this.restoreTaskAfterRecoveryRace(project, recovery.previousTask)
+          : taskForTurn;
+      }
 
       const turnStartedAt = this.now();
       const reminded: Task = {
@@ -1824,6 +1878,9 @@ export class WorkflowEngine {
       };
       delete reminded.currentExecution?.turnCompletedAt;
       await this.store.saveTask(project.id, reminded);
+      if (recovery?.previousTask) {
+        await this.recordTaskRecoveryStarted(project, recovery.previousTask, reminded);
+      }
       await this.recordEvent({
         type: "turn.started",
         projectId: project.id,
@@ -1882,6 +1939,39 @@ export class WorkflowEngine {
       "服务中断后已在原任务对话中恢复执行。",
       occurredAt,
     );
+  }
+
+  private async recordTaskRecoveryStarted(
+    project: Project,
+    previousTask: Task,
+    recoveredTask: Task,
+  ): Promise<void> {
+    const execution = previousTask.currentExecution!;
+    await this.recordEvent({
+      type: "task.execution_recovery_started",
+      projectId: project.id,
+      taskId: previousTask.id,
+      attemptId: execution.attemptId,
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      ...(execution.turnId ? { turnId: execution.turnId } : {}),
+      before: taskLifecycleState(previousTask),
+      after: taskLifecycleState(recoveredTask),
+      data: { action: execution.action },
+    });
+  }
+
+  private async restoreTaskAfterRecoveryRace(
+    project: Project,
+    previousTask: Task,
+  ): Promise<Task> {
+    await this.store.saveTask(project.id, previousTask);
+    await this.recordRecoverySuppressed(
+      project.id,
+      previousTask,
+      previousTask.currentExecution!.attemptId,
+      "conversation_became_active",
+    );
+    return previousTask;
   }
 
   private async finalizeTaskReport(
@@ -2487,6 +2577,42 @@ function hasActiveTaskExecution(task: Task): boolean {
   return task.currentExecution
     ? activeExecutionStatuses.has(task.currentExecution.status)
     : false;
+}
+
+function matchesRecoveryTarget(
+  projectId: string,
+  task: Task,
+  target: TaskExecutionIdentity,
+): boolean {
+  const execution = task.currentExecution;
+  return Boolean(
+    projectId === target.projectId &&
+      task.id === target.taskId &&
+      task.requestedAction === target.action &&
+      execution?.action === target.action &&
+      execution.attemptId === target.attemptId &&
+      execution.status === target.executionStatus &&
+      execution.threadId === target.threadId &&
+      execution.turnId === target.turnId &&
+      inFlightExecutionStatuses.has(execution.status),
+  );
+}
+
+function hasCompetingIntegrationLease(
+  snapshots: ProjectSnapshot[],
+  project: Project,
+  taskId: string,
+): boolean {
+  const repository = resolve(project.repositoryPath);
+  return snapshots.some(({ project: candidateProject, tasks }) =>
+    resolve(candidateProject.repositoryPath) === repository &&
+    tasks.some(
+      (task) =>
+        (candidateProject.id !== project.id || task.id !== taskId) &&
+        task.currentExecution?.action === "integrate" &&
+        integrationLeaseStatuses.has(task.currentExecution.status),
+    ),
+  );
 }
 
 function hasOngoingTaskExecution(task: Task): boolean {

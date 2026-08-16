@@ -1,6 +1,17 @@
 import type { WorkflowEngine } from "./workflow-engine.js";
-import type { CodexTurnStatus } from "./codex-gateway.js";
-import type { ProjectExecution, TaskExecution } from "../domain/types.js";
+import type {
+  CodexTurnSnapshot,
+  CodexTurnStatus,
+} from "./codex-gateway.js";
+import type {
+  ExecutionActivityBridge,
+  ExecutionSilenceClaim,
+} from "./execution-activity-bridge.js";
+import type {
+  ProjectExecution,
+  TaskExecution,
+  TaskExecutionIdentity,
+} from "../domain/types.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
 import type { JsonRpcNotification } from "../infrastructure/json-rpc-connection.js";
 
@@ -9,12 +20,35 @@ interface TurnObservation {
   error?: string;
 }
 
+interface SilentTurnInspection {
+  decision: "complete" | "keep_running" | "defer" | "recover";
+  result: string;
+  reason?: string;
+}
+
 export interface NotificationSource {
   onNotification(listener: (notification: JsonRpcNotification) => void): () => void;
   readTurnStatus(
     threadId: string,
     turnId: string,
   ): Promise<CodexTurnStatus | null>;
+  readTurnSnapshot(
+    threadId: string,
+    turnId: string,
+  ): Promise<CodexTurnSnapshot>;
+}
+
+export interface RecoveryManagerOptions {
+  activityBridge?: Pick<
+    ExecutionActivityBridge,
+    | "initialize"
+    | "claimSilentExecutions"
+    | "isSilenceClaimCurrent"
+    | "finishSilenceCheck"
+  >;
+  now?: () => Date;
+  scanIntervalMs?: number;
+  silenceThresholdMs?: number;
 }
 
 const retryScheduleEventTypes = new Set([
@@ -37,6 +71,8 @@ const workflowNotificationMethods = new Set([
   "turn/completed",
 ]);
 const maximumTimerDelayMs = 2_147_483_647;
+const defaultScanIntervalMs = 60_000;
+const defaultSilenceThresholdMs = 10 * 60_000;
 
 export class RecoveryManager {
   private unsubscribe: (() => void) | null = null;
@@ -44,22 +80,37 @@ export class RecoveryManager {
   private leaseTimer: NodeJS.Timeout | null = null;
   private retryTimer: NodeJS.Timeout | null = null;
   private retryScheduleGeneration = 0;
+  private readonly now: () => Date;
+  private readonly scanIntervalMs: number;
+  private readonly silenceThresholdMs: number;
+  private stopped = false;
 
   constructor(
     private readonly store: ProjectStore,
     private readonly workflow: WorkflowEngine,
     private readonly notifications: NotificationSource,
-  ) {}
+    private readonly options: RecoveryManagerOptions = {},
+  ) {
+    this.now = options.now ?? (() => new Date());
+    this.scanIntervalMs = options.scanIntervalMs ?? defaultScanIntervalMs;
+    this.silenceThresholdMs =
+      options.silenceThresholdMs ?? defaultSilenceThresholdMs;
+  }
 
   async start(): Promise<void> {
+    this.stopped = false;
     this.unsubscribe = this.notifications.onNotification((notification) => {
       void this.handleNotification(notification);
     });
     this.unsubscribeStore = this.store.subscribe((event) => {
       if (changesRetrySchedule(event.type)) void this.scheduleRetryWakeup();
     });
-    await this.recoverInterruptedExecutions();
-    await this.workflow.resumeScheduledTasks(new Date(), undefined, true);
+    const startedAt = this.now();
+    await this.options.activityBridge?.initialize(startedAt);
+    await this.recoverInterruptedExecutions(
+      this.options.activityBridge !== undefined,
+    );
+    await this.workflow.resumeScheduledTasks(startedAt, undefined, true);
     await this.workflow.lifecycle.run(
       {
         source: "recovery",
@@ -70,12 +121,13 @@ export class RecoveryManager {
     );
     await this.scheduleRetryWakeup();
     this.leaseTimer = setInterval(async () => {
-      await this.recoverUnattendedWork();
-    }, 60_000);
+      await this.recoverUnattendedWork(this.now());
+    }, this.scanIntervalMs);
     this.leaseTimer.unref();
   }
 
   stop(): void {
+    this.stopped = true;
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.unsubscribeStore?.();
@@ -105,7 +157,10 @@ export class RecoveryManager {
           },
           async () => {
             if (notification.method === "transport/disconnected") {
-              await this.recoverInterruptedExecutions();
+              await this.options.activityBridge?.initialize(this.now());
+              await this.recoverInterruptedExecutions(
+                this.options.activityBridge !== undefined,
+              );
               return;
             }
             if (notification.method === "thread/status/changed") {
@@ -116,7 +171,7 @@ export class RecoveryManager {
               if (params.threadId && params.status?.type === "idle") {
                 await this.recoverDeferredTaskTurns(params.threadId);
                 await this.workflow.resumeScheduledTasks(
-                  new Date(),
+                  this.now(),
                   params.threadId,
                 );
               }
@@ -130,7 +185,9 @@ export class RecoveryManager {
     );
   }
 
-  async recoverInterruptedExecutions(): Promise<void> {
+  async recoverInterruptedExecutions(
+    preserveObservedTaskTurns = false,
+  ): Promise<void> {
     const correlationId = this.workflow.lifecycle.id("recovery_scan");
     await this.workflow.lifecycle.run(
       { source: "recovery", component: "recovery", correlationId },
@@ -141,7 +198,12 @@ export class RecoveryManager {
         });
         const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
         for (const snapshot of await this.store.listProjects()) {
-          if (snapshot.project.status === "cancelled") continue;
+          if (
+            snapshot.project.status !== "active" ||
+            snapshot.project.scheduling !== "running"
+          ) {
+            continue;
+          }
           const projectExecution = snapshot.project.currentExecution;
           if (projectExecution && activeStatuses.has(projectExecution.status)) {
             await this.recoverInterruptedProject(
@@ -158,6 +220,14 @@ export class RecoveryManager {
             ) {
               continue;
             }
+            if (
+              preserveObservedTaskTurns &&
+              execution.threadId &&
+              execution.turnId &&
+              !isDeferredTaskTurn(execution)
+            ) {
+              continue;
+            }
             await this.recoverInterruptedTask(snapshot.project.id, task.id, execution);
           }
         }
@@ -169,13 +239,19 @@ export class RecoveryManager {
     );
   }
 
-  async recoverExpiredExecutions(now = new Date()): Promise<void> {
+  async recoverExpiredExecutions(now = this.now()): Promise<void> {
     const correlationId = this.workflow.lifecycle.id("recovery_scan");
     await this.workflow.lifecycle.run(
       { source: "recovery", component: "recovery", correlationId },
       async () => {
         const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
         for (const snapshot of await this.store.listProjects()) {
+          if (
+            snapshot.project.status !== "active" ||
+            snapshot.project.scheduling !== "running"
+          ) {
+            continue;
+          }
           const projectExecution = snapshot.project.currentExecution;
           if (
             projectExecution &&
@@ -188,13 +264,15 @@ export class RecoveryManager {
             );
           }
 
-          if (snapshot.project.status === "cancelled") continue;
           for (const task of snapshot.tasks) {
             const execution = task.currentExecution;
             if (
               !execution ||
               !activeStatuses.has(execution.status) ||
               isDeferredTaskTurn(execution) ||
+              (this.options.activityBridge !== undefined &&
+                execution.threadId !== undefined &&
+                execution.turnId !== undefined) ||
               !isExpired(execution.leaseExpiresAt, now)
             ) {
               continue;
@@ -210,10 +288,11 @@ export class RecoveryManager {
     );
   }
 
-  async recoverUnattendedWork(now = new Date()): Promise<void> {
+  async recoverUnattendedWork(now = this.now()): Promise<void> {
     await this.workflow.resetStableModelCapacityFailures(now);
     await this.workflow.resumeScheduledTasks(now, undefined, true);
     await this.recoverDeferredTaskTurns();
+    await this.recoverSilentTaskExecutions(now);
     await this.recoverExpiredExecutions(now);
     await this.workflow.lifecycle.run(
       {
@@ -226,7 +305,20 @@ export class RecoveryManager {
     await this.scheduleRetryWakeup(now);
   }
 
-  private async scheduleRetryWakeup(now = new Date()): Promise<void> {
+  async recoverSilentTaskExecutions(now = this.now()): Promise<void> {
+    if (this.stopped) return;
+    const activityBridge = this.options.activityBridge;
+    if (!activityBridge) return;
+    const claims = activityBridge.claimSilentExecutions(
+      now,
+      this.silenceThresholdMs,
+    );
+    for (const claim of claims) {
+      await this.verifySilentTaskExecution(claim, now);
+    }
+  }
+
+  private async scheduleRetryWakeup(now = this.now()): Promise<void> {
     const generation = ++this.retryScheduleGeneration;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
@@ -263,7 +355,7 @@ export class RecoveryManager {
     this.retryTimer = setTimeout(async () => {
       if (generation !== this.retryScheduleGeneration) return;
       this.retryTimer = null;
-      const wakeupTime = new Date();
+      const wakeupTime = this.now();
       await this.workflow.retryScheduledExecutions(wakeupTime);
       await this.workflow.resumeScheduledTasks(wakeupTime);
       if (generation === this.retryScheduleGeneration) {
@@ -279,7 +371,12 @@ export class RecoveryManager {
       { source: "recovery", component: "recovery", correlationId },
       async () => {
         for (const snapshot of await this.store.listProjects()) {
-          if (snapshot.project.status === "cancelled") continue;
+          if (
+            snapshot.project.status !== "active" ||
+            snapshot.project.scheduling !== "running"
+          ) {
+            continue;
+          }
           for (const task of snapshot.tasks) {
             const execution = task.currentExecution;
             if (
@@ -357,8 +454,7 @@ export class RecoveryManager {
               )
             : params.turn?.status === "interrupted"
               ? this.workflow.resumeTaskAfterInterruption(
-                  found.task.id,
-                  taskExecution.attemptId,
+                  taskRecoveryTarget(found.project.id, found.task.id, taskExecution),
                 )
             : this.workflow.failTurn(
                 found.task.id,
@@ -517,8 +613,7 @@ export class RecoveryManager {
           await this.workflow.renewTaskLease(taskId, execution.attemptId);
         } else {
           await this.workflow.resumeTaskAfterInterruption(
-            taskId,
-            execution.attemptId,
+            taskRecoveryTarget(projectId, taskId, execution),
           );
         }
       },
@@ -532,13 +627,18 @@ export class RecoveryManager {
     decision,
     result,
     reason,
+    diagnostics,
   }: {
     projectId: string;
     taskId?: string;
-    execution: ProjectExecution | TaskExecution;
+    execution: Pick<
+      ProjectExecution | TaskExecution,
+      "action" | "attemptId" | "status" | "threadId" | "turnId"
+    >;
     decision: string;
     result: string;
     reason?: string;
+    diagnostics?: Record<string, unknown>;
   }) {
     return this.workflow.lifecycle.record({
       type: "recovery.execution_observed",
@@ -550,7 +650,11 @@ export class RecoveryManager {
       decision,
       result,
       ...(reason ? { reason } : {}),
-      data: { action: execution.action, executionStatus: execution.status },
+      data: {
+        action: execution.action,
+        executionStatus: execution.status,
+        ...diagnostics,
+      },
     });
   }
 
@@ -568,6 +672,104 @@ export class RecoveryManager {
         status: null,
         error: error instanceof Error ? error.message : String(error),
       };
+    }
+  }
+
+  private async verifySilentTaskExecution(
+    claim: ExecutionSilenceClaim,
+    observedAt: Date,
+  ): Promise<void> {
+    const activityBridge = this.options.activityBridge!;
+    const { snapshot, readError } = await this.readSilentTurn(claim);
+    const observation = inspectSilentTurn(snapshot, claim.turnId, readError);
+    try {
+      if (this.stopped) return;
+      const recorded = await this.recordSilentTurnObservation(
+        claim,
+        observation,
+        snapshot,
+      );
+      await this.workflow.lifecycle.run(
+        { source: "recovery", component: "recovery", causationId: recorded.eventId },
+        () => this.applySilentTurnDecision(claim, observation),
+      );
+    } finally {
+      activityBridge.finishSilenceCheck(
+        claim,
+        observation.decision === "keep_running"
+          ? { observedAt }
+          : { retryAt: new Date(observedAt.getTime() + this.scanIntervalMs) },
+      );
+    }
+  }
+
+  private async readSilentTurn(
+    claim: ExecutionSilenceClaim,
+  ): Promise<{ snapshot: CodexTurnSnapshot | null; readError?: string }> {
+    try {
+      return {
+        snapshot: await this.notifications.readTurnSnapshot(
+          claim.threadId,
+          claim.turnId,
+        ),
+      };
+    } catch (error) {
+      return {
+        snapshot: null,
+        readError: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private recordSilentTurnObservation(
+    claim: ExecutionSilenceClaim,
+    observation: SilentTurnInspection,
+    snapshot: CodexTurnSnapshot | null,
+  ) {
+    return this.recordExecutionObservation({
+      projectId: claim.projectId,
+      taskId: claim.taskId,
+      execution: {
+        action: claim.action,
+        attemptId: claim.attemptId,
+        status: claim.executionStatus,
+        threadId: claim.threadId,
+        turnId: claim.turnId,
+      },
+      decision: observation.decision,
+      result: observation.result,
+      ...(observation.reason ? { reason: observation.reason } : {}),
+      ...(snapshot
+        ? {
+            diagnostics: {
+              threadStatus: snapshot.threadStatus,
+              activeTurnIds: snapshot.activeTurnIds,
+              turnStatus: snapshot.turn?.status ?? null,
+              itemStates: snapshot.turn?.items ?? [],
+            },
+          }
+        : {}),
+    });
+  }
+
+  private async applySilentTurnDecision(
+    claim: ExecutionSilenceClaim,
+    observation: SilentTurnInspection,
+  ): Promise<void> {
+    if (
+      this.stopped ||
+      !this.options.activityBridge!.isSilenceClaimCurrent(claim)
+    ) {
+      return;
+    }
+    if (observation.decision === "complete") {
+      await this.workflow.completeTurn(
+        claim.taskId,
+        claim.attemptId,
+        claim.turnId,
+      );
+    } else if (observation.decision === "recover") {
+      await this.workflow.resumeTaskAfterInterruption(claim);
     }
   }
 }
@@ -589,8 +791,67 @@ function recoveryDecision(
 ): "complete" | "keep_running" | "defer" | "recover" {
   if (observation.status === "completed") return "complete";
   if (observation.status === "inProgress") return "keep_running";
-  if (observation.error) return "defer";
+  if (observation.error || observation.status === null) return "defer";
   return "recover";
+}
+
+function inspectSilentTurn(
+  snapshot: CodexTurnSnapshot | null,
+  turnId: string,
+  readError?: string,
+): SilentTurnInspection {
+  if (readError) {
+    return { decision: "defer", result: "read_failed", reason: readError };
+  }
+  if (!snapshot?.turn) {
+    return { decision: "defer", result: "missing", reason: "exact_turn_missing" };
+  }
+  const turn = snapshot.turn;
+  const coherentRunning =
+    turn.id === turnId &&
+    turn.status === "inProgress" &&
+    snapshot.threadStatus === "active" &&
+    snapshot.activeTurnIds.length === 1 &&
+    snapshot.activeTurnIds[0] === turnId;
+  if (turn.status === "inProgress") {
+    return coherentRunning
+      ? { decision: "keep_running", result: "inProgress" }
+      : {
+          decision: "defer",
+          result: "inconsistent",
+          reason: "thread_turn_state_conflict",
+        };
+  }
+  if (
+    turn.id !== turnId ||
+    snapshot.threadStatus !== "idle" ||
+    snapshot.activeTurnIds.length > 0
+  ) {
+    return {
+      decision: "defer",
+      result: "inconsistent",
+      reason: "thread_turn_state_conflict",
+    };
+  }
+  return turn.status === "completed"
+    ? { decision: "complete", result: turn.status }
+    : { decision: "recover", result: turn.status };
+}
+
+function taskRecoveryTarget(
+  projectId: string,
+  taskId: string,
+  execution: TaskExecution,
+): TaskExecutionIdentity {
+  return {
+    projectId,
+    taskId,
+    action: execution.action,
+    attemptId: execution.attemptId,
+    executionStatus: execution.status,
+    threadId: execution.threadId!,
+    turnId: execution.turnId!,
+  };
 }
 
 function changesRetrySchedule(type: string): boolean {

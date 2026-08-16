@@ -161,7 +161,9 @@ export class CodriveServer {
         await this.configStore.save(this.config);
       }
 
-      this.recovery = new RecoveryManager(store, workflow, this.codex);
+      this.recovery = new RecoveryManager(store, workflow, this.codex, {
+        activityBridge: this.activityBridge,
+      });
       await this.recovery.start();
       this.ready = true;
       await this.versionChecks.start();

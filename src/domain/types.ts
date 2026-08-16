@@ -189,6 +189,16 @@ export interface TaskExecution {
   leaseExpiresAt?: string;
 }
 
+export interface TaskExecutionIdentity {
+  projectId: string;
+  taskId: string;
+  action: TaskAction;
+  attemptId: string;
+  executionStatus: ExecutionStatus;
+  threadId: string;
+  turnId: string;
+}
+
 export type TaskReportOutcome =
   | "completed"
   | "approved"
