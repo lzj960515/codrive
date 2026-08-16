@@ -38,6 +38,9 @@ describe("Codrive state migration", () => {
       status: "waiting_for_input",
       submittedActivityId: "activity_report_2",
     });
+    expect(snapshot?.tasks[0]?.currentExecution).not.toHaveProperty(
+      "reportOpportunityId",
+    );
     expect(activities.map(({ type }) => type)).toEqual([
       "decision_requested",
       "development_completed",
@@ -46,6 +49,7 @@ describe("Codrive state migration", () => {
       "attempt_1",
       "attempt_1",
     ]);
+    expect(activities.every((activity) => !activity.reportOpportunityId)).toBe(true);
     expect(
       (await store.listTaskActivities("project_1", "task_2")).map(({ type }) => type),
     ).toEqual(["cancelled"]);

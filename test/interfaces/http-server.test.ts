@@ -232,6 +232,8 @@ describe("HTTP API", () => {
     expect(taskContext.statusCode).toBe(200);
     expect(taskContext.json()).toMatchObject({
       taskId,
+      attemptId: null,
+      reportOpportunityId: null,
       status: "backlog",
       requestedAction: null,
       cancellation: null,
@@ -878,14 +880,50 @@ describe("HTTP API", () => {
     expect(continued.json().currentExecution).toMatchObject({
       attemptId: execution.attemptId,
       status: "running",
+      reportOpportunityId: expect.any(String),
     });
 
     const resumedTurnId = continued.json().currentExecution.turnId as string;
+    const reportOpportunityId = continued.json().currentExecution
+      .reportOpportunityId as string;
+    const resumedContext = await server.inject({
+      method: "GET",
+      url: `/api/contexts/tasks/${task.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    expect(resumedContext.json()).toMatchObject({
+      attemptId: execution.attemptId,
+      reportOpportunityId,
+    });
+    const replayedBlocked = await skillCommand({
+      type: "task.report",
+      payload: {
+        taskId: task.id,
+        attemptId: execution.attemptId,
+        outcome: "blocked",
+        summary: "Wait for the remote build",
+        resumeAt,
+        resumePrompt,
+      },
+    });
+    expect(replayedBlocked.statusCode).toBe(409);
+    const missingOpportunity = await skillCommand({
+      type: "task.report",
+      payload: {
+        taskId: task.id,
+        attemptId: execution.attemptId,
+        outcome: "needs_input",
+        summary: "The resumed work needs one product decision",
+        question: "Keep the compatibility mode?",
+      },
+    });
+    expect(missingOpportunity.statusCode).toBe(409);
     const decision = await skillCommand({
       type: "task.report",
       payload: {
         taskId: task.id,
         attemptId: execution.attemptId,
+        reportOpportunityId,
         outcome: "needs_input",
         summary: "The resumed work needs one product decision",
         question: "Keep the compatibility mode?",

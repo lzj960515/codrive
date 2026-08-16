@@ -54,6 +54,7 @@ const projectInputSchema = z.object({
 const taskReportSchema = z.object({
   taskId: z.string().min(1),
   attemptId: z.string().min(1),
+  reportOpportunityId: z.string().min(1).optional(),
   outcome: z.enum([
     "completed",
     "approved",
@@ -398,6 +399,7 @@ async function taskContext(
     taskId: task.id,
     projectId: project.id,
     attemptId: task.currentExecution?.attemptId ?? null,
+    reportOpportunityId: task.currentExecution?.reportOpportunityId ?? null,
     status: task.status,
     requestedAction: task.requestedAction,
     cancellation: task.cancellation ?? null,

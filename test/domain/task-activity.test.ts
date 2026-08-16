@@ -45,6 +45,7 @@ describe("task activities", () => {
     const report: TaskReport = {
       taskId,
       attemptId: "attempt_1",
+      reportOpportunityId: "report_opportunity_1",
       outcome: "completed",
       summary: "Implemented the complete flow",
       workspacePath: "/workspace/.worktrees/task_1",
@@ -55,6 +56,7 @@ describe("task activities", () => {
 
     const activity = createActivity("develop", report);
 
+    expect(activity.reportOpportunityId).toBe("report_opportunity_1");
     expect(activity.evidence).toEqual({
       workspacePath: "/workspace/.worktrees/task_1",
       baseCommit: "base_1",

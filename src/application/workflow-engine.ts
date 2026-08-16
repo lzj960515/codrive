@@ -405,14 +405,25 @@ export class WorkflowEngine {
         found.project.id,
         report.taskId,
       );
+      if (
+        execution?.attemptId === report.attemptId &&
+        !reportMatchesExecutionOpportunity(execution, report)
+      ) {
+        throw new WorkflowConflictError(
+          `Report opportunity does not match the current execution for ${report.taskId}`,
+        );
+      }
       const previousActivity = reportActivityForIdempotency(
         activities,
         execution,
-        report.attemptId,
+        report,
       );
       if (previousActivity) {
         if (taskActivityMatchesReport(previousActivity, report)) return found.task;
-        if (execution?.status !== "waiting_for_input") {
+        if (
+          execution?.status !== "waiting_for_input" ||
+          execution.reportOpportunityId !== undefined
+        ) {
           throw new WorkflowConflictError(
             `Report conflicts with the recorded result for ${report.taskId}`,
           );
@@ -1302,7 +1313,11 @@ export class WorkflowEngine {
     const threadId = waitingExecution.threadId;
 
     try {
-      const taskForTurn = this.prepareTaskForTurn(task);
+      const taskForTurn = this.prepareTaskForTurn(task, {
+        rotateReportOpportunity:
+          waitingExecution.submittedActivityId !== undefined ||
+          waitingExecution.reportOpportunityId === undefined,
+      });
       const execution = taskForTurn.currentExecution!;
       if (taskForTurn !== task) {
         await this.store.saveTask(project.id, taskForTurn);
@@ -1350,7 +1365,6 @@ export class WorkflowEngine {
         }),
         updatedAt: turnStartedAt,
       };
-      delete running.currentExecution?.submittedActivityId;
       delete running.currentExecution?.turnCompletedAt;
       delete running.currentExecution?.finishedAt;
       await this.store.saveTask(project.id, running);
@@ -1651,6 +1665,9 @@ export class WorkflowEngine {
   ): Promise<Task> {
     const execution = task.currentExecution!;
     const taskForTurn = this.prepareTaskForTurn(task);
+    if (taskForTurn !== task) {
+      await this.store.saveTask(project.id, taskForTurn);
+    }
     const request = await this.taskDispatchRequest(project, taskForTurn);
     try {
       let withThread = taskForTurn;
@@ -1775,6 +1792,9 @@ export class WorkflowEngine {
     const execution = task.currentExecution!;
     try {
       const taskForTurn = this.prepareTaskForTurn(task);
+      if (taskForTurn !== task) {
+        await this.store.saveTask(project.id, taskForTurn);
+      }
       const request = await this.taskDispatchRequest(project, taskForTurn);
       if (recovery?.resumePersistedThread) {
         await this.dispatcher.resumeThread(request, execution.threadId!);
@@ -1783,7 +1803,7 @@ export class WorkflowEngine {
         request,
         execution.threadId!,
       );
-      if (dispatch.status === "conversation_active") return task;
+      if (dispatch.status === "conversation_active") return taskForTurn;
 
       const turnStartedAt = this.now();
       const reminded: Task = {
@@ -1865,12 +1885,15 @@ export class WorkflowEngine {
     report: TaskReport,
     reportSubmittedAt: string,
   ): Promise<Task> {
-    const completed = applyTaskReport(
+    let completed = applyTaskReport(
       task,
       report,
       this.now(),
       reportSubmittedAt,
     );
+    if (completed.currentExecution?.status === "waiting_for_input") {
+      completed = this.rotateReportOpportunity(completed);
+    }
     await this.store.saveTask(project.id, completed);
     await this.recordEvent({
       type: eventForTask(completed),
@@ -2196,7 +2219,10 @@ export class WorkflowEngine {
     };
   }
 
-  private prepareTaskForTurn(task: Task): Task {
+  private prepareTaskForTurn(
+    task: Task,
+    options: { rotateReportOpportunity?: boolean } = {},
+  ): Task {
     const execution = task.currentExecution!;
     const now = this.now();
     const modelRouting = prepareModelRoutingForTurn(
@@ -2205,13 +2231,36 @@ export class WorkflowEngine {
       new Date(now),
       this.modelPrimaryProbeAfterMs,
     );
-    return modelRouting === execution.modelRouting
-      ? task
-      : {
-          ...task,
-          currentExecution: { ...execution, modelRouting },
-          updatedAt: now,
-        };
+    const assignReportOpportunity =
+      options.rotateReportOpportunity || !execution.reportOpportunityId;
+    if (!assignReportOpportunity && modelRouting === execution.modelRouting) {
+      return task;
+    }
+    const prepared: Task = {
+      ...task,
+      currentExecution: {
+        ...execution,
+        modelRouting,
+        ...(assignReportOpportunity
+          ? { reportOpportunityId: this.createId("report_opportunity") }
+          : {}),
+      },
+      updatedAt: now,
+    };
+    if (options.rotateReportOpportunity) {
+      delete prepared.currentExecution?.submittedActivityId;
+    }
+    return prepared;
+  }
+
+  private rotateReportOpportunity(task: Task): Task {
+    return {
+      ...task,
+      currentExecution: {
+        ...task.currentExecution!,
+        reportOpportunityId: this.createId("report_opportunity"),
+      },
+    };
   }
 
   private async recordTaskLifecycleActivity(
@@ -2579,20 +2628,36 @@ function eventForTask(task: Task): string {
 function reportActivityForIdempotency(
   activities: readonly TaskActivity[],
   execution: Task["currentExecution"],
-  attemptId: string,
+  report: TaskReport,
 ): TaskActivity | undefined {
-  if (execution?.attemptId === attemptId) {
-    // 计划恢复保留 attempt，但会为新 turn 清空当前报告指针。
-    return execution.submittedActivityId
-      ? activities.find(({ id }) => id === execution.submittedActivityId)
-      : undefined;
+  const reportActivities = activities.filter(
+    ({ attemptId, outcome }) =>
+      attemptId === report.attemptId && outcome !== undefined,
+  );
+  if (report.reportOpportunityId) {
+    return reportActivities.find(
+      ({ reportOpportunityId }) =>
+        reportOpportunityId === report.reportOpportunityId,
+    );
   }
-  return activities
-    .filter(
-      ({ attemptId: activityAttemptId, outcome }) =>
-        activityAttemptId === attemptId && outcome !== undefined,
-    )
-    .at(-1);
+  if (
+    execution?.attemptId === report.attemptId &&
+    execution.reportOpportunityId === undefined &&
+    execution.submittedActivityId
+  ) {
+    return reportActivities.find(({ id }) => id === execution.submittedActivityId);
+  }
+  return (
+    reportActivities.find((activity) => taskActivityMatchesReport(activity, report)) ??
+    reportActivities.at(-1)
+  );
+}
+
+function reportMatchesExecutionOpportunity(
+  execution: NonNullable<Task["currentExecution"]>,
+  report: TaskReport,
+): boolean {
+  return execution.reportOpportunityId === report.reportOpportunityId;
 }
 
 function commandSummary(command: CodriveCommand): Record<string, unknown> {

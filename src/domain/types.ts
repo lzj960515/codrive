@@ -173,6 +173,7 @@ export interface ScheduledTaskResume {
 
 export interface TaskExecution {
   attemptId: string;
+  reportOpportunityId?: string;
   action: TaskAction;
   threadId?: string;
   turnId?: string;
@@ -199,6 +200,7 @@ export type TaskReportOutcome =
 export interface TaskReport {
   taskId: string;
   attemptId: string;
+  reportOpportunityId?: string;
   outcome: TaskReportOutcome;
   summary: string;
   workspacePath?: string;
@@ -251,6 +253,7 @@ export interface TaskActivity {
   summary: string;
   occurredAt: string;
   attemptId?: string;
+  reportOpportunityId?: string;
   action?: TaskAction;
   outcome?: TaskReportOutcome;
   threadId?: string;

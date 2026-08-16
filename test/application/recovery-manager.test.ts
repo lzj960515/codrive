@@ -36,6 +36,13 @@ class StubNotifications implements NotificationSource {
   }
 }
 
+function requiredReportOpportunity(execution: {
+  reportOpportunityId?: string;
+}): string {
+  expect(execution.reportOpportunityId).toEqual(expect.any(String));
+  return execution.reportOpportunityId!;
+}
+
 async function createTaskConversationFixture(conversationActive = false) {
   const store = new ProjectStore(
     await mkdtemp(join(tmpdir(), "codrive-task-conversation-")),
@@ -503,6 +510,7 @@ describe("RecoveryManager", () => {
     await workflow.submitReport({
       taskId,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
       outcome: "blocked",
       summary: "Wait for the build",
       resumeAt: "2026-08-03T00:01:00.000Z",
@@ -511,6 +519,7 @@ describe("RecoveryManager", () => {
     await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
     const blockedActivityId = (await store.findTask(taskId))!.task
       .currentExecution!.submittedActivityId;
+    const blockedOpportunityId = execution.reportOpportunityId;
 
     await recovery.start();
     await recovery.recoverUnattendedWork(new Date("2026-08-03T00:02:00.000Z"));
@@ -520,9 +529,12 @@ describe("RecoveryManager", () => {
       attemptId: execution.attemptId,
       status: "running",
     });
+    const resumedExecution = (await store.findTask(taskId))!.task.currentExecution!;
+    expect(resumedExecution.reportOpportunityId).not.toBe(blockedOpportunityId);
     const reported = await workflow.submitReport({
       taskId,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(resumedExecution),
       outcome: "completed",
       summary: "Implemented after startup resumed the wait",
       workspacePath: "/workspace/game/.worktrees/loop",
@@ -558,6 +570,7 @@ describe("RecoveryManager", () => {
       currentExecution: {
         ...execution,
         status: "waiting_for_resume",
+        submittedActivityId: "activity_before_wait",
         scheduledResume: {
           reason: "Wait for the build",
           resumeAt: "2026-08-02T23:59:00.000Z",
@@ -574,8 +587,12 @@ describe("RecoveryManager", () => {
       expect(taskDispatcher.scheduledResumes).toHaveLength(0);
       expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
         status: "waiting_for_resume",
+        reportOpportunityId: expect.any(String),
         scheduledResume: { wakeAttemptedAt: "2026-08-03T00:00:00.000Z" },
       });
+      const deferredOpportunityId = (await store.findTask(taskId))!.task
+        .currentExecution!.reportOpportunityId;
+      expect(deferredOpportunityId).not.toBe(execution.reportOpportunityId);
       expect(setTimeoutSpy.mock.calls).not.toContainEqual([
         expect.any(Function),
         0,
@@ -599,6 +616,7 @@ describe("RecoveryManager", () => {
         status: "running",
         attemptId: execution.attemptId,
         threadId: execution.threadId,
+        reportOpportunityId: deferredOpportunityId,
       });
     } finally {
       recovery.stop();
@@ -676,6 +694,7 @@ describe("RecoveryManager", () => {
 
     expect((await store.findTask(taskId))?.task.currentExecution).toMatchObject({
       status: "awaiting_report",
+      reportOpportunityId: execution.reportOpportunityId,
       reportReminderCount: 1,
       turnId: "task_reminder_1",
     });
@@ -696,6 +715,7 @@ describe("RecoveryManager", () => {
     const waiting = (await store.findTask(running.id))!.task;
     expect(waiting.currentExecution).toMatchObject({
       status: "awaiting_report",
+      reportOpportunityId: running.currentExecution!.reportOpportunityId,
       turnId: running.currentExecution!.turnId,
       turnCompletedAt: "2026-08-03T00:00:00.000Z",
     });
@@ -714,6 +734,7 @@ describe("RecoveryManager", () => {
     const reminded = (await store.findTask(running.id))!.task;
     expect(reminded.currentExecution).toMatchObject({
       status: "awaiting_report",
+      reportOpportunityId: running.currentExecution!.reportOpportunityId,
       turnId: "task_reminder_1",
     });
     expect(reminded.currentExecution?.turnCompletedAt).toBeUndefined();
@@ -807,6 +828,7 @@ describe("RecoveryManager", () => {
       },
     });
     expect(after.turnId).not.toBe(before.turnId);
+    expect(after.reportOpportunityId).toBe(before.reportOpportunityId);
     expect(taskDispatcher.opened).toHaveLength(1);
     expect(taskDispatcher.resumed).toEqual([
       expect.objectContaining({
@@ -826,6 +848,7 @@ describe("RecoveryManager", () => {
       workflow.submitReport({
         taskId,
         attemptId: before.attemptId,
+        reportOpportunityId: requiredReportOpportunity(after),
         outcome: "completed",
         summary: "Completed after service recovery",
         workspacePath: "/workspace/game/.worktrees/task",
@@ -1148,6 +1171,7 @@ describe("RecoveryManager", () => {
     await workflow.submitReport({
       taskId,
       attemptId: started.currentExecution!.attemptId,
+      reportOpportunityId: requiredReportOpportunity(started.currentExecution!),
       outcome: "completed",
       summary: "Implemented",
       workspacePath: "/workspace/game/.worktrees/loop",
