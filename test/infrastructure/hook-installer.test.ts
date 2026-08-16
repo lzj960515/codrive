@@ -61,27 +61,15 @@ describe("HookInstaller", () => {
     ).toMatchObject({ version: "0.7.0", fingerprint: expect.any(String) });
   });
 
-  it("reports a structurally current Hook as pending until Codex trusts it", async () => {
-    const fixture = await createFixture("untrusted");
+  it("reports a structurally current Hook without requiring Codex runtime trust", async () => {
+    const fixture = await createFixture();
     await fixture.installer.install();
 
     await expect(fixture.installer.getStatus()).resolves.toMatchObject({
-      state: "pending_trust",
-      trustStatuses: ["untrusted"],
-      guidance: expect.stringContaining("/hooks"),
+      state: "current",
+      installedVersion: "0.7.0",
+      conflictPaths: [],
     });
-  });
-
-  it("does not report current when the Codex runtime skips asynchronous Hooks", async () => {
-    const fixture = await createFixture("unsupported");
-    await fixture.installer.install();
-
-    const status = await fixture.installer.getStatus();
-    expect(status).toMatchObject({
-      state: "unsupported",
-      runtimeWarnings: ["async_hooks_unsupported"],
-    });
-    expect(JSON.stringify(status)).not.toContain(fixture.configPath);
   });
 
   it("reports an unmanaged same-name directory without changing user files", async () => {
@@ -116,9 +104,7 @@ describe("HookInstaller", () => {
   });
 });
 
-async function createFixture(
-  runtimeState: "trusted" | "untrusted" | "unsupported" = "trusted",
-) {
+async function createFixture() {
   const root = await mkdtemp(join(tmpdir(), "codrive-hook-installer-"));
   const sourceDirectory = join(root, "source");
   const targetDirectory = join(root, "codex", "hooks", "codrive");
@@ -138,31 +124,6 @@ async function createFixture(
       targetDirectory,
       configPath,
       version: "0.7.0",
-      runtimeInspector: {
-        inspectHooks: async () => runtimeState === "unsupported"
-          ? {
-              hooks: [],
-              warnings: [
-                `skipping async hook in ${configPath}: async hooks are not supported yet`,
-              ],
-              errors: [],
-            }
-          : {
-              hooks: [
-                "userPromptSubmit",
-                "preToolUse",
-                "postToolUse",
-                "stop",
-              ].map((eventName) => ({
-                eventName,
-                command: `node ${JSON.stringify(join(targetDirectory, "codrive-activity-hook.mjs"))}`,
-                enabled: true,
-                trustStatus: runtimeState,
-              })),
-              warnings: [],
-              errors: [],
-            },
-      },
     }),
   };
 }

@@ -12,7 +12,6 @@ import {
 import { ExecutionActivityBridge } from "../../src/application/execution-activity-bridge.js";
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
 import type {
-  CodexActivityEvent,
   CodexTurnSnapshot,
   CodexTurnStatus,
 } from "../../src/application/codex-gateway.js";
@@ -27,7 +26,6 @@ import {
 
 class StubNotifications implements NotificationSource {
   private readonly events = new EventEmitter();
-  private readonly activities = new EventEmitter();
   turnStatus: CodexTurnStatus | null = null;
   turnError: Error | null = null;
   turnSnapshot: CodexTurnSnapshot = {
@@ -60,11 +58,6 @@ class StubNotifications implements NotificationSource {
 
   async readTurnActivity(): Promise<null> {
     return null;
-  }
-
-  onActivity(listener: (event: CodexActivityEvent) => void): () => void {
-    this.activities.on("activity", listener);
-    return () => this.activities.off("activity", listener);
   }
 }
 

@@ -27,9 +27,7 @@ export function renderBoardClient(accessToken: string): string {
       primary: "默认", fallback: "备用", user_confirmed: "用户确认",
       closed: "正常", open: "已熔断", half_open: "主模型探测",
       agent_decision: "Codex 判断", codex: "Codex", user: "用户",
-      missing: "待补齐", outdated: "待同步", pending_trust: "等待 Hook 信任",
-      disabled: "Hook 已停用", unsupported: "Hook 运行时不兼容",
-      unavailable: "Hook 状态不可用", current: "已对齐", conflict: "存在冲突",
+      missing: "待补齐", outdated: "待同步", current: "已对齐", conflict: "存在冲突",
       development_completed: "开发完成", rework_completed: "返工完成",
       review_approved: "审查通过", review_changes_requested: "审查退回",
       review_requested: "请求审查", integration_completed: "合入完成",
@@ -122,8 +120,7 @@ export function renderBoardClient(accessToken: string): string {
         skills,
         hook
       };
-      const hookNeedsTrust = resources.state === "pending_trust";
-      const resourcesInstalled = resources.state === "current" || hookNeedsTrust;
+      const resourcesInstalled = resources.state === "current";
       const active = upgrade && activeUpdatePhases.includes(upgrade.phase);
       const triggerCopy = active
         ? updatePhaseCopy[upgrade.phase][0]
@@ -131,20 +128,16 @@ export function renderBoardClient(accessToken: string): string {
           ? "新版本 "+version.latestVersion+" 可用"
           : resources.state === "conflict"
             ? "本地托管资源冲突待处理"
-          : hookNeedsTrust
-            ? "Codex Hook 等待信任"
           : version?.latestVersion && resourcesInstalled
               ? "Codrive 与托管资源已对齐"
               : resourcesInstalled ? "等待稳定版检查" : "托管资源需要补齐";
       document.getElementById("update-trigger-copy").textContent = triggerCopy;
-      document.getElementById("update-trigger-icon").textContent = active ? "↻" : version?.updateAvailable ? "↑" : hookNeedsTrust ? "!" : resources.state === "current" ? "✓" : "+";
+      document.getElementById("update-trigger-icon").textContent = active ? "↻" : version?.updateAvailable ? "↑" : resources.state === "current" ? "✓" : "+";
       document.getElementById("update-trigger").dataset.state = active ? "active" : version?.updateAvailable || resources.state !== "current" ? "attention" : "current";
 
       document.getElementById("update-current-version").textContent = version?.currentVersion || resources.bundledVersion;
       document.getElementById("update-latest-version").textContent = version?.latestVersion || "待检查";
-      document.getElementById("update-resources").textContent = hookNeedsTrust
-        ? resources.managedSkillCount+" Skills 已对齐 · Hook 等待信任"
-        : resources.state === "current"
+      document.getElementById("update-resources").textContent = resources.state === "current"
           ? resources.managedSkillCount+" Skills + "+resources.managedHookCount+" Hook 已对齐"
           : label(resources.state);
       document.getElementById("update-checked-at").textContent = formatTime(version?.lastCheckedAt);
@@ -245,17 +238,10 @@ export function renderBoardClient(accessToken: string): string {
       const status = document.getElementById("update-status");
       updateActionError = null;
       try {
-        if (
-          (systemUpdate.resources?.state ?? systemUpdate.skills.state) === "pending_trust" &&
-          !systemUpdate.version?.updateAvailable
-        ) {
-          status.textContent = "请在 Codex 中运行 /hooks，审核并信任 Codrive activity Hooks。";
-          return;
-        }
         const repairCurrentVersion =
           systemUpdate.upgrade?.phase === "failed" &&
           systemUpdate.upgrade.targetVersion === systemUpdate.version?.currentVersion &&
-          !["current", "pending_trust"].includes(systemUpdate.resources?.state ?? systemUpdate.skills.state);
+          (systemUpdate.resources?.state ?? systemUpdate.skills.state) !== "current";
         if (systemUpdate.version?.updateAvailable && !repairCurrentVersion) {
           status.textContent = "正在启动独立更新进程...";
           systemUpdate = await command("system.start_upgrade", { targetVersion: systemUpdate.version.latestVersion });

@@ -365,10 +365,6 @@ async function setup(): Promise<void> {
       installed.hookPath,
     ].map((path) => `- ${path}`).join("\n")}\n`,
   );
-  const resources = await resourceInstaller.getStatus();
-  if (resources.hook.guidance) {
-    process.stdout.write(`Hook review required: ${resources.hook.guidance}\n`);
-  }
   await doctor(resourceInstaller);
 }
 
@@ -418,9 +414,7 @@ async function doctor(
       detail:
         resources.state === "current"
           ? `${resources.managedSkillCount} Skills + ${resources.managedHookCount} Hook`
-          : resources.hook.guidance
-            ? `${resources.state} - ${resources.hook.guidance}`
-            : [resources.state, ...resources.conflictPaths].join(" "),
+          : [resources.state, ...resources.conflictPaths].join(" "),
     },
   ];
   for (const check of checks) {

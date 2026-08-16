@@ -40,7 +40,6 @@ describe("execution activity HTTP and realtime boundary", () => {
       store,
       codex: {
         readTurnActivity: async () => null,
-        onActivity: () => () => undefined,
       },
     });
     server = createHttpServer({

@@ -1,7 +1,4 @@
-import type {
-  CodexActivityEvent,
-  CodexActivityGateway,
-} from "./codex-gateway.js";
+import type { CodexActivityGateway } from "./codex-gateway.js";
 import type {
   ExecutionActivityCategory,
   ExecutionActivitySignal,
@@ -42,21 +39,12 @@ export class ExecutionActivityBridge {
   private readonly latestByTask = new Map<string, ExecutionActivitySignal>();
   private readonly observationsByTask = new Map<string, ExecutionObservation>();
   private readonly listeners = new Set<(update: ExecutionActivityUpdate) => void>();
-  private readonly unsubscribeCodex: () => void;
   private readonly unsubscribeStore: () => void;
-  private codexEventQueue = Promise.resolve();
   private readonly now: () => Date;
   private closed = false;
 
   constructor(private readonly options: ExecutionActivityBridgeOptions) {
     this.now = options.now ?? (() => new Date());
-    this.unsubscribeCodex = options.codex.onActivity((event) => {
-      if (this.closed) return;
-      this.codexEventQueue = this.codexEventQueue.then(
-        () => this.acceptCodexEvent(event),
-        () => this.acceptCodexEvent(event),
-      );
-    });
     this.unsubscribeStore = options.store.subscribe((event) => {
       if (!this.closed && event.taskId) {
         void this.synchronize(event.taskId).catch(() => undefined);
@@ -181,7 +169,9 @@ export class ExecutionActivityBridge {
       occurredAt: observation.activity.occurredAt,
       source: "app_server",
     };
-    return (await this.record(signal)) ? signal : null;
+    if (!(await this.isCurrent(signal))) return null;
+    this.latestByTask.set(taskId, signal);
+    return signal;
   }
 
   async isCurrent(signal: ExecutionActivitySignal): Promise<boolean> {
@@ -205,42 +195,10 @@ export class ExecutionActivityBridge {
 
   close(): void {
     this.closed = true;
-    this.unsubscribeCodex();
     this.unsubscribeStore();
     this.latestByTask.clear();
     this.observationsByTask.clear();
     this.listeners.clear();
-  }
-
-  private async acceptCodexEvent(event: CodexActivityEvent): Promise<void> {
-    if (this.closed) return;
-    const found = await this.options.store.findTaskByTurnId(event.turnId);
-    const execution = found?.task.currentExecution;
-    if (
-      !found ||
-      !isObservableExecution(execution) ||
-      execution.threadId !== event.threadId ||
-      execution.turnId !== event.turnId
-    ) {
-      return;
-    }
-    this.touchExecution(found.project.id, found.task.id, execution);
-    if (event.type === "turn_ended") {
-      this.clear(found.task.id);
-      return;
-    }
-    await this.record({
-      projectId: found.project.id,
-      taskId: found.task.id,
-      action: execution.action,
-      attemptId: execution.attemptId,
-      threadId: execution.threadId,
-      turnId: execution.turnId,
-      category: event.category,
-      label: executionActivityLabel(event.category),
-      occurredAt: event.occurredAt,
-      source: "app_server",
-    });
   }
 
   private async record(signal: ExecutionActivitySignal): Promise<boolean> {
@@ -290,14 +248,6 @@ export class ExecutionActivityBridge {
       this.now(),
       true,
     );
-  }
-
-  private touchExecution(
-    projectId: string,
-    taskId: string,
-    execution: TaskExecution & { threadId: string; turnId: string },
-  ): void {
-    this.synchronizeObservation(projectId, taskId, execution, this.now(), true);
   }
 
   private synchronizeObservation(

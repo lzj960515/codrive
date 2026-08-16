@@ -39,8 +39,6 @@ describe("CodexAppServerClient", () => {
     await chmod(executable, 0o755);
 
     const client = new CodexAppServerClient({ executable });
-    const activities: unknown[] = [];
-    client.onActivity((activity) => activities.push(activity));
     try {
       const threadId = await client.startThread("/workspace/game", "Game task", {
         ephemeral: true,
@@ -163,22 +161,6 @@ describe("CodexAppServerClient", () => {
       { threadId: "thread_1", includeTurns: true },
       { threadId: "thread_not_loaded", includeTurns: true },
     ]);
-    expect(activities).toContainEqual({
-      type: "activity",
-      threadId: "thread_1",
-      turnId: "turn_1",
-      category: "searching",
-      occurredAt: "2026-08-16T01:00:01.000Z",
-    });
-    expect(activities).toContainEqual({
-      type: "activity",
-      threadId: "thread_1",
-      turnId: "turn_1",
-      category: "running_tests",
-      occurredAt: "2026-08-16T01:00:02.000Z",
-    });
-    expect(JSON.stringify(activities)).not.toContain("SECRET_QUERY");
-    expect(JSON.stringify(activities)).not.toContain("SECRET_SUITE");
   });
 });
 

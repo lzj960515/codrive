@@ -4,10 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  CodexActivityEvent,
-  CodexTurnActivity,
-} from "../../src/application/codex-gateway.js";
+import type { CodexTurnActivity } from "../../src/application/codex-gateway.js";
 import { ExecutionActivityBridge } from "../../src/application/execution-activity-bridge.js";
 import type { Task } from "../../src/domain/types.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
@@ -51,85 +48,6 @@ describe("ExecutionActivityBridge", () => {
     });
   });
 
-  it("ignores stale identities, replaces the latest signal, and clears a completed turn", async () => {
-    const fixture = await createFixture();
-
-    fixture.publishCodex({
-      type: "activity",
-      threadId: "thread-old",
-      turnId: "turn-current",
-      category: "reading",
-      occurredAt: "2026-08-16T01:01:00.000Z",
-    });
-    await settle();
-    await expect(fixture.bridge.read(fixture.task.id)).resolves.toBeNull();
-
-    fixture.publishCodex({
-      type: "activity",
-      threadId: "thread-current",
-      turnId: "turn-current",
-      category: "searching",
-      occurredAt: "2026-08-16T01:02:00.000Z",
-    });
-    fixture.publishCodex({
-      type: "activity",
-      threadId: "thread-current",
-      turnId: "turn-current",
-      category: "running_tests",
-      occurredAt: "2026-08-16T01:03:00.000Z",
-    });
-    await vi.waitFor(async () => {
-      await expect(fixture.bridge.read(fixture.task.id)).resolves.toMatchObject({
-        category: "running_tests",
-        label: "正在运行测试",
-      });
-    });
-
-    fixture.publishCodex({
-      type: "turn_ended",
-      threadId: "thread-current",
-      turnId: "turn-current",
-      occurredAt: "2026-08-16T01:04:00.000Z",
-    });
-    await vi.waitFor(async () => {
-      await expect(fixture.bridge.read(fixture.task.id)).resolves.toBeNull();
-    });
-  });
-
-  it("keeps the newest signal when Hook and App Server events arrive out of order", async () => {
-    const fixture = await createFixture();
-    const listener = vi.fn();
-    fixture.bridge.subscribe(listener);
-
-    fixture.publishCodex({
-      type: "activity",
-      threadId: "thread-current",
-      turnId: "turn-current",
-      category: "running_tests",
-      occurredAt: "2026-08-16T01:03:00.000Z",
-    });
-    await vi.waitFor(async () => {
-      await expect(fixture.bridge.read(fixture.task.id)).resolves.toMatchObject({
-        category: "running_tests",
-      });
-    });
-    await fixture.bridge.recordHook({
-      schemaVersion: 1,
-      sessionId: "session-family",
-      turnId: "turn-current",
-      event: "PreToolUse",
-      toolName: "apply_patch",
-      occurredAt: "2026-08-16T01:02:00.000Z",
-    });
-
-    await expect(fixture.bridge.read(fixture.task.id)).resolves.toMatchObject({
-      category: "running_tests",
-      occurredAt: "2026-08-16T01:03:00.000Z",
-      source: "app_server",
-    });
-    expect(listener).toHaveBeenCalledTimes(1);
-  });
-
   it("derives a safe initial activity from the exact current turn", async () => {
     const fixture = await createFixture({
       readTurnActivity: async () => ({
@@ -152,6 +70,31 @@ describe("ExecutionActivityBridge", () => {
       "thread-current",
       "turn-current",
     );
+  });
+
+  it("does not renew the Hook silence window from an App Server detail snapshot", async () => {
+    let now = new Date("2026-08-16T01:00:00.000Z");
+    const fixture = await createFixture({
+      now: () => now,
+      readTurnActivity: async () => ({
+        status: "inProgress",
+        activity: {
+          category: "calling_tool",
+          occurredAt: "2026-08-16T01:08:30.000Z",
+        },
+      }),
+    });
+    await fixture.bridge.initialize(now);
+
+    now = new Date("2026-08-16T01:09:00.000Z");
+    await fixture.bridge.read(fixture.task.id);
+
+    expect(
+      fixture.bridge.claimSilentExecutions(
+        new Date("2026-08-16T01:10:00.000Z"),
+        10 * 60_000,
+      ),
+    ).toMatchObject([{ lastSeenAt: "2026-08-16T01:00:00.000Z" }]);
   });
 
   it("clears cached activity when the persisted execution identity changes", async () => {
@@ -337,7 +280,6 @@ async function createFixture(options: {
     },
   };
   await store.saveTask(snapshot.project.id, task);
-  let activityListener: ((event: CodexActivityEvent) => void) | undefined;
   const readTurnActivity = vi.fn(
     options.readTurnActivity ?? (async () => null),
   );
@@ -346,12 +288,6 @@ async function createFixture(options: {
     now: options.now,
     codex: {
       readTurnActivity,
-      onActivity(listener) {
-        activityListener = listener;
-        return () => {
-          activityListener = undefined;
-        };
-      },
     },
   });
   return {
@@ -360,12 +296,5 @@ async function createFixture(options: {
     task,
     store,
     readTurnActivity,
-    publishCodex(event: CodexActivityEvent) {
-      activityListener?.(event);
-    },
   };
-}
-
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
 }

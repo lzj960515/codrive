@@ -13,10 +13,6 @@ import {
 export type ManagedResourceInstallationState =
   | "missing"
   | "outdated"
-  | "pending_trust"
-  | "disabled"
-  | "unsupported"
-  | "unavailable"
   | "current"
   | "conflict";
 
@@ -109,17 +105,13 @@ function combineStates(
   if (skills === "conflict" || hook === "conflict") return "conflict";
   if (skills === "missing" || hook === "missing") return "missing";
   if (skills === "outdated" || hook === "outdated") return "outdated";
-  if (hook === "unsupported") return "unsupported";
-  if (hook === "unavailable") return "unavailable";
-  if (hook === "disabled") return "disabled";
-  if (hook === "pending_trust") return "pending_trust";
   return "current";
 }
 
 export function isManagedResourceInstallationComplete(
   state: ManagedResourceInstallationState,
 ): boolean {
-  return state === "current" || state === "pending_trust";
+  return state === "current";
 }
 
 function errorMessage(error: unknown): string {

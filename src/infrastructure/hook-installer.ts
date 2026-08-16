@@ -14,17 +14,13 @@ import { homedir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  CodexAppServerClient,
-  type CodexHookRuntimeInspection,
-} from "./codex-app-server-client.js";
 import { readPackageVersion } from "./package-metadata.js";
 
 const hookEvents = [
-  { configName: "UserPromptSubmit", runtimeName: "userPromptSubmit" },
-  { configName: "PreToolUse", runtimeName: "preToolUse" },
-  { configName: "PostToolUse", runtimeName: "postToolUse" },
-  { configName: "Stop", runtimeName: "stop" },
+  "UserPromptSubmit",
+  "PreToolUse",
+  "PostToolUse",
+  "Stop",
 ] as const;
 const hookScript = "codrive-activity-hook.mjs";
 const managedStatusMessage = "Reporting Codrive activity";
@@ -32,10 +28,6 @@ const managedStatusMessage = "Reporting Codrive activity";
 export type HookInstallationState =
   | "missing"
   | "outdated"
-  | "pending_trust"
-  | "disabled"
-  | "unsupported"
-  | "unavailable"
   | "current"
   | "conflict";
 
@@ -45,10 +37,6 @@ export interface HookInstallationStatus {
   installedVersion: string | null;
   managedHookCount: 1;
   conflictPaths: string[];
-  trustStatuses: Array<"managed" | "untrusted" | "trusted" | "modified">;
-  runtimeWarnings: string[];
-  runtimeErrors: string[];
-  guidance: string | null;
 }
 
 interface InstallationMarker {
@@ -60,16 +48,11 @@ type HookConfig = Record<string, unknown> & {
   hooks?: Record<string, unknown>;
 };
 
-export interface HookRuntimeInspector {
-  inspectHooks(cwd: string): Promise<CodexHookRuntimeInspection>;
-}
-
 export interface HookInstallerOptions {
   sourceDirectory?: string;
   targetDirectory?: string;
   configPath?: string;
   version?: string;
-  runtimeInspector?: HookRuntimeInspector;
 }
 
 export class HookInstaller {
@@ -77,7 +60,6 @@ export class HookInstaller {
   private readonly targetDirectory: string;
   private readonly configPath: string;
   private readonly version: string | undefined;
-  private readonly runtimeInspector: HookRuntimeInspector;
 
   constructor(options: HookInstallerOptions = {}) {
     this.sourceDirectory = options.sourceDirectory ?? resolveBundledHookDirectory();
@@ -85,8 +67,6 @@ export class HookInstaller {
       ?? join(homedir(), ".codex", "hooks", "codrive");
     this.configPath = options.configPath ?? join(homedir(), ".codex", "hooks.json");
     this.version = options.version;
-    this.runtimeInspector = options.runtimeInspector
-      ?? new PackagedCodexHookRuntimeInspector(dirname(this.configPath));
   }
 
   async install(): Promise<string> {
@@ -128,10 +108,6 @@ export class HookInstaller {
       installedVersion,
       managedHookCount: 1 as const,
       conflictPaths,
-      trustStatuses: [],
-      runtimeWarnings: [],
-      runtimeErrors: [],
-      guidance: null,
     };
     if (conflictPaths.length > 0) return { state: "conflict", ...common };
     if (!(await exists(this.targetDirectory))) return { state: "missing", ...common };
@@ -148,80 +124,7 @@ export class HookInstaller {
     ) {
       return { state: "outdated", ...common };
     }
-    return this.getRuntimeStatus(common);
-  }
-
-  private async getRuntimeStatus(
-    common: Omit<HookInstallationStatus, "state">,
-  ): Promise<HookInstallationStatus> {
-    let inspection: CodexHookRuntimeInspection;
-    try {
-      inspection = await this.runtimeInspector.inspectHooks(process.cwd());
-    } catch (error) {
-      return {
-        state: "unavailable",
-        ...common,
-        runtimeErrors: ["hook_runtime_unavailable"],
-        guidance: "Run codrive doctor after the Codex runtime is available.",
-      };
-    }
-
-    const command = this.managedCommand();
-    const managedHooks = inspection.hooks.filter(
-      (hook) => hook.command === command && isManagedRuntimeEvent(hook.eventName),
-    );
-    const trustStatuses = [
-      ...new Set(managedHooks.map(({ trustStatus }) => trustStatus)),
-    ];
-    const runtime = {
-      ...common,
-      trustStatuses,
-      runtimeWarnings: [
-        ...new Set(inspection.warnings.map(runtimeWarningCode)),
-      ],
-      runtimeErrors: inspection.errors.length > 0 ? ["hook_runtime_error"] : [],
-    };
-    if (
-      inspection.warnings.some((warning) =>
-        /async hooks? (?:are|is) not supported/i.test(warning),
-      )
-    ) {
-      return {
-        state: "unsupported",
-        ...runtime,
-        guidance: "Update Codrive to a release with an asynchronous Hook runtime.",
-      };
-    }
-    if (
-      inspection.errors.length > 0 ||
-      !hasEveryManagedRuntimeHook(managedHooks)
-    ) {
-      return {
-        state: "unavailable",
-        ...runtime,
-        guidance: "Run codrive setup again, then use codrive doctor to recheck the Hook.",
-      };
-    }
-    if (managedHooks.some(({ enabled }) => !enabled)) {
-      return {
-        state: "disabled",
-        ...runtime,
-        guidance: "Open Codex, run /hooks, and enable the Codrive activity Hooks.",
-      };
-    }
-    if (
-      managedHooks.some(
-        ({ trustStatus }) => !["trusted", "managed"].includes(trustStatus),
-      )
-    ) {
-      return {
-        state: "pending_trust",
-        ...runtime,
-        guidance:
-          "Open Codex, run /hooks, then review and trust the Codrive activity Hooks.",
-      };
-    }
-    return { state: "current", ...runtime };
+    return { state: "current", ...common };
   }
 
   private async findConflicts(): Promise<string[]> {
@@ -288,7 +191,7 @@ export class HookInstaller {
 
 function installManagedGroups(config: HookConfig, command: string): HookConfig {
   const hooks = isRecord(config.hooks) ? { ...config.hooks } : {};
-  for (const { configName } of hookEvents) {
+  for (const configName of hookEvents) {
     const groups = Array.isArray(hooks[configName]) ? hooks[configName] : [];
     const preserved = groups.flatMap((group) => preserveUserHandlers(group, command));
     hooks[configName] = [
@@ -319,23 +222,10 @@ function preserveUserHandlers(group: unknown, command: string): unknown[] {
 
 function hasCurrentManagedGroups(config: HookConfig, command: string): boolean {
   if (!isRecord(config.hooks)) return false;
-  return hookEvents.every(({ configName }) => {
+  return hookEvents.every((configName) => {
     const handlers = managedHandlers(config.hooks?.[configName], command);
     return handlers.length === 1 && isExpectedHandler(handlers[0]!, command);
   });
-}
-
-function isManagedRuntimeEvent(eventName: string): boolean {
-  return hookEvents.some(({ runtimeName }) => runtimeName === eventName);
-}
-
-function hasEveryManagedRuntimeHook(
-  hooks: CodexHookRuntimeInspection["hooks"],
-): boolean {
-  return hookEvents.every(
-    ({ runtimeName }) =>
-      hooks.filter(({ eventName }) => eventName === runtimeName).length === 1,
-  );
 }
 
 function hasConflictingManagedGroup(config: HookConfig, command: string): boolean {
@@ -435,25 +325,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-
-class PackagedCodexHookRuntimeInspector implements HookRuntimeInspector {
-  constructor(private readonly codexHome: string) {}
-
-  async inspectHooks(cwd: string): Promise<CodexHookRuntimeInspection> {
-    const codex = new CodexAppServerClient({
-      env: { ...process.env, CODEX_HOME: this.codexHome },
-    });
-    try {
-      return await codex.inspectHooks(cwd);
-    } finally {
-      await codex.stop();
-    }
-  }
-}
-
-function runtimeWarningCode(warning: string): string {
-  return /async hooks? (?:are|is) not supported/i.test(warning)
-    ? "async_hooks_unsupported"
-    : "hook_runtime_warning";
 }

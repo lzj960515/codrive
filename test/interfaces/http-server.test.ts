@@ -74,9 +74,6 @@ describe("HTTP API", () => {
         targetDirectory: join(stateDirectory, "codex", "hooks", "codrive"),
         configPath: join(stateDirectory, "codex", "hooks.json"),
         version: "0.2.0",
-        runtimeInspector: trustedHookRuntime(
-          join(stateDirectory, "codex", "hooks", "codrive"),
-        ),
       }),
     );
     const versions = new PackageVersionService({
@@ -1738,8 +1735,6 @@ describe("HTTP API", () => {
     expect(page.body).toContain('system.check_for_updates');
     expect(page.body).toContain("Codrive 与托管资源已对齐");
     expect(page.body).toContain("4 个托管 Skills、1 个托管 Hook");
-    expect(page.body).toContain("Codex Hook 等待信任");
-    expect(page.body).toContain("请在 Codex 中运行 /hooks");
     expect(page.body).toContain("Codrive 正在重启，页面会自动恢复连接");
     expect(page.body).toContain('id="update-timeline"');
     expect(page.body).not.toContain('codrive:skills-dismissed');
@@ -1891,21 +1886,3 @@ describe("HTTP API", () => {
     expect(detail).not.toHaveProperty("conversations");
   });
 });
-
-function trustedHookRuntime(targetDirectory: string) {
-  const command = `node ${JSON.stringify(join(targetDirectory, "codrive-activity-hook.mjs"))}`;
-  return {
-    inspectHooks: async () => ({
-      hooks: ["userPromptSubmit", "preToolUse", "postToolUse", "stop"].map(
-        (eventName) => ({
-          eventName,
-          command,
-          enabled: true,
-          trustStatus: "trusted" as const,
-        }),
-      ),
-      warnings: [],
-      errors: [],
-    }),
-  };
-}

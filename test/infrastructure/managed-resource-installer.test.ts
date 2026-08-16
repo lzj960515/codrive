@@ -95,26 +95,7 @@ async function createFixture() {
         targetDirectory: hookTarget,
         configPath: hookConfig,
         version: "0.7.0",
-        runtimeInspector: trustedRuntime(hookTarget),
       }),
     ),
-  };
-}
-
-function trustedRuntime(targetDirectory: string) {
-  const command = `node ${JSON.stringify(join(targetDirectory, "codrive-activity-hook.mjs"))}`;
-  return {
-    inspectHooks: async () => ({
-      hooks: ["userPromptSubmit", "preToolUse", "postToolUse", "stop"].map(
-        (eventName) => ({
-          eventName,
-          command,
-          enabled: true,
-          trustStatus: "trusted" as const,
-        }),
-      ),
-      warnings: [],
-      errors: [],
-    }),
   };
 }

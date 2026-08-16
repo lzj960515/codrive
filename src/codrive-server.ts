@@ -100,7 +100,7 @@ export class CodriveServer {
       const skillInstaller = new SkillInstaller();
       const resourceInstaller = new ManagedResourceInstaller(
         skillInstaller,
-        new HookInstaller({ runtimeInspector: this.codex }),
+        new HookInstaller(),
       );
       const versions = new PackageVersionService({
         currentVersion: version,

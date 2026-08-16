@@ -45,7 +45,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@openai/codex": "0.148.0-alpha.20",
+    "@openai/codex": "0.146.0",
     "fastify": "5.11.0",
     "proper-lockfile": "4.1.2",
     "socket.io": "4.8.3",

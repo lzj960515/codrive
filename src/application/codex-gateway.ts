@@ -13,21 +13,6 @@ export interface CodexModelOption {
   isDefault: boolean;
 }
 
-export type CodexActivityEvent =
-  | {
-      type: "activity";
-      threadId: string;
-      turnId: string;
-      category: ExecutionActivityCategory;
-      occurredAt: string;
-    }
-  | {
-      type: "turn_ended";
-      threadId: string;
-      turnId: string;
-      occurredAt: string;
-    };
-
 export interface CodexTurnActivity {
   status: CodexTurnStatus;
   activity: {
@@ -51,7 +36,6 @@ export interface CodexActivityGateway {
     threadId: string,
     turnId: string,
   ): Promise<CodexTurnActivity | null>;
-  onActivity(listener: (event: CodexActivityEvent) => void): () => void;
 }
 
 export interface CodexGateway {

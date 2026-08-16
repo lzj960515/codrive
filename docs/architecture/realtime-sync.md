@@ -57,21 +57,22 @@ An absent or incorrect handshake token rejects the Socket.IO connection. Invalid
 
 ## Execution activity and silence recovery
 
-The execution activity path has two consumers but one ephemeral source of truth:
+Live activity and liveness share one accepted signal boundary:
 
 ```text
-App Server item events ─┐
-                       ├─ ExecutionActivityBridge ─ latest safe activity ─ task room
-Managed Codex Hook ─────┘              │
-                                      └─ exact execution lastSeen
-                                                       │ 10 minutes silent
-                                                       v
+Managed Codex Hook ─ POST /api/hooks/activity ─ recordHook()
+                                                   ├─ latest safe activity ─ task room
+                                                   └─ exact execution lastSeen
+                                                                    │ 10 minutes silent
+                                                                    v
 RecoveryManager minute scan ─ thread/read(includeTurns: true) ─ WorkflowEngine
+
+Task room open ─ thread/read(includeTurns: true) ─ safe initial label only
 ```
 
-`ExecutionActivityBridge` associates every accepted signal with the current project, task, action, attempt, thread, and turn. It keeps the replaceable activity and `lastSeen` only in process memory. An identity change starts a new observation, while a terminal or excluded execution removes the old observation. Startup initializes current `pending`, `running`, and `awaiting_report` turns at the startup time, so losing process memory never makes a persisted turn immediately recoverable.
+`ExecutionActivityBridge` associates every accepted Hook request with the current project, task, action, attempt, thread, and turn. It keeps the replaceable activity and `lastSeen` only in process memory. An identity change starts a new observation, while a terminal or excluded execution removes the old observation. Startup initializes current `pending`, `running`, and `awaiting_report` turns at the startup time, so losing process memory never makes a persisted turn immediately recoverable. Opening a task detail can derive one safe activity category from the exact turn through App Server, but this display snapshot never updates `lastSeen`.
 
-`RecoveryManager` claims each due observation before awaiting App Server, which prevents overlapping scans from checking or recovering the same window twice. A valid Hook or App Server signal invalidates an outstanding claim. Read failures and uncertain snapshots remain retryable without creating a task activity, execution field, or presence status.
+`RecoveryManager` claims each due observation before awaiting App Server, which prevents overlapping scans from checking or recovering the same window twice. A valid Hook request invalidates an outstanding claim. Read failures and uncertain snapshots remain retryable without creating a task activity, execution field, or presence status. Normal App Server lifecycle notifications such as turn completion, thread status changes, and transport disconnection continue through the existing workflow lifecycle; item notifications are not activity heartbeats.
 
 ### Authoritative turn decisions
 
@@ -89,4 +90,4 @@ A persisted thread can be `notLoaded` after an App Server restart or unload even
 
 Recovery is serialized by `WorkflowEngine`. Immediately before resuming, it compares the project, task, action, attempt, execution status, thread, and turn, then verifies that the project is active and running, its concurrency limit still covers the execution, and no other task owns the repository integration lease. A failed check leaves the current execution untouched. A successful check reuses the persisted conversation, attempt, action, and model route, starts at most one new turn, and records the existing `execution_recovered` lifecycle activity.
 
-Planned waits, model retry waits, user decisions, blocked or cancelled tasks, terminal executions, and paused projects never enter silence recovery. Stopping the service removes App Server, Store, and timer subscriptions; the next service start creates fresh observation windows.
+Planned waits, model retry waits, user decisions, blocked or cancelled tasks, terminal executions, and paused projects never enter silence recovery. Stopping the service removes lifecycle, Store, and timer subscriptions; the next service start creates fresh observation windows.

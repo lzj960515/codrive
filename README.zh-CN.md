@@ -61,15 +61,15 @@ Codrive 常驻运行时会约每小时检查一次 npm latest 稳定版。已经
 codrive upgrade
 ```
 
-Codex 要求每条非托管命令 Hook 在运行前经过人工审核。首次 setup 后，或新版本改变 Hook 定义后，请在 Codex 中运行 `/hooks`，审核并信任新的 hash。已安装的 Hook 仍处于未信任、已修改、已停用或不可用状态时，`codrive doctor` 会报告 `FAIL` 并给出对应操作指引。
+Hook 的审核和信任由 Codex 管理。首次 setup 后，或新版本改变 Hook 定义后，请在 Codex 中运行 `/hooks`，审核并信任新的 hash。Codrive 只检查自己拥有的静态资源：托管脚本目录、`hooks.json` 中的四条配置、版本 marker 和内容 fingerprint；`codrive doctor` 不使用 App Server 运行状态或信任状态作为安装门槛。
 
 看板还提供运行设置，用于调整每个项目的并发上限、默认模型和 fallback 模型。
 
 打开看板后，浏览器会通过经过认证的 Socket.IO 连接，只订阅当前选中项目、当前打开任务和系统更新。实时事件只表示对应作用域已经变化，浏览器仍从 HTTP 重新读取权威快照，不从 Socket 接收业务状态。切换项目或任务时会同步切换房间；断线重连后只恢复当前房间和对应 HTTP 读取，不刷新页面，也不丢失当前界面状态。完整契约见[实时同步架构](./docs/architecture/realtime-sync.md)。
 
-任务执行期间，详情面板还会显示一条可替换的当前活动。Codrive 会合并经过净化的 App Server 事件与托管 Codex Hook 信号，并且只在进程内存中保留结果。活动只包含类别和执行身份，不包含 prompt、reasoning、命令参数、输出、路径、transcript 或环境变量。
+任务执行期间，详情面板还会显示一条可替换的当前活动。托管 Codex Hook 会把生命周期活动发送到 `/api/hooks/activity`；通过校验的请求是唯一的实时活动和续期来源。打开任务时可以通过 `thread/read` 生成一条安全的初始文案，但该快照不会续期静默窗口。活动只保留在进程内存中，只包含类别和执行身份，不包含 prompt、reasoning、命令参数、输出、路径、transcript 或环境变量。
 
-同一条内存活动桥还会为精确任务执行维护 `lastSeen` 观察窗口。服务重启时先建立一个新窗口，不会因为进程内信号丢失就猜测任务已经停止。连续十分钟没有信号后，Codrive 按一分钟扫描节奏通过 App Server 核验保存的 thread 和 turn：仍在运行就重新开始十分钟窗口，已经完成就进入现有汇报路径，只有明确中断或失败的 turn 才有资格恢复。App Server 重启或卸载持久化 thread 后可以返回 `notLoaded`；只要精确 turn 已终态且没有活跃 turn，该结果仍然权威。读取失败、turn 缺失、状态矛盾、执行身份已变化、项目暂停或容量不足时保持原状并延后重查，不新增持久化 Presence 状态。
+同一条内存活动桥还会为精确任务执行维护 Hook `lastSeen` 观察窗口。服务重启时先建立一个新窗口，不会因为进程内信号丢失就猜测任务已经停止。连续十分钟没有收到通过校验的 Hook 请求后，Codrive 按一分钟扫描节奏通过 App Server 核验保存的 thread 和 turn：仍在运行就重新开始十分钟窗口，已经完成就进入现有汇报路径，只有明确中断或失败的 turn 才有资格恢复。App Server 重启或卸载持久化 thread 后可以返回 `notLoaded`；只要精确 turn 已终态且没有活跃 turn，该结果仍然权威。读取失败、turn 缺失、状态矛盾、执行身份已变化、项目暂停或容量不足时保持原状并延后重查，不新增持久化 Presence 状态。
 
 ## 工作方式
 
