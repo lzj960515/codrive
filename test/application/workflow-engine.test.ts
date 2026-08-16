@@ -165,6 +165,52 @@ async function waitForScheduledResume(
   };
 }
 
+async function resumePersistedLegacyScheduledExecution() {
+  const { projectId, taskId, execution } = await startTaskAtAction("develop");
+  const running = (await store.findTask(taskId))!.task;
+  const legacyRunningExecution = { ...running.currentExecution! };
+  delete legacyRunningExecution.reportOpportunityId;
+  await store.saveTask(projectId, {
+    ...running,
+    currentExecution: legacyRunningExecution,
+  });
+
+  const blockedReport = {
+    taskId,
+    attemptId: execution.attemptId,
+    outcome: "blocked" as const,
+    summary: "Wait for the legacy deployment",
+    resumeAt: "2026-08-03T02:00:00.000Z",
+    resumePrompt: "Inspect the legacy deployment and continue.",
+  };
+  await workflow.submitReport(blockedReport);
+  await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+  await workflow.continueTaskNow(taskId);
+
+  const resumed = (await store.findTask(taskId))!.task;
+  const legacyResumedExecution = { ...resumed.currentExecution! };
+  delete legacyResumedExecution.reportOpportunityId;
+  await store.saveTask(projectId, {
+    ...resumed,
+    currentExecution: legacyResumedExecution,
+  });
+
+  const legacyResumed = (await store.findTask(taskId))!.task;
+  expect(legacyResumed.currentExecution).toMatchObject({
+    attemptId: execution.attemptId,
+    status: "running",
+  });
+  expect(legacyResumed.currentExecution).not.toHaveProperty("reportOpportunityId");
+  expect(legacyResumed.currentExecution).not.toHaveProperty("submittedActivityId");
+  expect(
+    (await store.listTaskActivities(projectId, taskId)).filter(
+      ({ type }) => type === "scheduled_resume_started",
+    ),
+  ).toHaveLength(1);
+
+  return { projectId, taskId, execution, blockedReport };
+}
+
 function successfulReportForAction(
   action: NonNullable<Task["requestedAction"]>,
   taskId: string,
@@ -1875,6 +1921,60 @@ describe("WorkflowEngine", () => {
     expect(
       (await store.listTaskActivities(projectId, taskId)).at(-1),
     ).not.toHaveProperty("reportOpportunityId");
+  });
+
+  it("accepts the first new report from a persisted legacy resumed execution", async () => {
+    const { projectId, taskId, execution } =
+      await resumePersistedLegacyScheduledExecution();
+    const completedReport = {
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "completed" as const,
+      summary: "Completed after the legacy scheduled resume",
+      workspacePath: "/workspace/game/.worktrees/task_1",
+      candidateCommit: "candidate_after_legacy_resume",
+    };
+
+    const reported = await workflow.submitReport(completedReport);
+    const reportActivities = (
+      await store.listTaskActivities(projectId, taskId)
+    ).filter(({ attemptId, outcome }) =>
+      attemptId === execution.attemptId && outcome !== undefined,
+    );
+    await workflow.submitReport(completedReport);
+
+    expect(reported.currentExecution?.submittedActivityId).toBe(
+      reportActivities.at(-1)?.id,
+    );
+    expect(reportActivities.map(({ outcome }) => outcome)).toEqual([
+      "blocked",
+      "completed",
+    ]);
+    expect(
+      (await store.listTaskActivities(projectId, taskId)).filter(
+        ({ attemptId, outcome }) =>
+          attemptId === execution.attemptId && outcome !== undefined,
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("rejects an exact historical report replay for a legacy resumed execution", async () => {
+    const { projectId, taskId, execution, blockedReport } =
+      await resumePersistedLegacyScheduledExecution();
+    const activityCount = (
+      await store.listTaskActivities(projectId, taskId)
+    ).length;
+
+    await expect(workflow.submitReport(blockedReport)).rejects.toThrow(
+      /conflicts with the recorded result/i,
+    );
+    expect(await store.listTaskActivities(projectId, taskId)).toHaveLength(
+      activityCount,
+    );
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      status: "running",
+    });
   });
 
   it("accepts a new planned blocker after a rescheduled wait resumes", async () => {

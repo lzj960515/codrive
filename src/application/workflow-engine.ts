@@ -413,6 +413,11 @@ export class WorkflowEngine {
           `Report opportunity does not match the current execution for ${report.taskId}`,
         );
       }
+      if (isLegacyReportReplay(activities, execution, report)) {
+        throw new WorkflowConflictError(
+          `Report conflicts with the recorded result for ${report.taskId}`,
+        );
+      }
       const previousActivity = reportActivityForIdempotency(
         activities,
         execution,
@@ -2642,10 +2647,12 @@ function reportActivityForIdempotency(
   }
   if (
     execution?.attemptId === report.attemptId &&
-    execution.reportOpportunityId === undefined &&
-    execution.submittedActivityId
+    execution.reportOpportunityId === undefined
   ) {
-    return reportActivities.find(({ id }) => id === execution.submittedActivityId);
+    if (execution.submittedActivityId) {
+      return reportActivities.find(({ id }) => id === execution.submittedActivityId);
+    }
+    if (reportSubmissionStatuses.has(execution.status)) return undefined;
   }
   return (
     reportActivities.find((activity) => taskActivityMatchesReport(activity, report)) ??
@@ -2658,6 +2665,34 @@ function reportMatchesExecutionOpportunity(
   report: TaskReport,
 ): boolean {
   return execution.reportOpportunityId === report.reportOpportunityId;
+}
+
+function isUnboundLegacyReportOpportunity(
+  execution: Task["currentExecution"],
+  report: TaskReport,
+): boolean {
+  return Boolean(
+    execution?.attemptId === report.attemptId &&
+      execution.reportOpportunityId === undefined &&
+      execution.submittedActivityId === undefined &&
+      reportSubmissionStatuses.has(execution.status),
+  );
+}
+
+function isLegacyReportReplay(
+  activities: readonly TaskActivity[],
+  execution: Task["currentExecution"],
+  report: TaskReport,
+): boolean {
+  return (
+    isUnboundLegacyReportOpportunity(execution, report) &&
+    activities.some(
+      (activity) =>
+        activity.attemptId === report.attemptId &&
+        activity.outcome !== undefined &&
+        taskActivityMatchesReport(activity, report),
+    )
+  );
 }
 
 function commandSummary(command: CodriveCommand): Record<string, unknown> {
