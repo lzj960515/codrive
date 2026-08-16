@@ -81,7 +81,7 @@ export class UpgradeCoordinator {
     );
   }
 
-  async completeAfterSkillRepair(currentVersion: string): Promise<UpgradeState | null> {
+  async completeAfterResourceRepair(currentVersion: string): Promise<UpgradeState | null> {
     const current = await this.options.store.read();
     if (
       !current ||
@@ -101,6 +101,10 @@ export class UpgradeCoordinator {
     delete succeeded.error;
     await this.options.store.write(succeeded);
     return succeeded;
+  }
+
+  completeAfterSkillRepair(currentVersion: string): Promise<UpgradeState | null> {
+    return this.completeAfterResourceRepair(currentVersion);
   }
 
   private async startExclusive(targetVersion: string): Promise<UpgradeState> {

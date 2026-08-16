@@ -16,9 +16,11 @@ export async function createTaskDetailView(
   const projection = projectTaskActivities(activities);
   const currentExecution = task.currentExecution
     ? {
+        attemptId: task.currentExecution.attemptId,
         action: task.currentExecution.action,
         status: task.currentExecution.status,
         threadId: task.currentExecution.threadId ?? null,
+        turnId: task.currentExecution.turnId ?? null,
         scheduledResume: task.currentExecution.scheduledResume
           ? {
               reason: task.currentExecution.scheduledResume.reason,

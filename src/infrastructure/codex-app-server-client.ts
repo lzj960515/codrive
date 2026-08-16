@@ -3,11 +3,21 @@ import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 
 import type {
+  CodexActivityEvent,
+  CodexActivityGateway,
   CodexGateway,
   CodexModelOption,
+  CodexTurnActivity,
   CodexTurnStatus,
 } from "../application/codex-gateway.js";
+import {
+  classifyActivityCommand,
+  classifyActivityTool,
+  type ExecutionActivityCategory,
+} from "../domain/execution-activity.js";
 import type { InitializeResponse } from "./app-server-protocol/InitializeResponse.js";
+import type { HookTrustStatus } from "./app-server-protocol/v2/HookTrustStatus.js";
+import type { HooksListResponse } from "./app-server-protocol/v2/HooksListResponse.js";
 import type { ModelListResponse } from "./app-server-protocol/v2/ModelListResponse.js";
 import type { ThreadResumeResponse } from "./app-server-protocol/v2/ThreadResumeResponse.js";
 import type { ThreadReadResponse } from "./app-server-protocol/v2/ThreadReadResponse.js";
@@ -22,12 +32,25 @@ export interface CodexAppServerOptions {
   executable?: string;
   version?: string;
   onStderr?: (text: string) => void;
+  env?: NodeJS.ProcessEnv;
 }
 
-export class CodexAppServerClient implements CodexGateway {
+export interface CodexHookRuntimeInspection {
+  hooks: Array<{
+    eventName: string;
+    command: string | null;
+    enabled: boolean;
+    trustStatus: HookTrustStatus;
+  }>;
+  warnings: string[];
+  errors: string[];
+}
+
+export class CodexAppServerClient implements CodexGateway, CodexActivityGateway {
   private process: ChildProcessWithoutNullStreams | null = null;
   private connection: JsonRpcConnection | null = null;
   private readonly notifications = new EventEmitter();
+  private readonly activities = new EventEmitter();
   private starting: Promise<void> | null = null;
   private stopping = false;
 
@@ -53,7 +76,7 @@ export class CodexAppServerClient implements CodexGateway {
     const command = resolveCodexCommand(this.options.executable);
     this.process = spawn(command.executable, [...command.args, "app-server"], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      env: this.options.env ?? process.env,
     });
     this.process.stderr.on("data", (data: Buffer) => {
       this.options.onStderr?.(data.toString("utf8"));
@@ -61,6 +84,8 @@ export class CodexAppServerClient implements CodexGateway {
     this.connection = new JsonRpcConnection(this.process.stdout, this.process.stdin);
     this.connection.onNotification((notification) => {
       this.notifications.emit("notification", notification);
+      const activity = normalizeActivityNotification(notification);
+      if (activity) this.activities.emit("activity", activity);
     });
     this.process.once("exit", (code, signal) => {
       this.connection?.close(
@@ -195,6 +220,61 @@ export class CodexAppServerClient implements CodexGateway {
     return response.thread.turns.find(({ id }) => id === turnId)?.status ?? null;
   }
 
+  async readTurnActivity(
+    threadId: string,
+    turnId: string,
+  ): Promise<CodexTurnActivity | null> {
+    await this.start();
+    const response = await this.requireConnection().request<ThreadReadResponse>(
+      "thread/read",
+      { threadId, includeTurns: true },
+    );
+    const turn = response.thread.turns.find(({ id }) => id === turnId);
+    if (!turn) return null;
+    const item = turn.items?.at(-1);
+    const category = item ? categoryForThreadItem(item) : null;
+    const timestamp = turn.completedAt ?? turn.startedAt;
+    return {
+      status: turn.status,
+      activity:
+        category && timestamp !== null
+          ? { category, occurredAt: new Date(timestamp * 1_000).toISOString() }
+          : null,
+    };
+  }
+
+  async inspectHooks(cwd: string): Promise<CodexHookRuntimeInspection> {
+    await this.start();
+    const response = await this.requireConnection().request<HooksListResponse>(
+      "hooks/list",
+      { cwds: [cwd] },
+    );
+    const entry = response.data.find((candidate) => candidate.cwd === cwd)
+      ?? response.data[0];
+    if (!entry) {
+      return {
+        hooks: [],
+        warnings: [],
+        errors: [`Codex did not return Hook status for ${cwd}`],
+      };
+    }
+    return {
+      hooks: entry.hooks.map(({ eventName, command, enabled, trustStatus }) => ({
+        eventName,
+        command,
+        enabled,
+        trustStatus,
+      })),
+      warnings: entry.warnings,
+      errors: entry.errors.map(({ path, message }) => `${path}: ${message}`),
+    };
+  }
+
+  onActivity(listener: (event: CodexActivityEvent) => void): () => void {
+    this.activities.on("activity", listener);
+    return () => this.activities.off("activity", listener);
+  }
+
   onNotification(listener: (notification: JsonRpcNotification) => void): () => void {
     this.notifications.on("notification", listener);
     return () => this.notifications.off("notification", listener);
@@ -221,6 +301,106 @@ export class CodexAppServerClient implements CodexGateway {
     }
     return this.connection;
   }
+}
+
+function normalizeActivityNotification(
+  notification: JsonRpcNotification,
+): CodexActivityEvent | null {
+  if (!isRecord(notification.params)) return null;
+  const threadId = stringValue(notification.params.threadId);
+  const turnId = stringValue(notification.params.turnId);
+  if (!threadId || !turnId) return null;
+  if (notification.method === "turn/completed") {
+    return {
+      type: "turn_ended",
+      threadId,
+      turnId,
+      occurredAt: turnTimestamp(notification.params),
+    };
+  }
+  if (!notification.method.startsWith("item/")) return null;
+  const item = notification.params.item;
+  const category = isRecord(item) ? categoryForThreadItem(item) : null;
+  if (!category) return null;
+  const time =
+    numberValue(notification.params.startedAtMs) ??
+    numberValue(notification.params.completedAtMs) ??
+    Date.now();
+  return {
+    type: "activity",
+    threadId,
+    turnId,
+    category,
+    occurredAt: new Date(time).toISOString(),
+  };
+}
+
+function categoryForThreadItem(item: unknown): ExecutionActivityCategory | null {
+  if (!isRecord(item)) return null;
+  switch (item.type) {
+    case "commandExecution": {
+      const actions = Array.isArray(item.commandActions) ? item.commandActions : [];
+      if (actions.some((action) => isRecord(action) && action.type === "search")) {
+        return "searching";
+      }
+      if (
+        actions.length > 0 &&
+        actions.every(
+          (action) =>
+            isRecord(action) && ["read", "listFiles"].includes(String(action.type)),
+        )
+      ) {
+        return "reading";
+      }
+      return classifyActivityCommand(stringValue(item.command) ?? undefined);
+    }
+    case "fileChange":
+      return "editing";
+    case "webSearch":
+      return "searching";
+    case "imageView":
+      return "reading";
+    case "mcpToolCall":
+    case "dynamicToolCall":
+    case "collabAgentToolCall":
+      return classifyActivityTool(stringValue(item.tool) ?? undefined);
+    case "sleep":
+      return "waiting_input";
+    case "userMessage":
+    case "agentMessage":
+    case "plan":
+    case "reasoning":
+    case "enteredReviewMode":
+    case "exitedReviewMode":
+    case "contextCompaction":
+      return "preparing_response";
+    case "hookPrompt":
+    case "subAgentActivity":
+    case "imageGeneration":
+      return "calling_tool";
+    default:
+      return null;
+  }
+}
+
+function turnTimestamp(params: Record<string, unknown>): string {
+  const turn = isRecord(params.turn) ? params.turn : null;
+  const seconds = turn
+    ? numberValue(turn.completedAt) ?? numberValue(turn.startedAt)
+    : null;
+  return new Date(seconds === null ? Date.now() : seconds * 1_000).toISOString();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function resolveCodexCommand(executable?: string): {

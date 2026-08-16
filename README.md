@@ -44,9 +44,10 @@ codrive
 
 Codrive prints the local board URL and log location. Open the board, then:
 
-1. Click **Complete managed Skills** in the **Codrive update** window.
-2. Open the target project directory in Codex App.
-3. Describe the product work and ask Codex to use Codrive.
+1. Click **Complete managed resources** in the **Codrive update** window.
+2. In Codex, run `/hooks`, review the four Codrive activity Hook definitions, and trust their current hashes.
+3. Open the target project directory in Codex App.
+4. Describe the product work and ask Codex to use Codrive.
 
 ```text
 Use Codrive to add a leaderboard to this project, then start development after I confirm the plan.
@@ -54,15 +55,19 @@ Use Codrive to add a leaderboard to this project, then start development after I
 
 While the service is running, Codrive checks the npm latest stable release about once per hour. An open board receives the result without a page refresh and shows an update prompt when a newer version is available. **Check again** refreshes the status immediately and starts a new hourly interval.
 
-The update window shows the installed version, the latest stable release, the last check time, and the status of the four managed Skills. Automatic checks only update this status: installation still requires your confirmation. The window can then install an exact release, restart the local service, synchronize the bundled Skills, and verify the new version. The command-line equivalent is:
+The update window shows the installed version, the latest stable release, the last check time, and the status of Codrive's four managed Skills and one managed Codex Hook. Automatic checks only update this status: installation still requires your confirmation. The window can then install an exact release, restart the local service, synchronize all five bundled resources, and verify the new version. The command-line equivalent is:
 
 ```bash
 codrive upgrade
 ```
 
+Codex requires every non-managed command Hook to be reviewed before it can run. After setup or any release that changes the Hook definition, use `/hooks` in Codex to review and trust the new hash. `codrive doctor` reports `FAIL` with that instruction while the installed Hook is untrusted, modified, disabled, or unavailable.
+
 The board also provides runtime settings for per-project concurrency, the primary model, and the fallback model.
 
 An open board uses an authenticated Socket.IO connection to watch only the selected project, the open task, and system updates. Realtime events are small invalidation signals: the browser rereads the matching HTTP snapshot instead of accepting state over the socket. Switching projects or tasks changes rooms, while reconnecting restores the current rooms and scoped reads without reloading the page or discarding the current UI state. See [Realtime synchronization](./docs/architecture/realtime-sync.md) for the full contract.
+
+While a task turn is running, its detail panel also shows one replaceable current-activity signal. Codrive combines safe App Server events with the managed Codex Hook and keeps the result only in process memory. The signal contains a category and execution identity, never prompts, reasoning, command arguments, output, paths, transcripts, or environment values.
 
 ## How it works
 
@@ -111,8 +116,8 @@ codrive stop                    Stop Codrive
 codrive restart                 Restart Codrive
 codrive upgrade                 Install the latest release and restart
 codrive status                  Show local service status
-codrive setup                   Install or complete managed Skills
-codrive doctor                  Check Node.js, Codex, and login readiness
+codrive setup                   Install or complete managed Skills and Hook
+codrive doctor                  Check runtime, Codex, login, and managed resources
 codrive import <project.json>   Import a product
 codrive serve                   Run in the foreground
 codrive --version               Show the installed version

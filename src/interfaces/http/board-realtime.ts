@@ -5,11 +5,17 @@ import { z } from "zod";
 
 import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { CodriveEvent } from "../../domain/types.js";
+import type {
+  ExecutionActivitySignal,
+  ExecutionActivityUpdate,
+} from "../../domain/execution-activity.js";
+import type { ExecutionActivityBridge } from "../../application/execution-activity-bridge.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
 
 interface ServerToClientEvents {
   "project:changed": (event: { projectId: string }) => void;
   "task:changed": (event: { projectId: string; taskId: string }) => void;
+  "task:activity": (event: ExecutionActivityUpdate) => void;
   "system:changed": (event: Record<string, never>) => void;
 }
 
@@ -46,12 +52,17 @@ interface SocketWatchState {
 interface WatchResult {
   ok: boolean;
   error?: string;
+  activity?: ExecutionActivitySignal | null;
 }
 
 interface BoardRealtimeOptions {
   httpServer: HttpServer;
   accessToken: string;
   store: ProjectStore;
+  activitySource?: Pick<
+    ExecutionActivityBridge,
+    "read" | "subscribe" | "isCurrent"
+  >;
   systemEvents?: readonly SystemStatusEventSource[];
 }
 
@@ -75,6 +86,7 @@ export class BoardRealtimeGateway {
   >;
   private readonly unsubscribeStore: () => void;
   private readonly unsubscribeSystem: (() => void)[];
+  private readonly unsubscribeActivity: () => void;
   private closed = false;
 
   constructor(private readonly options: BoardRealtimeOptions) {
@@ -94,12 +106,18 @@ export class BoardRealtimeGateway {
         this.io.to(systemRoom).emit("system:changed", {});
       }),
     );
+    this.unsubscribeActivity = options.activitySource
+      ? options.activitySource.subscribe((update) => {
+          void this.publishActivity(update);
+        })
+      : () => undefined;
   }
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     this.unsubscribeStore();
+    this.unsubscribeActivity();
     for (const unsubscribe of this.unsubscribeSystem) unsubscribe();
     await new Promise<void>((resolve) => this.io.close(() => resolve()));
   }
@@ -129,7 +147,7 @@ export class BoardRealtimeGateway {
         if (found.project.id !== socket.data.projectId) {
           throw new Error("Task is outside the watched project");
         }
-        await this.replaceTaskWatch(socket, taskId);
+        return this.replaceTaskWatch(socket, taskId);
       });
     });
     socket.on("unwatch:task", (request, acknowledge) => {
@@ -161,13 +179,13 @@ export class BoardRealtimeGateway {
   private enqueue(
     socket: BoardSocket,
     acknowledge: WatchAcknowledgement,
-    operation: () => Promise<void>,
+    operation: () => Promise<Omit<WatchResult, "ok"> | void>,
   ): void {
     const respond = typeof acknowledge === "function" ? acknowledge : () => undefined;
     const request = socket.data.requestQueue.then(async () => {
       try {
-        await operation();
-        respond({ ok: true });
+        const result = await operation();
+        respond({ ok: true, ...result });
       } catch (error) {
         respond({
           ok: false,
@@ -195,11 +213,14 @@ export class BoardRealtimeGateway {
   private async replaceTaskWatch(
     socket: BoardSocket,
     taskId: string,
-  ): Promise<void> {
-    if (socket.data.taskId === taskId) return;
-    await this.leaveTask(socket);
-    await socket.join(taskRoom(taskId));
-    socket.data.taskId = taskId;
+  ): Promise<{ activity: ExecutionActivitySignal | null } | void> {
+    if (socket.data.taskId !== taskId) {
+      await this.leaveTask(socket);
+      await socket.join(taskRoom(taskId));
+      socket.data.taskId = taskId;
+    }
+    if (!this.options.activitySource) return;
+    return { activity: await this.options.activitySource.read(taskId) };
   }
 
   private async leaveProject(socket: BoardSocket): Promise<void> {
@@ -225,6 +246,20 @@ export class BoardRealtimeGateway {
         taskId: event.taskId,
       });
     }
+  }
+
+  private async publishActivity(update: ExecutionActivityUpdate): Promise<void> {
+    const source = this.options.activitySource;
+    if (!source) return;
+    const current = await source.read(update.taskId);
+    if (update.activity) {
+      if (current !== update.activity || !(await source.isCurrent(update.activity))) {
+        return;
+      }
+    } else if (current !== null) {
+      return;
+    }
+    this.io.to(taskRoom(update.taskId)).emit("task:activity", update);
   }
 }
 
