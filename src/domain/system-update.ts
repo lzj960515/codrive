@@ -44,6 +44,22 @@ export interface UpgradeState {
   error?: SystemUpdateError;
 }
 
+export interface VersionStatusChangedEvent {
+  type: "system.version_status_changed";
+}
+
+export interface UpgradeStatusChangedEvent {
+  type: "system.upgrade_status_changed";
+}
+
+export type SystemStatusChangedEvent =
+  | VersionStatusChangedEvent
+  | UpgradeStatusChangedEvent;
+
+export interface SystemStatusEventSource {
+  subscribe(listener: (event: SystemStatusChangedEvent) => void): () => void;
+}
+
 export function compareSemanticVersions(left: string, right: string): number {
   const leftParts = parseStableSemanticVersion(left);
   const rightParts = parseStableSemanticVersion(right);

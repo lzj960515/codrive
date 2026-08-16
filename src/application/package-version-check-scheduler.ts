@@ -1,9 +1,10 @@
-import type { PackageVersionStatus } from "../domain/system-update.js";
+import type {
+  PackageVersionStatus,
+  VersionStatusChangedEvent,
+} from "../domain/system-update.js";
 import type { PackageVersionService } from "../infrastructure/package-version-service.js";
 
-export interface VersionStatusChangedEvent {
-  type: "system.version_status_changed";
-}
+export type { VersionStatusChangedEvent } from "../domain/system-update.js";
 
 export interface PackageVersionCheckTrigger {
   checkNow(): Promise<PackageVersionStatus>;

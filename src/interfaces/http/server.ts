@@ -1,7 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import type { VersionStatusEventSource } from "../../application/package-version-check-scheduler.js";
 import type { SystemSettingsService } from "../../application/system-settings-service.js";
 import type { SystemUpdateService } from "../../application/system-update-service.js";
 import type { WorkflowEngine } from "../../application/workflow-engine.js";
@@ -12,6 +11,7 @@ import {
   WorkflowConflictError,
 } from "../../domain/errors.js";
 import type { CodriveCommand, Project, Task } from "../../domain/types.js";
+import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
 import type { SkillInstaller } from "../../infrastructure/skill-installer.js";
 import { renderBoardPage } from "./board.js";
@@ -19,6 +19,7 @@ import { createBoardView } from "./board-view.js";
 import { createProjectDetailView } from "./project-detail-view.js";
 import { createTaskDetailView } from "./task-detail-view.js";
 import { projectTaskActivities } from "../../domain/task-activity.js";
+import { BoardRealtimeGateway } from "./board-realtime.js";
 
 export interface HttpServerDependencies {
   store: ProjectStore;
@@ -29,7 +30,9 @@ export interface HttpServerDependencies {
     SystemUpdateService,
     "read" | "refresh" | "start" | "installSkills"
   >;
-  systemUpdateEvents?: VersionStatusEventSource;
+  systemUpdateEvents?:
+    | SystemStatusEventSource
+    | readonly SystemStatusEventSource[];
   currentVersion?: string;
   accessToken: string;
   isReady?: () => boolean;
@@ -175,6 +178,20 @@ export function createHttpServer(
   dependencies: HttpServerDependencies,
 ): FastifyInstance {
   const server = Fastify({ logger: false });
+  const realtime = new BoardRealtimeGateway({
+    httpServer: server.server,
+    accessToken: dependencies.accessToken,
+    store: dependencies.store,
+    ...(dependencies.systemUpdateEvents
+      ? {
+          systemEvents: Array.isArray(dependencies.systemUpdateEvents)
+            ? dependencies.systemUpdateEvents
+            : [dependencies.systemUpdateEvents],
+        }
+      : {}),
+  });
+
+  server.addHook("preClose", async () => realtime.close());
 
   server.addHook("onRequest", async (request, reply) => {
     const path = new URL(request.url, "http://localhost").pathname;
@@ -227,6 +244,14 @@ export function createHttpServer(
 
   server.get("/api/board", async () =>
     createBoardView(await dependencies.store.listProjects()),
+  );
+  server.get<{ Params: { projectId: string } }>(
+    "/api/board/projects/:projectId",
+    async (request, reply) => {
+      const snapshot = await dependencies.store.getProject(request.params.projectId);
+      if (!snapshot) return reply.code(404).send({ error: "Project not found" });
+      return createBoardView([snapshot])[0]!;
+    },
   );
   server.get<{ Params: { projectId: string } }>(
     "/api/projects/:projectId",
@@ -355,28 +380,6 @@ export function createHttpServer(
       command as CodriveCommand,
       request.headers["x-codrive-source"] === "skill" ? "skill" : "http",
     );
-  });
-
-  server.get("/api/events", async (request, reply) => {
-    reply.hijack();
-    const response = reply.raw;
-    response.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
-    });
-    response.write(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
-    const writeEvent = (event: unknown) => {
-      response.write(`data: ${JSON.stringify(event)}\n\n`);
-    };
-    const unsubscribeStore = dependencies.store.subscribe(writeEvent);
-    const unsubscribeSystemUpdates = dependencies.systemUpdateEvents?.subscribe(
-      writeEvent,
-    );
-    request.raw.once("close", () => {
-      unsubscribeStore();
-      unsubscribeSystemUpdates?.();
-    });
   });
 
   return server;

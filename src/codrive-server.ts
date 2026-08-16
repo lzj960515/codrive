@@ -134,7 +134,7 @@ export class CodriveServer {
         skillInstaller,
         settingsService,
         systemUpdateService,
-        systemUpdateEvents: this.versionChecks,
+        systemUpdateEvents: [this.versionChecks, upgradeStore],
         currentVersion: version,
         accessToken: this.config.accessToken,
         isReady: () => this.ready,

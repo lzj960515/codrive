@@ -62,6 +62,8 @@ codrive upgrade
 
 看板还提供运行设置，用于调整每个项目的并发上限、默认模型和 fallback 模型。
 
+打开看板后，浏览器会通过经过认证的 Socket.IO 连接，只订阅当前选中项目、当前打开任务和系统更新。实时事件只表示对应作用域已经变化，浏览器仍从 HTTP 重新读取权威快照，不从 Socket 接收业务状态。切换项目或任务时会同步切换房间；断线重连后只恢复当前房间和对应 HTTP 读取，不刷新页面，也不丢失当前界面状态。完整契约见[实时同步架构](./docs/architecture/realtime-sync.md)。
+
 ## 工作方式
 
 ![Codrive 产品轮转与调度架构](https://raw.githubusercontent.com/lzj960515/codrive/main/docs/architecture/codrive-orchestration.png)
@@ -120,7 +122,7 @@ codrive --version               显示当前安装版本
 
 Codrive 默认把状态和日志保存在 `~/.codrive`。产品事件日志只追加写入；`codrive.log` 记录运行生命周期，不包含 prompt、聊天正文或报告正文。
 
-HTTP API 只监听 `127.0.0.1`，并使用随机访问令牌。自动 Codex 任务拥有完整本机访问权限，可以连续修改、测试、提交、合入和清理代码，无需等待终端审批。请只注册你信任的仓库和产品指令。
+HTTP API 与 Socket.IO 端点只监听 `127.0.0.1`，并使用同一个随机访问令牌。自动 Codex 任务拥有完整本机访问权限，可以连续修改、测试、提交、合入和清理代码，无需等待终端审批。请只注册你信任的仓库和产品指令。
 
 ## 参与开发
 

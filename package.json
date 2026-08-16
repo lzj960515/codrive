@@ -27,6 +27,7 @@
   "files": [
     "dist",
     "skills",
+    "docs/architecture/realtime-sync.md",
     "README.md",
     "README.zh-CN.md"
   ],
@@ -46,6 +47,8 @@
     "@openai/codex": "0.146.0",
     "fastify": "5.11.0",
     "proper-lockfile": "4.1.2",
+    "socket.io": "4.8.3",
+    "socket.io-client": "4.8.3",
     "zod": "4.3.6"
   },
   "devDependencies": {

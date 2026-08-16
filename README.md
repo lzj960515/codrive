@@ -62,6 +62,8 @@ codrive upgrade
 
 The board also provides runtime settings for per-project concurrency, the primary model, and the fallback model.
 
+An open board uses an authenticated Socket.IO connection to watch only the selected project, the open task, and system updates. Realtime events are small invalidation signals: the browser rereads the matching HTTP snapshot instead of accepting state over the socket. Switching projects or tasks changes rooms, while reconnecting restores the current rooms and scoped reads without reloading the page or discarding the current UI state. See [Realtime synchronization](./docs/architecture/realtime-sync.md) for the full contract.
+
 ## How it works
 
 ![Codrive product loop and scheduling architecture](https://raw.githubusercontent.com/lzj960515/codrive/main/docs/architecture/codrive-orchestration.png)
@@ -120,7 +122,7 @@ codrive --version               Show the installed version
 
 Codrive stores its state and logs under `~/.codrive` by default. The product event log is append-only, while `codrive.log` contains operational lifecycle records without prompts, chat messages, or report bodies.
 
-The HTTP API listens only on `127.0.0.1` and uses a random access token. Automated Codex tasks run with full local access so they can edit, test, commit, merge, and clean up without terminal approval. Register only repositories and product instructions you trust.
+The HTTP API and Socket.IO endpoint listen only on `127.0.0.1` and use the same random access token. Automated Codex tasks run with full local access so they can edit, test, commit, merge, and clean up without terminal approval. Register only repositories and product instructions you trust.
 
 ## Development
 

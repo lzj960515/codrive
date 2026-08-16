@@ -1,8 +1,11 @@
+import { createRealtimeWatchCoordinator } from "./board-realtime-client.js";
 import { taskBoardLayout } from "./task-board-layout.js";
 
 export function renderBoardClient(accessToken: string): string {
   const token = JSON.stringify(accessToken).replaceAll("<", "\\u003c");
   const layout = JSON.stringify(taskBoardLayout);
+  // The board is inline JavaScript, so embed the same coordinator exercised by unit tests.
+  const watchCoordinator = createRealtimeWatchCoordinator.toString();
   return `<script>
     const TOKEN = ${token};
     const boardLayout = ${layout};
@@ -44,6 +47,10 @@ export function renderBoardClient(accessToken: string): string {
     let taskDetail = null;
     let systemSettings = null;
     let updateActionError = null;
+    let projectReadRevision = 0;
+    let taskReadRevision = 0;
+    const socket = io({ auth: { token: TOKEN }, autoConnect: false });
+    const createWatchCoordinator = ${watchCoordinator};
     const headers = { "x-codrive-token": TOKEN, "content-type": "application/json" };
     const escapeHtml = value => String(value ?? "").replace(/[&<>\"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[character]));
     const bucket = status => boardLayout.statusColumns[status] || status;
@@ -254,7 +261,190 @@ export function renderBoardClient(accessToken: string): string {
       }
     }
 
+    async function refreshSelectedProject(projectId = selectedProjectId) {
+      if (!projectId || route.type === "settings") return;
+      const revision = ++projectReadRevision;
+      try {
+        const requests = [api("/api/board/projects/"+encodeURIComponent(projectId))];
+        if (route.type === "project" && route.projectId === projectId) {
+          requests.push(api("/api/projects/"+encodeURIComponent(projectId)));
+        }
+        const results = await Promise.all(requests);
+        if (revision !== projectReadRevision || selectedProjectId !== projectId) return;
+        const snapshotIndex = snapshots.findIndex(snapshot => snapshot.project.id === projectId);
+        if (snapshotIndex >= 0) snapshots.splice(snapshotIndex, 1, results[0]);
+        else snapshots.push(results[0]);
+        if (route.type === "project") productDetail = results[1];
+        if (selectedTaskId && !results[0].tasks.some(task => task.id === selectedTaskId)) {
+          selectedTaskId = null;
+          taskDetail = null;
+          void syncCurrentWatches();
+        }
+        const viewState = captureViewState();
+        renderProjects();
+        if (route.type === "project") renderProductDetail();
+        else renderWorkspace();
+        restoreViewState(viewState);
+        document.getElementById("offline").style.display = "none";
+      } catch {
+        showOffline();
+      }
+    }
+
+    async function refreshSelectedTask(taskId = selectedTaskId) {
+      if (!taskId || route.type !== "board") return;
+      const revision = ++taskReadRevision;
+      try {
+        const detail = await api("/api/tasks/"+encodeURIComponent(taskId));
+        if (revision !== taskReadRevision || selectedTaskId !== taskId) return;
+        const viewState = taskDetail?.task.id === taskId ? captureViewState() : null;
+        taskDetail = detail;
+        document.body.classList.add("detail-open");
+        renderTaskDetail();
+        if (viewState) restoreViewState(viewState);
+        document.getElementById("offline").style.display = "none";
+      } catch {
+        showOffline();
+      }
+    }
+
+    async function refreshCurrentTaskAndProject() {
+      await Promise.all([refreshSelectedProject(), refreshSelectedTask()]);
+    }
+
+    function showOffline() {
+      const activeUpgrade = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase);
+      const offline = document.getElementById("offline");
+      offline.textContent = activeUpgrade
+        ? "Codrive 正在重启，页面会自动恢复连接..."
+        : "正在重新连接本机服务...";
+      offline.style.display = "block";
+    }
+
+    function captureViewState() {
+      const active = elementIdentity(document.activeElement);
+      const values = Array.from(document.querySelectorAll("input, textarea, select"))
+        .map(element => ({
+          identity: elementIdentity(element),
+          value: element.value,
+          selectionStart: typeof element.selectionStart === "number" ? element.selectionStart : null,
+          selectionEnd: typeof element.selectionEnd === "number" ? element.selectionEnd : null
+        }))
+        .filter(entry => entry.identity);
+      return {
+        active,
+        values,
+        documentScroll: document.scrollingElement?.scrollTop ?? 0,
+        boardScrollLeft: document.querySelector(".board-wrap")?.scrollLeft ?? 0,
+        boardScrollTop: document.querySelector(".board-wrap")?.scrollTop ?? 0,
+        detailScroll: document.getElementById("task-detail-content")?.scrollTop ?? 0,
+        sidebarScroll: document.getElementById("projects")?.scrollTop ?? 0
+      };
+    }
+
+    function restoreViewState(state) {
+      for (const entry of state.values) {
+        const element = findIdentifiedElement(entry.identity);
+        if (!element || !("value" in element)) continue;
+        element.value = entry.value;
+        if (entry.selectionStart !== null && typeof element.setSelectionRange === "function") {
+          element.setSelectionRange(entry.selectionStart, entry.selectionEnd);
+        }
+      }
+      if (document.scrollingElement) document.scrollingElement.scrollTop = state.documentScroll;
+      const board = document.querySelector(".board-wrap");
+      if (board) {
+        board.scrollLeft = state.boardScrollLeft;
+        board.scrollTop = state.boardScrollTop;
+      }
+      const detail = document.getElementById("task-detail-content");
+      if (detail) detail.scrollTop = state.detailScroll;
+      const projects = document.getElementById("projects");
+      if (projects) projects.scrollTop = state.sidebarScroll;
+      findIdentifiedElement(state.active)?.focus({ preventScroll: true });
+    }
+
+    function elementIdentity(element) {
+      if (!(element instanceof HTMLElement)) return null;
+      if (element.id) return { attribute: "id", value: element.id };
+      const attributes = [
+        "data-task", "data-project", "data-project-action", "data-copy-task-id",
+        "data-retry", "data-continue-now", "data-reschedule", "data-reschedule-at",
+        "data-activity-thread", "name"
+      ];
+      for (const attribute of attributes) {
+        if (element.hasAttribute(attribute)) {
+          return { attribute, value: element.getAttribute(attribute) };
+        }
+      }
+      return null;
+    }
+
+    function findIdentifiedElement(identity) {
+      if (!identity) return null;
+      if (identity.attribute === "id") return document.getElementById(identity.value);
+      return Array.from(document.querySelectorAll("["+identity.attribute+"]"))
+        .find(element => element.getAttribute(identity.attribute) === identity.value) || null;
+    }
+
     const currentSnapshot = () => snapshots.find(snapshot => snapshot.project.id === selectedProjectId);
+
+    async function realtimeRequest(event, payload = {}) {
+      if (!socket.connected) throw new Error("Realtime connection unavailable");
+      const result = await socket.timeout(2000).emitWithAck(event, payload);
+      if (!result?.ok) throw new Error(result?.error || "Realtime watch failed");
+    }
+
+    const realtimeWatches = createWatchCoordinator({
+      isConnected: () => socket.connected,
+      readDesiredWatches: () => ({
+        projectId: route.type === "settings" ? null : selectedProjectId,
+        taskId: route.type === "board" ? selectedTaskId : null
+      }),
+      request: realtimeRequest
+    });
+
+    const syncCurrentWatches = () => realtimeWatches.sync();
+
+    async function refreshRealtimeScopes() {
+      const requests = [refreshSystem()];
+      if (route.type !== "settings" && selectedProjectId) {
+        requests.push(refreshSelectedProject());
+      }
+      if (route.type === "board" && selectedTaskId) {
+        requests.push(refreshSelectedTask());
+      }
+      await Promise.all(requests);
+    }
+
+    async function selectProject(projectId) {
+      if (!projectId || projectId === selectedProjectId) return;
+      selectedTaskId = null;
+      taskDetail = null;
+      taskReadRevision += 1;
+      document.body.classList.remove("detail-open", "nav-open");
+      document.getElementById("task-detail").setAttribute("aria-hidden", "true");
+      document.getElementById("task-detail-content").innerHTML = "";
+      selectedProjectId = projectId;
+      try {
+        await syncCurrentWatches();
+        await refreshSelectedProject(projectId);
+      } catch {
+        showOffline();
+      }
+    }
+
+    async function openTask(taskId) {
+      if (!taskId) return;
+      selectedTaskId = taskId;
+      taskDetail = null;
+      try {
+        await syncCurrentWatches();
+        await refreshSelectedTask(taskId);
+      } catch {
+        showOffline();
+      }
+    }
 
     function render() {
       renderProjects();
@@ -283,11 +473,7 @@ export function renderBoardClient(accessToken: string): string {
             window.location.href = "/projects/"+encodeURIComponent(button.dataset.project);
             return;
           }
-          selectedProjectId = button.dataset.project;
-          selectedTaskId = null;
-          taskDetail = null;
-          document.body.classList.remove("detail-open", "nav-open");
-          render();
+          void selectProject(button.dataset.project);
         };
       });
     }
@@ -341,16 +527,11 @@ export function renderBoardClient(accessToken: string): string {
       host.querySelectorAll("[data-project-action]").forEach(button => {
         button.onclick = async () => {
           await command("project.control", { projectId: project.id, action: button.dataset.projectAction });
-          await refresh();
+          await refreshSelectedProject(project.id);
         };
       });
       host.querySelectorAll("[data-task]").forEach(button => {
-        button.onclick = async () => {
-          selectedTaskId = button.dataset.task;
-          taskDetail = await api("/api/tasks/"+encodeURIComponent(selectedTaskId));
-          document.body.classList.add("detail-open");
-          render();
-        };
+        button.onclick = () => { void openTask(button.dataset.task); };
       });
     }
 
@@ -452,7 +633,11 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     function clearTaskDetail() {
+      const hadSelectedTask = Boolean(selectedTaskId);
       selectedTaskId = null;
+      taskDetail = null;
+      taskReadRevision += 1;
+      if (hadSelectedTask) void syncCurrentWatches();
       document.body.classList.remove("detail-open");
       const detail = document.getElementById("task-detail");
       detail.setAttribute("aria-hidden", "true");
@@ -523,11 +708,11 @@ export function renderBoardClient(accessToken: string): string {
       });
       host.querySelector("[data-retry]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "retry" });
-        await refresh();
+        await refreshCurrentTaskAndProject();
       });
       host.querySelector("[data-continue-now]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "continue" });
-        await refresh();
+        await refreshCurrentTaskAndProject();
       });
       host.querySelector("[data-reschedule]")?.addEventListener("click", async () => {
         const localValue = host.querySelector("[data-reschedule-at]").value;
@@ -537,7 +722,7 @@ export function renderBoardClient(accessToken: string): string {
           action: "reschedule",
           resumeAt: new Date(localValue).toISOString()
         });
-        await refresh();
+        await refreshCurrentTaskAndProject();
       });
     }
 
@@ -571,10 +756,14 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     function closeDetail() {
+      const viewState = captureViewState();
       selectedTaskId = null;
       taskDetail = null;
+      taskReadRevision += 1;
+      void syncCurrentWatches();
       document.body.classList.remove("detail-open");
       render();
+      restoreViewState(viewState);
     }
 
     document.getElementById("update-trigger").onclick = openUpdateDialog;
@@ -596,16 +785,31 @@ export function renderBoardClient(accessToken: string): string {
       else if (document.body.classList.contains("nav-open")) document.body.classList.remove("nav-open");
       else if (!document.getElementById("update-dialog").hidden) closeUpdateDialog();
     });
-    const events = new EventSource("/api/events?token="+encodeURIComponent(TOKEN));
-    events.onmessage = () => { refresh(); refreshSystem(); };
-    events.onerror = () => {
-      const offline = document.getElementById("offline");
-      offline.textContent = systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase)
-        ? "Codrive 正在重启，页面会自动恢复连接..."
-        : "正在重新连接本机服务...";
-      offline.style.display = "block";
-    };
-    refreshSystem();
-    refresh();
+    socket.on("project:changed", event => {
+      if (event.projectId === selectedProjectId) void refreshSelectedProject(event.projectId);
+    });
+    socket.on("task:changed", event => {
+      if (event.taskId === selectedTaskId) void refreshSelectedTask(event.taskId);
+    });
+    socket.on("system:changed", () => { void refreshSystem(); });
+    socket.on("disconnect", showOffline);
+    socket.on("connect_error", showOffline);
+    socket.on("connect", () => {
+      realtimeWatches.reset();
+      void (async () => {
+        try {
+          await syncCurrentWatches();
+          await refreshRealtimeScopes();
+          document.getElementById("offline").style.display = "none";
+        } catch {
+          showOffline();
+        }
+      })();
+    });
+
+    void (async () => {
+      await Promise.all([refreshSystem(), refresh()]);
+      socket.connect();
+    })();
   </script>`;
 }

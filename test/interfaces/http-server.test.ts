@@ -2,6 +2,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { io as connectSocket, type Socket } from "socket.io-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
@@ -39,9 +40,12 @@ describe("HTTP API", () => {
   let skillInstaller: SkillInstaller;
   let settingsService: SystemSettingsService;
   let versionChecks: PackageVersionCheckScheduler;
+  let upgradeStore: UpgradeStateStore;
   let errors: string[];
   let upgradeLaunches: unknown[];
   let publishSystemUpdate: (event: VersionStatusChangedEvent) => void;
+  let systemUpdateListeners: Set<(event: VersionStatusChangedEvent) => void>;
+  let sockets: Socket[];
 
   beforeEach(async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-http-"));
@@ -66,8 +70,9 @@ describe("HTTP API", () => {
       resolveLatestVersion: async () => "0.7.0",
     });
     versionChecks = new PackageVersionCheckScheduler({ versions });
+    upgradeStore = new UpgradeStateStore(stateDirectory);
     const upgrades = new UpgradeCoordinator({
-      store: new UpgradeStateStore(stateDirectory),
+      store: upgradeStore,
       versions,
       stateDirectory,
       launcher: {
@@ -96,9 +101,8 @@ describe("HTTP API", () => {
     });
     errors = [];
     upgradeLaunches = [];
-    const systemUpdateListeners = new Set<
-      (event: VersionStatusChangedEvent) => void
-    >();
+    sockets = [];
+    systemUpdateListeners = new Set();
     publishSystemUpdate = (event) => {
       for (const listener of systemUpdateListeners) listener(event);
     };
@@ -113,12 +117,15 @@ describe("HTTP API", () => {
         skillInstaller,
         versionChecks,
       ),
-      systemUpdateEvents: {
-        subscribe: (listener) => {
-          systemUpdateListeners.add(listener);
-          return () => systemUpdateListeners.delete(listener);
+      systemUpdateEvents: [
+        {
+          subscribe: (listener) => {
+            systemUpdateListeners.add(listener);
+            return () => systemUpdateListeners.delete(listener);
+          },
         },
-      },
+        upgradeStore,
+      ],
       currentVersion: "0.6.0",
       accessToken: "secret",
       onError: (message) => errors.push(message),
@@ -127,8 +134,69 @@ describe("HTTP API", () => {
   });
 
   afterEach(async () => {
+    for (const socket of sockets) socket.disconnect();
     await server.close();
   });
+
+  async function listenForRealtime(): Promise<string> {
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    const address = server.server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("HTTP test server did not expose a TCP address");
+    }
+    return `http://127.0.0.1:${address.port}`;
+  }
+
+  async function openSocket(url: string, token = "secret"): Promise<Socket> {
+    const socket = connectSocket(url, {
+      auth: { token },
+      autoConnect: false,
+      forceNew: true,
+      reconnection: false,
+    });
+    sockets.push(socket);
+    const connected = new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve());
+      socket.once("connect_error", reject);
+    });
+    socket.connect();
+    await connected;
+    return socket;
+  }
+
+  async function expectSocketRejected(
+    url: string,
+    auth?: Record<string, unknown>,
+  ): Promise<void> {
+    const socket = connectSocket(url, {
+      ...(auth ? { auth } : {}),
+      autoConnect: false,
+      forceNew: true,
+      reconnection: false,
+    });
+    sockets.push(socket);
+    const error = new Promise<Error>((resolve, reject) => {
+      socket.once("connect", () => reject(new Error("Socket unexpectedly connected")));
+      socket.once("connect_error", resolve);
+    });
+    socket.connect();
+    await expect(error).resolves.toMatchObject({ message: "Unauthorized" });
+  }
+
+  async function realtimeRequest(
+    socket: Socket,
+    event: string,
+    payload: Record<string, unknown> = {},
+  ): Promise<{ ok: boolean; error?: string }> {
+    return socket.timeout(1_000).emitWithAck(event, payload) as Promise<{
+      ok: boolean;
+      error?: string;
+    }>;
+  }
+
+  async function settleRealtime(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 
   async function command(payload: Record<string, unknown>) {
     return await server.inject({
@@ -329,32 +397,184 @@ describe("HTTP API", () => {
     expect(checkNow).toHaveBeenCalledTimes(1);
   });
 
-  it("streams background version status changes to an already-open board", async () => {
-    await server.listen({ host: "127.0.0.1", port: 0 });
-    const address = server.server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("HTTP test server did not expose a TCP address");
-    }
-    const controller = new AbortController();
-    const response = await fetch(
-      `http://127.0.0.1:${address.port}/api/events?token=secret`,
-      { signal: controller.signal },
-    );
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
+  it("authenticates Socket.IO and validates server-owned watch requests", async () => {
+    const created = await registerProject();
+    const url = await listenForRealtime();
 
-    try {
-      expect(response.headers.get("content-type")).toContain("text/event-stream");
-      const connected = decoder.decode((await reader.read()).value);
-      expect(connected).toContain('"type":"connected"');
+    await expectSocketRejected(url);
+    await expectSocketRejected(url, { token: "wrong" });
+    const socket = await openSocket(url);
 
-      publishSystemUpdate({ type: "system.version_status_changed" });
-      const update = decoder.decode((await reader.read()).value);
-      expect(update).toContain('"type":"system.version_status_changed"');
-    } finally {
-      controller.abort();
-      await reader.cancel().catch(() => undefined);
-    }
+    await expect(
+      realtimeRequest(socket, "watch:project", {
+        projectId: created.project.id,
+        room: "system",
+      }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      realtimeRequest(socket, "watch:project", { projectId: "missing" }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      realtimeRequest(socket, "watch:project", {
+        projectId: created.project.id,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      realtimeRequest(socket, "watch:task", {
+        taskId: created.tasks[0]!.id,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(realtimeRequest(socket, "watch:system")).resolves.toEqual({
+      ok: true,
+    });
+  });
+
+  it("isolates project, task, and system invalidations across clients", async () => {
+    const alpha = await registerProject("Alpha");
+    const [alphaSecondTask] = await store.addTasks(alpha.project.id, [
+      {
+        title: "Second",
+        description: "Second Alpha task",
+        acceptanceCriteria: ["Scoped"],
+      },
+    ]);
+    const beta = await registerProject("Beta");
+    const url = await listenForRealtime();
+    const alphaClient = await openSocket(url);
+    const betaClient = await openSocket(url);
+    const alphaProjectEvents: unknown[] = [];
+    const alphaTaskEvents: unknown[] = [];
+    const alphaSystemEvents: unknown[] = [];
+    const betaProjectEvents: unknown[] = [];
+    const betaTaskEvents: unknown[] = [];
+    alphaClient.on("project:changed", (event) => alphaProjectEvents.push(event));
+    alphaClient.on("task:changed", (event) => alphaTaskEvents.push(event));
+    alphaClient.on("system:changed", (event) => alphaSystemEvents.push(event));
+    betaClient.on("project:changed", (event) => betaProjectEvents.push(event));
+    betaClient.on("task:changed", (event) => betaTaskEvents.push(event));
+
+    await realtimeRequest(alphaClient, "watch:project", {
+      projectId: alpha.project.id,
+    });
+    await realtimeRequest(alphaClient, "watch:project", {
+      projectId: alpha.project.id,
+    });
+    await realtimeRequest(alphaClient, "watch:task", {
+      taskId: alpha.tasks[0]!.id,
+    });
+    await realtimeRequest(alphaClient, "watch:task", {
+      taskId: alpha.tasks[0]!.id,
+    });
+    await realtimeRequest(alphaClient, "watch:system");
+    await realtimeRequest(betaClient, "watch:project", {
+      projectId: beta.project.id,
+    });
+    await realtimeRequest(betaClient, "watch:task", {
+      taskId: beta.tasks[0]!.id,
+    });
+
+    await store.appendEvent({
+      eventId: "alpha-task-change",
+      type: "task.changed",
+      projectId: alpha.project.id,
+      taskId: alpha.tasks[0]!.id,
+      occurredAt: new Date().toISOString(),
+    });
+    await vi.waitFor(() => {
+      expect(alphaProjectEvents).toEqual([{ projectId: alpha.project.id }]);
+      expect(alphaTaskEvents).toEqual([
+        { projectId: alpha.project.id, taskId: alpha.tasks[0]!.id },
+      ]);
+    });
+    expect(betaProjectEvents).toEqual([]);
+    expect(betaTaskEvents).toEqual([]);
+
+    await store.appendEvent({
+      eventId: "alpha-other-task-change",
+      type: "task.changed",
+      projectId: alpha.project.id,
+      taskId: alphaSecondTask!.id,
+      occurredAt: new Date().toISOString(),
+    });
+    await vi.waitFor(() => expect(alphaProjectEvents).toHaveLength(2));
+    expect(alphaTaskEvents).toHaveLength(1);
+
+    publishSystemUpdate({ type: "system.version_status_changed" });
+    await vi.waitFor(() => expect(alphaSystemEvents).toEqual([{}]));
+    expect(betaProjectEvents).toEqual([]);
+
+    const upgradeTimestamp = new Date().toISOString();
+    await upgradeStore.write({
+      operationId: "upgrade_test",
+      targetVersion: "0.7.0",
+      phase: "installing",
+      startedAt: upgradeTimestamp,
+      updatedAt: upgradeTimestamp,
+    });
+    await vi.waitFor(() => expect(alphaSystemEvents).toEqual([{}, {}]));
+
+    await realtimeRequest(alphaClient, "watch:project", {
+      projectId: beta.project.id,
+    });
+    await store.appendEvent({
+      eventId: "alpha-after-switch",
+      type: "task.changed",
+      projectId: alpha.project.id,
+      taskId: alpha.tasks[0]!.id,
+      occurredAt: new Date().toISOString(),
+    });
+    await settleRealtime();
+    expect(alphaProjectEvents).toHaveLength(2);
+    expect(alphaTaskEvents).toHaveLength(1);
+  });
+
+  it("provides scoped board snapshots and removes the SSE surface", async () => {
+    const created = await registerProject();
+    const scoped = await server.inject({
+      method: "GET",
+      url: `/api/board/projects/${created.project.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const missing = await server.inject({
+      method: "GET",
+      url: "/api/board/projects/missing",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const oldEvents = await server.inject({
+      method: "GET",
+      url: "/api/events?token=secret",
+    });
+    const page = await server.inject({ method: "GET", url: "/" });
+
+    expect(scoped.statusCode).toBe(200);
+    expect(scoped.json()).toMatchObject({
+      project: { id: created.project.id },
+      tasks: [{ id: created.tasks[0]!.id }],
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(oldEvents.statusCode).toBe(404);
+    expect(page.body).toContain('<script src="/socket.io/socket.io.js"></script>');
+    expect(page.body).toContain('socket.on("project:changed"');
+    expect(page.body).toContain('socket.on("task:changed"');
+    expect(page.body).toContain('socket.on("system:changed"');
+    expect(page.body).toContain('"/api/board/projects/"');
+    expect(page.body).toContain("captureViewState");
+    expect(page.body).toContain("refreshRealtimeScopes");
+    expect(page.body).toContain("createRealtimeWatchCoordinator");
+    expect(page.body).not.toContain("new EventSource");
+    expect(page.body).not.toContain("window.location.reload");
+    const inlineScript = page.body.match(/<script>([\s\S]*)<\/script>/)?.[1];
+    expect(() => new Function(inlineScript ?? "")).not.toThrow();
+  });
+
+  it("unsubscribes realtime event sources when the server stops", async () => {
+    const url = await listenForRealtime();
+    await openSocket(url);
+    expect(systemUpdateListeners.size).toBe(1);
+
+    await server.close();
+
+    expect(systemUpdateListeners.size).toBe(0);
   });
 
   it("reads and updates concurrency and model routing through the settings boundary", async () => {

@@ -3,13 +3,20 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import * as lockfile from "proper-lockfile";
 
-import type { UpgradeState } from "../domain/system-update.js";
+import type {
+  SystemStatusChangedEvent,
+  SystemStatusEventSource,
+  UpgradeState,
+} from "../domain/system-update.js";
 
-export class UpgradeStateStore {
+export class UpgradeStateStore implements SystemStatusEventSource {
   readonly path: string;
   private readonly startLockPath: string;
   private writeQueue = Promise.resolve();
   private testSubscriber?: (state: UpgradeState) => void;
+  private readonly listeners = new Set<
+    (event: SystemStatusChangedEvent) => void
+  >();
 
   constructor(stateDirectory: string) {
     this.path = join(stateDirectory, "system-upgrade.json");
@@ -37,6 +44,9 @@ export class UpgradeStateStore {
       });
       await rename(temporaryPath, this.path);
       this.testSubscriber?.(state);
+      for (const listener of this.listeners) {
+        listener({ type: "system.upgrade_status_changed" });
+      }
     };
     const pending = this.writeQueue.then(write, write);
     this.writeQueue = pending.then(
@@ -70,5 +80,10 @@ export class UpgradeStateStore {
 
   subscribeForTest(subscriber: (state: UpgradeState) => void): void {
     this.testSubscriber = subscriber;
+  }
+
+  subscribe(listener: (event: SystemStatusChangedEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 }

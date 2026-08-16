@@ -76,6 +76,7 @@ export function renderBoardPage(accessToken: string): string {
     </section>
   </div>
 
+  <script src="/socket.io/socket.io.js"></script>
   ${renderBoardClient(accessToken)}
 </body>
 </html>`;
