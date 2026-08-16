@@ -161,10 +161,14 @@ describe("bundled Skill scripts", () => {
     const scheduledTask = added.tasks[0]!;
     const scheduledExecution = scheduledTask.currentExecution;
     if (scheduledExecution) {
+      const taskContext = JSON.parse(
+        await runSkill("codrive-task", ["context", scheduledTask.id]),
+      ) as { attemptId: string; reportOpportunityId: string };
       const resumeAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
       const blocked = JSON.parse(
         await runSkill("codrive-task", ["report", scheduledTask.id], {
-          attemptId: scheduledExecution.attemptId,
+          attemptId: taskContext.attemptId,
+          reportOpportunityId: taskContext.reportOpportunityId,
           outcome: "blocked",
           summary: "Wait for the external build",
           resumeAt,

@@ -43,6 +43,10 @@ describe("non-execution Skill handoff", () => {
       expect(instructions).toContain("attempt");
       expect(instructions).toContain("原对话");
     }
+    expect(task).toContain("新的报告机会");
+    expect(task).toContain("reportOpportunityId");
+    expect(task).toContain("重新读取 context");
+    expect(task).toContain("不可变活动");
   });
 
   it("expresses trustworthy review and rework decisions in the stage contract", async () => {

@@ -85,6 +85,9 @@ export function createTaskReportActivity({
     action,
     outcome: report.outcome,
     attemptId: report.attemptId,
+    ...(report.reportOpportunityId
+      ? { reportOpportunityId: report.reportOpportunityId }
+      : {}),
     summary: report.summary,
     occurredAt,
     ...(threadId ? { threadId } : {}),
@@ -125,6 +128,9 @@ export function taskReportFromActivity(activity: TaskActivity): TaskReport {
   return {
     taskId: activity.taskId,
     attemptId: activity.attemptId,
+    ...(activity.reportOpportunityId
+      ? { reportOpportunityId: activity.reportOpportunityId }
+      : {}),
     outcome: activity.outcome,
     summary: activity.summary,
     ...activity.evidence,

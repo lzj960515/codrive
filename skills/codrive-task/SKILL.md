@@ -95,7 +95,7 @@ Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查
 node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 ```
 
-每份报告包含 `context` 返回的 `attemptId`、当前阶段允许的 `outcome` 和简明 `summary`。报告 JSON 输入形式保持稳定；Codrive 将每次成功报告追加为一条不可变活动。各阶段同时提供后续流程依赖的事实：
+每份报告包含刚刚读取的 `context` 返回的 `attemptId` 和非空 `reportOpportunityId`，以及当前阶段允许的 `outcome` 和简明 `summary`。直接原样使用这两个执行身份，不从 turn、活动或历史 context 推导。升级前已经在途的旧执行可能返回 `reportOpportunityId: null`；仅在这个兼容场景省略该字段，后续 context 一旦返回非空值就按当前身份提交。Codrive 将每个报告机会的首次成功报告追加为一条不可变活动；同一机会的完全相同报告幂等返回，不追加活动。各阶段同时提供后续流程依赖的事实：
 
 - `develop` 完成：`workspacePath`、`baseCommit`、`candidateCommit`、`tests`。
 - `rework` 完成：`candidateCommit`、`tests`，并在 `summary` 中记录 findings 的处理结论。
@@ -105,7 +105,7 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 - `integrate` 需要重审：新的 `candidateCommit` 和 `tests`。
 - 需要用户决定：`needs_input` 和一个明确的 `question`。
 
-`needs_input` 追加“请求决定”活动并保留当前执行和 `attemptId`。用户在 Codex App 的原任务对话中回答后，继续当前阶段，并使用同一个 `attemptId` 提交新的最终报告；历史请求继续保留在活动时间线中。
+`needs_input` 追加“请求决定”活动并保留当前执行和 `attemptId`，同时为用户回答后的结果轮换 `reportOpportunityId`。用户在 Codex App 的原任务对话中回答后，重新读取 context，使用同一个 `attemptId` 和新的 `reportOpportunityId` 提交最终报告；历史请求继续保留在活动时间线中，`submittedActivityId` 仍指向当前决定活动，直到新结果写入。
 
 ## 阻塞与计划恢复
 
@@ -118,11 +118,14 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 
 `resumePrompt` 是写给恢复后自己的执行检查点，简明包含：届时要重新检查的外部或仓库事实、等待前已经完成的工作与验证、继续当前阶段的明确下一步。恢复消息还会携带固定任务 ID 和 `$codrive-task` 入口，不在检查点中复制完整任务文档。
 
+恢复 turn 启动时，会在同一 action、attempt 和 thread 中形成新的报告机会，并生成新的 `reportOpportunityId`。重新读取 context，使用原 `attemptId` 和新的 `reportOpportunityId` 提交恢复结果；等待前的 blocked 报告继续作为不可变活动保留，它携带旧机会身份，不能占用新 turn。当前报告机会内重复提交完全相同的报告保持幂等，提交不同结果仍按冲突处理。
+
 计划阻塞报告格式：
 
 ```json
 {
   "attemptId": "attempt-id",
+  "reportOpportunityId": "report-opportunity-id",
   "outcome": "blocked",
   "summary": "等待原因",
   "resumeAt": "2026-08-13T18:30:00+08:00",
@@ -146,6 +149,7 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 ```json
 {
   "attemptId": "attempt-id",
+  "reportOpportunityId": "report-opportunity-id",
   "outcome": "completed",
   "summary": "完成内容",
   "workspacePath": "/absolute/worktree/path",

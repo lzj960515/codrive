@@ -76,7 +76,7 @@ async function finishProjectExecution(report: Omit<ProjectReport, "attemptId">) 
 
 async function finishTaskExecution(
   taskId: string,
-  report: Omit<TaskReport, "taskId" | "attemptId">,
+  report: Omit<TaskReport, "taskId" | "attemptId" | "reportOpportunityId">,
 ) {
   const task = (await store.findTask(taskId))!.task;
   const execution = task.currentExecution!;
@@ -84,8 +84,160 @@ async function finishTaskExecution(
     ...report,
     taskId,
     attemptId: execution.attemptId,
+    reportOpportunityId: requiredReportOpportunity(execution),
   });
   return workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+}
+
+function requiredReportOpportunity(
+  execution: NonNullable<Task["currentExecution"]>,
+): string {
+  expect(execution.reportOpportunityId).toEqual(expect.any(String));
+  return execution.reportOpportunityId!;
+}
+
+async function advanceTaskToAction(
+  taskId: string,
+  action: NonNullable<Task["requestedAction"]>,
+) {
+  if (action === "develop") return;
+  await finishTaskExecution(taskId, {
+    outcome: "completed",
+    summary: "Implemented",
+    workspacePath: "/workspace/game/.worktrees/task_1",
+    candidateCommit: "candidate_1",
+  });
+  if (action === "review") return;
+  await finishTaskExecution(
+    taskId,
+    action === "rework"
+      ? {
+          outcome: "changes_requested",
+          summary: "One issue remains",
+          findings: ["Fix the edge case"],
+        }
+      : {
+          outcome: "approved",
+          summary: "Approved",
+          reviewedMainCommit: "main_1",
+        },
+  );
+}
+
+async function startTaskAtAction(action: NonNullable<Task["requestedAction"]>) {
+  const created = await registerProject(1);
+  const taskId = created.tasks[0]!.id;
+  await finishProjectExecution({
+    projectId: created.project.id,
+    outcome: "selected",
+    summary: "Start the task",
+    taskIds: [taskId],
+  });
+  await advanceTaskToAction(taskId, action);
+  return {
+    projectId: created.project.id,
+    taskId,
+    execution: (await store.findTask(taskId))!.task.currentExecution!,
+  };
+}
+
+async function waitForScheduledResume(
+  taskId: string,
+  execution: NonNullable<Task["currentExecution"]>,
+  resumeAt: string,
+  summary: string,
+  resumePrompt: string,
+) {
+  await workflow.submitReport({
+    taskId,
+    attemptId: execution.attemptId,
+    reportOpportunityId: requiredReportOpportunity(execution),
+    outcome: "blocked",
+    summary,
+    resumeAt,
+    resumePrompt,
+  });
+  await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+  const waiting = (await store.findTask(taskId))!.task;
+  return {
+    waiting,
+    blockedActivityId: waiting.currentExecution!.submittedActivityId,
+  };
+}
+
+async function resumePersistedLegacyScheduledExecution() {
+  const { projectId, taskId, execution } = await startTaskAtAction("develop");
+  const running = (await store.findTask(taskId))!.task;
+  const legacyRunningExecution = { ...running.currentExecution! };
+  delete legacyRunningExecution.reportOpportunityId;
+  await store.saveTask(projectId, {
+    ...running,
+    currentExecution: legacyRunningExecution,
+  });
+
+  const blockedReport = {
+    taskId,
+    attemptId: execution.attemptId,
+    outcome: "blocked" as const,
+    summary: "Wait for the legacy deployment",
+    resumeAt: "2026-08-03T02:00:00.000Z",
+    resumePrompt: "Inspect the legacy deployment and continue.",
+  };
+  await workflow.submitReport(blockedReport);
+  await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+  await workflow.continueTaskNow(taskId);
+
+  const resumed = (await store.findTask(taskId))!.task;
+  const legacyResumedExecution = { ...resumed.currentExecution! };
+  delete legacyResumedExecution.reportOpportunityId;
+  await store.saveTask(projectId, {
+    ...resumed,
+    currentExecution: legacyResumedExecution,
+  });
+
+  const legacyResumed = (await store.findTask(taskId))!.task;
+  expect(legacyResumed.currentExecution).toMatchObject({
+    attemptId: execution.attemptId,
+    status: "running",
+  });
+  expect(legacyResumed.currentExecution).not.toHaveProperty("reportOpportunityId");
+  expect(legacyResumed.currentExecution).not.toHaveProperty("submittedActivityId");
+  expect(
+    (await store.listTaskActivities(projectId, taskId)).filter(
+      ({ type }) => type === "scheduled_resume_started",
+    ),
+  ).toHaveLength(1);
+
+  return { projectId, taskId, execution, blockedReport };
+}
+
+function successfulReportForAction(
+  action: NonNullable<Task["requestedAction"]>,
+  taskId: string,
+  attemptId: string,
+  reportOpportunityId: string,
+): TaskReport {
+  const report = {
+    taskId,
+    attemptId,
+    reportOpportunityId,
+    outcome: action === "review" ? ("approved" as const) : ("completed" as const),
+    summary: `Finished ${action} after the scheduled wait`,
+  };
+  switch (action) {
+    case "develop":
+      return {
+        ...report,
+        workspacePath: "/workspace/game/.worktrees/task_1",
+        candidateCommit: "candidate_after_resume",
+      };
+    case "rework":
+      return { ...report, candidateCommit: "candidate_after_rework" };
+    case "review":
+      return { ...report, reviewedMainCommit: "main_after_review" };
+    case "integrate":
+      return { ...report, mergedCommit: "main_after_integration" };
+  }
 }
 
 function capacityFailure(turnId: string) {
@@ -239,6 +391,9 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId: developing.id,
       attemptId: developing.currentExecution!.attemptId,
+      reportOpportunityId: requiredReportOpportunity(
+        developing.currentExecution!,
+      ),
       outcome: "completed",
       summary: "Foundation implemented",
       workspacePath: "/workspace/game/.worktrees/foundation",
@@ -1192,6 +1347,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId: developing.id,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
       outcome: "needs_input",
       summary: "Need a product decision",
       question: "Should it be turn based?",
@@ -1212,6 +1368,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId: developing.id,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(waiting.currentExecution!),
       outcome: "completed",
       summary: "Implemented after the answer",
       workspacePath: "/workspace/game/.worktrees/task_1",
@@ -1254,11 +1411,16 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
       outcome: "needs_input",
       summary: "Need a decision",
       question: "Keep the existing files?",
     });
-    await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+    const waiting = await workflow.completeTurn(
+      taskId,
+      execution.attemptId,
+      execution.turnId!,
+    );
     await workflow.addProjectWork(created.project.id, [
       {
         title: "Later task",
@@ -1278,6 +1440,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(waiting.currentExecution!),
       outcome: "completed",
       summary: "Implemented after resolving the question",
       workspacePath: "/workspace/game/.worktrees/task_1",
@@ -1351,6 +1514,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId: developing.id,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
       outcome: "blocked",
       summary: "The required tool is unavailable",
     });
@@ -1401,6 +1565,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId: developing.id,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
       outcome: "blocked",
       summary: "Wait for the remote build",
       resumeAt,
@@ -1460,6 +1625,417 @@ describe("WorkflowEngine", () => {
     ]);
   });
 
+  it.each([
+    { action: "develop", nextStatus: "reviewing", nextAction: "review" },
+    { action: "rework", nextStatus: "reviewing", nextAction: "review" },
+    { action: "review", nextStatus: "integrating", nextAction: "integrate" },
+    { action: "integrate", nextStatus: "done", nextAction: null },
+  ] as const)(
+    "accepts one idempotent current report after a scheduled $action resume",
+    async ({ action, nextStatus, nextAction }) => {
+      const { projectId, taskId, execution } = await startTaskAtAction(action);
+      const resumeAt = "2026-08-03T01:00:00.000Z";
+      const { blockedActivityId } = await waitForScheduledResume(
+        taskId,
+        execution,
+        resumeAt,
+        `Wait before ${action}`,
+        `Finish ${action} after the dependency is ready.`,
+      );
+
+      now = new Date(resumeAt);
+      await workflow.resumeScheduledTasks(now);
+      const resumedExecution = (await store.findTask(taskId))!.task
+        .currentExecution!;
+      expect(resumedExecution).not.toHaveProperty("submittedActivityId");
+      expect(resumedExecution.reportOpportunityId).not.toBe(
+        execution.reportOpportunityId,
+      );
+
+      const completedReport = successfulReportForAction(
+        action,
+        taskId,
+        execution.attemptId,
+        requiredReportOpportunity(resumedExecution),
+      );
+      const reported = await workflow.submitReport(completedReport);
+      const completedActivityId = reported.currentExecution!.submittedActivityId;
+
+      expect(completedActivityId).toBeDefined();
+      expect(completedActivityId).not.toBe(blockedActivityId);
+      expect(
+        (await store.listTaskActivities(projectId, taskId)).filter(
+          ({ attemptId, outcome }) =>
+            attemptId === execution.attemptId && outcome !== undefined,
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          id: blockedActivityId,
+          outcome: "blocked",
+          reportOpportunityId: execution.reportOpportunityId,
+        }),
+        expect.objectContaining({
+          id: completedActivityId,
+          outcome: completedReport.outcome,
+          reportOpportunityId: resumedExecution.reportOpportunityId,
+        }),
+      ]);
+
+      await workflow.submitReport(completedReport);
+      await expect(
+        workflow.submitReport({
+          ...completedReport,
+          summary: "A conflicting result for the resumed turn",
+        }),
+      ).rejects.toThrow(/conflicts with the recorded result/i);
+
+      await workflow.completeTurn(
+        taskId,
+        execution.attemptId,
+        resumedExecution.turnId!,
+      );
+      const completed = (await store.findTask(taskId))!.task;
+      expect(completed).toMatchObject({
+        status: nextStatus,
+        requestedAction: nextAction,
+        ...(nextAction
+          ? { currentExecution: { action: nextAction, status: "running" } }
+          : {}),
+      });
+      const activityCount = (
+        await store.listTaskActivities(projectId, taskId)
+      ).length;
+      await workflow.submitReport(completedReport);
+      expect(await store.listTaskActivities(projectId, taskId)).toHaveLength(
+        activityCount,
+      );
+      await expect(
+        workflow.submitReport({
+          ...completedReport,
+          summary: "A stale correction after the report was finalized",
+        }),
+      ).rejects.toThrow(/conflicts with the recorded result/i);
+      expect(
+        (await store.listTaskActivities(projectId, taskId)).filter(
+          ({ type }) => type === "execution_failed",
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
+  it("accepts needs_input after an early scheduled continuation", async () => {
+    const {
+      projectId,
+      taskId,
+      execution: originalExecution,
+    } = await startTaskAtAction("develop");
+    const blockedReport = {
+      taskId,
+      attemptId: originalExecution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(originalExecution),
+      outcome: "blocked" as const,
+      summary: "Wait for a product meeting",
+      resumeAt: "2026-08-03T02:00:00.000Z",
+      resumePrompt: "Check the meeting result and continue.",
+    };
+    const { blockedActivityId } = await waitForScheduledResume(
+      taskId,
+      originalExecution,
+      blockedReport.resumeAt,
+      blockedReport.summary,
+      blockedReport.resumePrompt,
+    );
+    const decisionReport = {
+      taskId,
+      attemptId: originalExecution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(originalExecution),
+      outcome: "needs_input" as const,
+      summary: "The meeting exposed one product choice",
+      question: "Should the task keep the compatibility mode?",
+    };
+    await expect(workflow.submitReport(decisionReport)).rejects.toThrow(
+      /conflicts with the recorded result/i,
+    );
+    await expect(
+      workflow.submitReport({ ...decisionReport, attemptId: "wrong_attempt" }),
+    ).rejects.toThrow(/does not match the current execution/i);
+
+    await workflow.continueTaskNow(taskId);
+    const resumedExecution = (await store.findTask(taskId))!.task.currentExecution!;
+    expect(resumedExecution.turnId).not.toBe(originalExecution.turnId);
+
+    const resumedDecisionReport = {
+      ...decisionReport,
+      reportOpportunityId: requiredReportOpportunity(resumedExecution),
+    };
+    const reported = await workflow.submitReport(resumedDecisionReport);
+    const decisionActivityId = reported.currentExecution!.submittedActivityId;
+    await expect(workflow.submitReport(blockedReport)).rejects.toThrow(
+      /report opportunity/i,
+    );
+
+    await workflow.completeTurn(
+      taskId,
+      originalExecution.attemptId,
+      originalExecution.turnId!,
+    );
+    expect((await store.findTask(taskId))!.task.currentExecution?.turnId).toBe(
+      resumedExecution.turnId,
+    );
+
+    const waitingForInput = await workflow.completeTurn(
+      taskId,
+      originalExecution.attemptId,
+      resumedExecution.turnId!,
+    );
+    expect(waitingForInput).toMatchObject({
+      status: "waiting_for_input",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: originalExecution.attemptId,
+        status: "waiting_for_input",
+        submittedActivityId: decisionActivityId,
+      },
+    });
+    expect(waitingForInput.currentExecution?.reportOpportunityId).not.toBe(
+      resumedExecution.reportOpportunityId,
+    );
+    const reportActivities = (
+      await store.listTaskActivities(projectId, taskId)
+    ).filter(
+      ({ attemptId, outcome }) =>
+        attemptId === originalExecution.attemptId && outcome !== undefined,
+    );
+    expect(reportActivities).toHaveLength(2);
+    expect(reportActivities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: blockedActivityId, outcome: "blocked" }),
+        expect.objectContaining({
+          id: decisionActivityId,
+          outcome: "needs_input",
+          reportOpportunityId: resumedExecution.reportOpportunityId,
+        }),
+      ]),
+    );
+  });
+
+  it("rejects an old report before the early resumed turn submits its result", async () => {
+    const { projectId, taskId, execution: originalExecution } =
+      await startTaskAtAction("develop");
+    const originalOpportunityId =
+      (
+        originalExecution as typeof originalExecution & {
+          reportOpportunityId?: string;
+        }
+      ).reportOpportunityId ?? "missing_original_opportunity";
+    const blockedReport = {
+      taskId,
+      attemptId: originalExecution.attemptId,
+      reportOpportunityId: originalOpportunityId,
+      outcome: "blocked" as const,
+      summary: "Wait for the deployment",
+      resumeAt: "2026-08-03T02:00:00.000Z",
+      resumePrompt: "Inspect the deployment and continue.",
+    };
+
+    await workflow.submitReport(blockedReport);
+    await workflow.completeTurn(
+      taskId,
+      originalExecution.attemptId,
+      originalExecution.turnId!,
+    );
+    await workflow.continueTaskNow(taskId);
+    const resumedExecution = (await store.findTask(taskId))!.task.currentExecution!;
+    const activityCount = (
+      await store.listTaskActivities(projectId, taskId)
+    ).length;
+
+    await expect(workflow.submitReport(blockedReport)).rejects.toThrow(
+      /report opportunity/i,
+    );
+    expect(await store.listTaskActivities(projectId, taskId)).toHaveLength(
+      activityCount,
+    );
+    expect(
+      (
+        resumedExecution as typeof resumedExecution & {
+          reportOpportunityId?: string;
+        }
+      ).reportOpportunityId,
+    ).not.toBe(originalOpportunityId);
+  });
+
+  it("requires the current opportunity for a new execution report", async () => {
+    const { projectId, taskId, execution } = await startTaskAtAction("develop");
+    const report = {
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "completed" as const,
+      summary: "Implemented",
+      workspacePath: "/workspace/game/.worktrees/task_1",
+      candidateCommit: "candidate_1",
+    };
+
+    await expect(workflow.submitReport(report)).rejects.toThrow(
+      /report opportunity/i,
+    );
+    await expect(
+      workflow.submitReport({
+        ...report,
+        reportOpportunityId: "report_opportunity_from_another_turn",
+      }),
+    ).rejects.toThrow(/report opportunity/i);
+    expect(
+      (await store.listTaskActivities(projectId, taskId)).filter(
+        ({ outcome }) => outcome !== undefined,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("accepts a persisted legacy execution report without an opportunity", async () => {
+    const { projectId, taskId, execution } = await startTaskAtAction("develop");
+    const found = (await store.findTask(taskId))!.task;
+    const legacyExecution = { ...found.currentExecution! };
+    delete legacyExecution.reportOpportunityId;
+    await store.saveTask(projectId, {
+      ...found,
+      currentExecution: legacyExecution,
+    });
+    const report = {
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "completed" as const,
+      summary: "Implemented by an execution persisted before the upgrade",
+      workspacePath: "/workspace/game/.worktrees/task_1",
+      candidateCommit: "candidate_legacy",
+    };
+
+    const reported = await workflow.submitReport(report);
+    const activityCount = (await store.listTaskActivities(projectId, taskId)).length;
+    await workflow.submitReport(report);
+
+    expect(reported.currentExecution?.submittedActivityId).toBeDefined();
+    expect(await store.listTaskActivities(projectId, taskId)).toHaveLength(
+      activityCount,
+    );
+    expect(
+      (await store.listTaskActivities(projectId, taskId)).at(-1),
+    ).not.toHaveProperty("reportOpportunityId");
+  });
+
+  it("accepts the first new report from a persisted legacy resumed execution", async () => {
+    const { projectId, taskId, execution } =
+      await resumePersistedLegacyScheduledExecution();
+    const completedReport = {
+      taskId,
+      attemptId: execution.attemptId,
+      outcome: "completed" as const,
+      summary: "Completed after the legacy scheduled resume",
+      workspacePath: "/workspace/game/.worktrees/task_1",
+      candidateCommit: "candidate_after_legacy_resume",
+    };
+
+    const reported = await workflow.submitReport(completedReport);
+    const reportActivities = (
+      await store.listTaskActivities(projectId, taskId)
+    ).filter(({ attemptId, outcome }) =>
+      attemptId === execution.attemptId && outcome !== undefined,
+    );
+    await workflow.submitReport(completedReport);
+
+    expect(reported.currentExecution?.submittedActivityId).toBe(
+      reportActivities.at(-1)?.id,
+    );
+    expect(reportActivities.map(({ outcome }) => outcome)).toEqual([
+      "blocked",
+      "completed",
+    ]);
+    expect(
+      (await store.listTaskActivities(projectId, taskId)).filter(
+        ({ attemptId, outcome }) =>
+          attemptId === execution.attemptId && outcome !== undefined,
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("rejects an exact historical report replay for a legacy resumed execution", async () => {
+    const { projectId, taskId, execution, blockedReport } =
+      await resumePersistedLegacyScheduledExecution();
+    const activityCount = (
+      await store.listTaskActivities(projectId, taskId)
+    ).length;
+
+    await expect(workflow.submitReport(blockedReport)).rejects.toThrow(
+      /conflicts with the recorded result/i,
+    );
+    expect(await store.listTaskActivities(projectId, taskId)).toHaveLength(
+      activityCount,
+    );
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: execution.attemptId,
+      status: "running",
+    });
+  });
+
+  it("accepts a new planned blocker after a rescheduled wait resumes", async () => {
+    const { projectId, taskId, execution } = await startTaskAtAction("develop");
+    const { blockedActivityId: firstBlockedActivityId } =
+      await waitForScheduledResume(
+        taskId,
+        execution,
+        "2026-08-03T01:00:00.000Z",
+        "Wait for the first deployment",
+        "Inspect the first deployment.",
+      );
+
+    await workflow.rescheduleTaskResume(taskId, "2026-08-03T02:00:00.000Z");
+    now = new Date("2026-08-03T02:00:00.000Z");
+    await workflow.resumeScheduledTasks(now);
+    const resumedExecution = (await store.findTask(taskId))!.task.currentExecution!;
+
+    const waitingAgain = await workflow.submitReport({
+      taskId,
+      attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(resumedExecution),
+      outcome: "blocked",
+      summary: "Wait for the follow-up deployment",
+      resumeAt: "2026-08-03T03:00:00.000Z",
+      resumePrompt: "Inspect the follow-up deployment.",
+    });
+    const secondBlockedActivityId = waitingAgain.currentExecution!.submittedActivityId;
+    await workflow.completeTurn(
+      taskId,
+      execution.attemptId,
+      resumedExecution.turnId!,
+    );
+
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "blocked",
+      requestedAction: "develop",
+      currentExecution: {
+        attemptId: execution.attemptId,
+        status: "waiting_for_resume",
+        submittedActivityId: secondBlockedActivityId,
+        scheduledResume: { resumeAt: "2026-08-03T03:00:00.000Z" },
+      },
+    });
+    expect(
+      (await store.listTaskActivities(projectId, taskId)).filter(
+        ({ attemptId, outcome }) =>
+          attemptId === execution.attemptId && outcome !== undefined,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        id: firstBlockedActivityId,
+        outcome: "blocked",
+      }),
+      expect.objectContaining({
+        id: secondBlockedActivityId,
+        outcome: "blocked",
+      }),
+    ]);
+  });
+
   it("clears a planned resume when its turn cannot be dispatched", async () => {
     const created = await registerProject(1);
     await finishProjectExecution({
@@ -1474,6 +2050,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
       outcome: "blocked",
       summary: "Wait for the remote build",
       resumeAt: "2026-08-03T01:00:00.000Z",
@@ -1497,6 +2074,17 @@ describe("WorkflowEngine", () => {
       },
     });
     expect(failed.currentExecution).not.toHaveProperty("scheduledResume");
+    await expect(
+      workflow.submitReport({
+        taskId,
+        attemptId: execution.attemptId,
+        reportOpportunityId: requiredReportOpportunity(failed.currentExecution!),
+        outcome: "completed",
+        summary: "This failed execution cannot report",
+        workspacePath: "/workspace/game/.worktrees/task_1",
+        candidateCommit: "candidate_after_failed_resume",
+      }),
+    ).rejects.toThrow(/does not match the current execution/i);
   });
 
   it("uses an expired fallback cooldown for a scheduled primary probe", async () => {
@@ -1513,6 +2101,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
       outcome: "blocked",
       summary: "Wait beyond the primary cooldown",
       resumeAt: "2026-08-03T01:00:00.000Z",
@@ -1602,6 +2191,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId: developing.id,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
       outcome: "blocked",
       summary: "Wait briefly",
       resumeAt: "2026-08-03T00:05:00.000Z",
@@ -1636,6 +2226,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId: developing.id,
       attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
       outcome: "blocked",
       summary: "Wait for a delivery",
       resumeAt: "2026-08-03T02:00:00.000Z",
@@ -1677,6 +2268,7 @@ describe("WorkflowEngine", () => {
       await workflow.submitReport({
         taskId: task.id,
         attemptId: executions[index]!.attemptId,
+        reportOpportunityId: requiredReportOpportunity(executions[index]!),
         outcome: "blocked",
         summary: `Wait ${index}`,
         resumeAt:
@@ -1991,6 +2583,7 @@ describe("WorkflowEngine", () => {
         status: "developing",
         currentExecution: {
           attemptId: first.attemptId,
+          reportOpportunityId: first.reportOpportunityId,
           threadId: first.threadId,
           status: "retry_scheduled",
           modelRouting: {
@@ -2012,6 +2605,7 @@ describe("WorkflowEngine", () => {
       await workflow.retryScheduledExecutions(now);
       expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
         attemptId: first.attemptId,
+        reportOpportunityId: first.reportOpportunityId,
         status: "running",
         modelRouting: {
           model: models.primary,
@@ -2033,6 +2627,7 @@ describe("WorkflowEngine", () => {
       status: "developing",
       currentExecution: {
         attemptId: first.attemptId,
+        reportOpportunityId: first.reportOpportunityId,
         threadId: first.threadId,
         status: "running",
         modelRouting: {
@@ -2259,6 +2854,7 @@ describe("WorkflowEngine", () => {
     await workflow.submitReport({
       taskId,
       attemptId: fallback.attemptId,
+      reportOpportunityId: requiredReportOpportunity(fallback),
       outcome: "completed",
       summary: "Development completed on fallback",
       workspacePath: "/workspace/game/.worktrees/task",
