@@ -1127,7 +1127,7 @@ describe("RecoveryManager", () => {
     activityBridge.close();
   });
 
-  it("sends a completed silent turn through the existing report path without resuming it", async () => {
+  it("completes a silent turn whose persisted thread is not loaded", async () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
@@ -1139,7 +1139,10 @@ describe("RecoveryManager", () => {
       activityBridge,
     });
     const execution = (await store.findTask(taskId))!.task.currentExecution!;
-    notifications.turnSnapshot = coherentSnapshot(execution.turnId!, "completed");
+    notifications.turnSnapshot = {
+      ...coherentSnapshot(execution.turnId!, "completed"),
+      threadStatus: "notLoaded",
+    };
 
     await silentRecovery.recoverSilentTaskExecutions(
       new Date("2026-08-03T00:10:00.000Z"),
@@ -1154,6 +1157,89 @@ describe("RecoveryManager", () => {
     });
     activityBridge.close();
   });
+
+  it.each(["interrupted", "failed"] as const)(
+    "resumes a silent %s turn whose persisted thread is not loaded",
+    async (status) => {
+      const observedAt = new Date("2026-08-03T00:00:00.000Z");
+      const activityBridge = new ExecutionActivityBridge({
+        store,
+        codex: notifications,
+        now: () => observedAt,
+      });
+      await activityBridge.initialize(observedAt);
+      const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+        activityBridge,
+      });
+      const execution = (await store.findTask(taskId))!.task.currentExecution!;
+      notifications.turnSnapshot = {
+        ...coherentSnapshot(execution.turnId!, status),
+        threadStatus: "notLoaded",
+      };
+
+      await silentRecovery.recoverSilentTaskExecutions(
+        new Date("2026-08-03T00:10:00.000Z"),
+      );
+
+      expect(taskDispatcher.resumed).toHaveLength(1);
+      expect(
+        await store.listTaskActivities(
+          (await store.findTask(taskId))!.project.id,
+          taskId,
+        ),
+      ).toEqual([
+        expect.objectContaining({
+          type: "execution_recovered",
+          attemptId: execution.attemptId,
+          threadId: execution.threadId,
+        }),
+      ]);
+      activityBridge.close();
+    },
+  );
+
+  it.each([
+    ["active", []],
+    ["systemError", []],
+    ["notLoaded", ["turn-new"]],
+  ] as const)(
+    "defers a terminal turn when thread status %s still conflicts with it",
+    async (threadStatus, activeTurnIds) => {
+      const observedAt = new Date("2026-08-03T00:00:00.000Z");
+      const activityBridge = new ExecutionActivityBridge({
+        store,
+        codex: notifications,
+        now: () => observedAt,
+      });
+      await activityBridge.initialize(observedAt);
+      const silentRecovery = new RecoveryManager(store, workflow, notifications, {
+        activityBridge,
+      });
+      const execution = (await store.findTask(taskId))!.task.currentExecution!;
+      notifications.turnSnapshot = {
+        threadStatus,
+        activeTurnIds: [...activeTurnIds],
+        turn: {
+          id: execution.turnId!,
+          status: "failed",
+          items: [],
+        },
+      };
+
+      await silentRecovery.recoverSilentTaskExecutions(
+        new Date("2026-08-03T00:10:00.000Z"),
+      );
+
+      expect(taskDispatcher.resumed).toEqual([]);
+      expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+        attemptId: execution.attemptId,
+        status: execution.status,
+        threadId: execution.threadId,
+        turnId: execution.turnId,
+      });
+      activityBridge.close();
+    },
+  );
 
   it("defers a missing or contradictory exact turn and retries the observation later", async () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");

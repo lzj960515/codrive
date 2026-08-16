@@ -98,6 +98,17 @@ describe("CodexAppServerClient", () => {
       await expect(
         client.readTurnSnapshot(threadId, "turn_missing"),
       ).resolves.toMatchObject({ turn: null });
+      await expect(
+        client.readTurnSnapshot("thread_not_loaded", "turn_completed"),
+      ).resolves.toEqual({
+        threadStatus: "notLoaded",
+        activeTurnIds: [],
+        turn: {
+          id: "turn_completed",
+          status: "completed",
+          items: [],
+        },
+      });
       await client.interruptTurn(threadId, turnId);
     } finally {
       await client.stop();
@@ -150,6 +161,7 @@ describe("CodexAppServerClient", () => {
       { threadId: "thread_1", includeTurns: true },
       { threadId: "thread_1", includeTurns: true },
       { threadId: "thread_1", includeTurns: true },
+      { threadId: "thread_not_loaded", includeTurns: true },
     ]);
     expect(activities).toContainEqual({
       type: "activity",
@@ -199,12 +211,16 @@ lines.on("line", (line) => {
         ],
         nextCursor: "page_2"
       };
-  if (request.method === "thread/read") result = { thread: { status: { type: "active", activeFlags: [] }, turns: [
-    { id: "turn_1", status: "inProgress", startedAt: 1786842000, completedAt: null, items: [{ type: "fileChange", id: "item_1", changes: [{ path: "SECRET_PATH" }], status: "inProgress" }] },
-    { id: "turn_completed", status: "completed", startedAt: 1786841900, completedAt: 1786841950, items: [] },
-    { id: "turn_interrupted", status: "interrupted", startedAt: 1786841800, completedAt: 1786841850, items: [] },
-    { id: "turn_failed", status: "failed", startedAt: 1786841700, completedAt: 1786841750, items: [] }
-  ] } };
+  if (request.method === "thread/read") result = request.params.threadId === "thread_not_loaded"
+    ? { thread: { status: { type: "notLoaded" }, turns: [
+        { id: "turn_completed", status: "completed", startedAt: 1786841900, completedAt: 1786841950, items: [] }
+      ] } }
+    : { thread: { status: { type: "active", activeFlags: [] }, turns: [
+        { id: "turn_1", status: "inProgress", startedAt: 1786842000, completedAt: null, items: [{ type: "fileChange", id: "item_1", changes: [{ path: "SECRET_PATH" }], status: "inProgress" }] },
+        { id: "turn_completed", status: "completed", startedAt: 1786841900, completedAt: 1786841950, items: [] },
+        { id: "turn_interrupted", status: "interrupted", startedAt: 1786841800, completedAt: 1786841850, items: [] },
+        { id: "turn_failed", status: "failed", startedAt: 1786841700, completedAt: 1786841750, items: [] }
+      ] } };
   process.stdout.write(JSON.stringify({ id: request.id, result }) + "\\n");
   if (request.method === "thread/start") {
     process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: "thread_1", turnId: "turn_1", startedAtMs: 1786842001000, item: { type: "commandExecution", id: "item_search", command: "SECRET_QUERY", commandActions: [{ type: "search", command: "SECRET_QUERY", query: "SECRET_QUERY", path: "/workspace" }] } } }) + "\\n");

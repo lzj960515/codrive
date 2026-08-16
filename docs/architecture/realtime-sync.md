@@ -80,10 +80,12 @@ The App Server gateway returns only the thread status, in-progress turn IDs, the
 | Exact snapshot | Decision |
 | --- | --- |
 | Thread active; saved turn is the only `inProgress` turn | Keep running and begin a new ten-minute window |
-| Thread idle; saved turn is `completed` | Use the existing completion and report path |
-| Thread idle; saved turn is `interrupted` or `failed` | Ask `WorkflowEngine` to recover the same execution |
+| Thread idle or not loaded; exact saved turn is `completed` and no turn is active | Use the existing completion and report path |
+| Thread idle or not loaded; exact saved turn is `interrupted` or `failed` and no turn is active | Ask `WorkflowEngine` to recover the same execution |
 | Exact turn missing or App Server unreadable | Keep current state and retry later |
 | Thread and turn disagree, or another turn is active | Keep current state and retry later |
+
+A persisted thread can be `notLoaded` after an App Server restart or unload even though `thread/read(includeTurns: true)` returns its turns. That status is conclusive only when the exact saved turn is terminal and no turn is active; `active`, `systemError`, missing turns, and any active-turn conflict remain uncertain.
 
 Recovery is serialized by `WorkflowEngine`. Immediately before resuming, it compares the project, task, action, attempt, execution status, thread, and turn, then verifies that the project is active and running, its concurrency limit still covers the execution, and no other task owns the repository integration lease. A failed check leaves the current execution untouched. A successful check reuses the persisted conversation, attempt, action, and model route, starts at most one new turn, and records the existing `execution_recovered` lifecycle activity.
 

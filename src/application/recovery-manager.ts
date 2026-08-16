@@ -822,11 +822,12 @@ function inspectSilentTurn(
           reason: "thread_turn_state_conflict",
         };
   }
-  if (
-    turn.id !== turnId ||
-    snapshot.threadStatus !== "idle" ||
-    snapshot.activeTurnIds.length > 0
-  ) {
+  const hasCoherentTerminalState =
+    turn.id === turnId &&
+    (snapshot.threadStatus === "idle" ||
+      snapshot.threadStatus === "notLoaded") &&
+    snapshot.activeTurnIds.length === 0;
+  if (!hasCoherentTerminalState) {
     return {
       decision: "defer",
       result: "inconsistent",
