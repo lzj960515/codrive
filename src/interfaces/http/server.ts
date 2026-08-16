@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { SystemSettingsService } from "../../application/system-settings-service.js";
 import type { SystemUpdateService } from "../../application/system-update-service.js";
 import type { WorkflowEngine } from "../../application/workflow-engine.js";
+import type { ExecutionActivityBridge } from "../../application/execution-activity-bridge.js";
 import {
   InvalidTaskReportError,
   ServiceNotReadyError,
@@ -13,6 +14,7 @@ import {
 import type { CodriveCommand, Project, Task } from "../../domain/types.js";
 import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
+import type { ManagedResourceInstaller } from "../../infrastructure/managed-resource-installer.js";
 import type { SkillInstaller } from "../../infrastructure/skill-installer.js";
 import { renderBoardPage } from "./board.js";
 import { createBoardView } from "./board-view.js";
@@ -24,11 +26,16 @@ import { BoardRealtimeGateway } from "./board-realtime.js";
 export interface HttpServerDependencies {
   store: ProjectStore;
   workflow: WorkflowEngine;
+  activityBridge?: Pick<
+    ExecutionActivityBridge,
+    "read" | "subscribe" | "isCurrent" | "recordHook"
+  >;
   skillInstaller: SkillInstaller;
+  resourceInstaller?: ManagedResourceInstaller;
   settingsService: Pick<SystemSettingsService, "read" | "update">;
   systemUpdateService?: Pick<
     SystemUpdateService,
-    "read" | "refresh" | "start" | "installSkills"
+    "read" | "refresh" | "start" | "installResources" | "installSkills"
   >;
   systemUpdateEvents?:
     | SystemStatusEventSource
@@ -92,12 +99,30 @@ const projectReportSchema = z.object({
   question: z.string().optional(),
 });
 
+const hookActivitySchema = z.object({
+  schemaVersion: z.literal(1),
+  session_id: z.string().min(1).max(200),
+  turn_id: z.string().min(1).max(200),
+  hook_event_name: z.enum([
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+  ]),
+  tool_name: z.string().min(1).max(200).optional(),
+  occurred_at: z.iso.datetime(),
+}).strict();
+
 const cancellationDecisionSchema = {
   decisionBasis: z.enum(["user_confirmed", "agent_decision"]),
   reason: z.string().trim().min(1).max(2_000),
 };
 
 const commandSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("system.install_resources"),
+    payload: z.object({}),
+  }),
   z.object({
     type: z.literal("system.install_skills"),
     payload: z.object({}),
@@ -182,6 +207,9 @@ export function createHttpServer(
     httpServer: server.server,
     accessToken: dependencies.accessToken,
     store: dependencies.store,
+    ...(dependencies.activityBridge
+      ? { activitySource: dependencies.activityBridge }
+      : {}),
     ...(dependencies.systemUpdateEvents
       ? {
           systemEvents: Array.isArray(dependencies.systemUpdateEvents)
@@ -228,6 +256,21 @@ export function createHttpServer(
     status: dependencies.isReady?.() === false ? "starting" : "ok",
     ...(dependencies.currentVersion ? { version: dependencies.currentVersion } : {}),
   }));
+  server.post("/api/hooks/activity", async (request, reply) => {
+    if (!dependencies.activityBridge) {
+      return reply.code(503).send({ accepted: false });
+    }
+    const input = hookActivitySchema.parse(request.body);
+    const accepted = await dependencies.activityBridge.recordHook({
+      schemaVersion: input.schemaVersion,
+      sessionId: input.session_id,
+      turnId: input.turn_id,
+      event: input.hook_event_name,
+      ...(input.tool_name ? { toolName: input.tool_name } : {}),
+      occurredAt: input.occurred_at,
+    });
+    return reply.code(202).send({ accepted });
+  });
   server.get("/", async (_request, reply) =>
     reply.type("text/html; charset=utf-8").send(renderBoardPage(dependencies.accessToken)),
   );
@@ -268,7 +311,9 @@ export function createHttpServer(
   server.get("/api/system", async () =>
     dependencies.systemUpdateService
       ? dependencies.systemUpdateService.read()
-      : { skills: await dependencies.skillInstaller.getStatus() },
+      : dependencies.resourceInstaller
+        ? projectResourceStatus(await dependencies.resourceInstaller.getStatus())
+        : { skills: await dependencies.skillInstaller.getStatus() },
   );
   server.get("/api/system/settings", async () => dependencies.settingsService.read());
 
@@ -351,9 +396,18 @@ export function createHttpServer(
       );
     }
     const command = commandSchema.parse(request.body);
-    if (command.type === "system.install_skills") {
+    if (
+      command.type === "system.install_resources" ||
+      command.type === "system.install_skills"
+    ) {
       if (dependencies.systemUpdateService) {
-        return dependencies.systemUpdateService.installSkills();
+        return dependencies.systemUpdateService.installResources();
+      }
+      if (dependencies.resourceInstaller) {
+        await dependencies.resourceInstaller.install();
+        return projectResourceStatus(
+          await dependencies.resourceInstaller.getStatus(),
+        );
       }
       await dependencies.skillInstaller.install();
       return { skills: await dependencies.skillInstaller.getStatus() };
@@ -383,6 +437,16 @@ export function createHttpServer(
   });
 
   return server;
+}
+
+function projectResourceStatus(
+  resources: Awaited<ReturnType<ManagedResourceInstaller["getStatus"]>>,
+) {
+  return {
+    resources,
+    skills: resources.skills,
+    hook: resources.hook,
+  };
 }
 
 function isPagePath(path: string): boolean {

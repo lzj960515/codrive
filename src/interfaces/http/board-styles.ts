@@ -326,6 +326,14 @@ export const boardStyles = `
   .current-conversation-copy b, .current-conversation-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .current-conversation-copy i { color: #a3aea8; font-style: normal; }
   .current-conversation .detail-link { min-height: 34px; padding-inline: 12px; white-space: nowrap; }
+  .current-execution-activity { position: relative; display: grid; grid-column: 1 / -1; min-height: 35px; overflow: hidden; border-top: 1px solid rgba(89,119,105,.16); }
+  .current-activity-entry { display: grid; grid-area: 1 / 1; grid-template-columns: auto minmax(0,1fr) auto; gap: 9px; align-items: center; padding: 10px 2px 0; color: #31594b; font-size: 11px; font-weight: 750; }
+  .current-activity-entry.entering { animation: activity-roll-in .3s cubic-bezier(.2,.8,.2,1) both; }
+  .current-activity-entry.leaving { animation: activity-roll-out .3s cubic-bezier(.2,.8,.2,1) both; }
+  .current-activity-marker { width: 7px; height: 7px; background: var(--signal); border-radius: 50%; box-shadow: 0 0 0 4px rgba(244,91,53,.11); }
+  .current-activity-entry time { color: #8a9690; font-size: 9px; font-weight: 600; white-space: nowrap; }
+  .current-activity-waiting { color: #84908a; font-weight: 600; }
+  .current-activity-waiting .current-activity-marker { background: #aeb8b2; box-shadow: 0 0 0 4px rgba(112,130,120,.09); }
   .activity-section { margin-inline: 0; }
   .activity-timeline { position: relative; display: grid; min-width: 0; max-width: 100%; gap: 14px; margin: 0; padding: 2px 0 2px 24px; list-style: none; }
   .activity-timeline::before { content: ""; position: absolute; top: 5px; bottom: 5px; left: 7px; width: 1px; background: linear-gradient(#cfd6d1, #e3e7e3 90%, transparent); }
@@ -458,6 +466,8 @@ export const boardStyles = `
   @keyframes column-arrive { from { opacity: 0; transform: translateY(10px); } }
   @keyframes modal-arrive { from { opacity: 0; transform: translateY(14px) scale(.985); } }
   @keyframes update-spin { to { transform: rotate(360deg); } }
+  @keyframes activity-roll-in { from { opacity: 0; transform: translateY(110%); } }
+  @keyframes activity-roll-out { to { opacity: 0; transform: translateY(-110%); } }
 
   @media (max-width: 1279px) {
     .app-shell, .detail-open .app-shell { grid-template-columns: 230px minmax(0,1fr); }

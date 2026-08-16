@@ -20,6 +20,8 @@ import type {
   TaskReport,
 } from "../../src/domain/types.js";
 import { ConfigStore } from "../../src/infrastructure/config-store.js";
+import { HookInstaller } from "../../src/infrastructure/hook-installer.js";
+import { ManagedResourceInstaller } from "../../src/infrastructure/managed-resource-installer.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import { PackageVersionService } from "../../src/infrastructure/package-version-service.js";
 import { SkillInstaller } from "../../src/infrastructure/skill-installer.js";
@@ -38,6 +40,7 @@ describe("HTTP API", () => {
   let taskDispatcher: RecordingTaskDispatcher;
   let server: ReturnType<typeof createHttpServer>;
   let skillInstaller: SkillInstaller;
+  let resourceInstaller: ManagedResourceInstaller;
   let settingsService: SystemSettingsService;
   let versionChecks: PackageVersionCheckScheduler;
   let upgradeStore: UpgradeStateStore;
@@ -63,6 +66,15 @@ describe("HTTP API", () => {
       resolve("skills"),
       join(stateDirectory, "installed-skills"),
       "0.2.0",
+    );
+    resourceInstaller = new ManagedResourceInstaller(
+      skillInstaller,
+      new HookInstaller(
+        resolve("hooks/codrive"),
+        join(stateDirectory, "codex", "hooks", "codrive"),
+        join(stateDirectory, "codex", "hooks.json"),
+        "0.2.0",
+      ),
     );
     const versions = new PackageVersionService({
       currentVersion: "0.6.0",
@@ -110,11 +122,12 @@ describe("HTTP API", () => {
       store,
       workflow: engine,
       skillInstaller,
+      resourceInstaller,
       settingsService,
       systemUpdateService: new SystemUpdateService(
         versions,
         upgrades,
-        skillInstaller,
+        resourceInstaller,
         versionChecks,
       ),
       systemUpdateEvents: [
@@ -332,14 +345,14 @@ describe("HTTP API", () => {
     expect(page.statusCode).toBe(200);
   });
 
-  it("installs and reports bundled Skills through the system boundary", async () => {
+  it("installs and reports all managed resources through the system boundary", async () => {
     const missing = await server.inject({
       method: "GET",
       url: "/api/system",
       headers: { "x-codrive-token": "secret" },
     });
     const installed = await command({
-      type: "system.install_skills",
+      type: "system.install_resources",
       payload: {},
     });
     const current = await server.inject({
@@ -349,13 +362,30 @@ describe("HTTP API", () => {
     });
 
     expect(missing.statusCode).toBe(200);
+    expect(missing.json().resources).toMatchObject({
+      state: "missing",
+      managedSkillCount: 4,
+      managedHookCount: 1,
+      skills: { state: "missing" },
+      hook: { state: "missing" },
+    });
     expect(missing.json().skills).toMatchObject({
       state: "missing",
       bundledVersion: "0.2.0",
     });
     expect(installed.statusCode).toBe(200);
+    expect(installed.json().resources.state).toBe("current");
     expect(installed.json().skills.state).toBe("current");
+    expect(installed.json().hook.state).toBe("current");
     expect(current.json().skills.state).toBe("current");
+    expect(current.json().resources.state).toBe("current");
+
+    const compatibleAlias = await command({
+      type: "system.install_skills",
+      payload: {},
+    });
+    expect(compatibleAlias.statusCode).toBe(200);
+    expect(compatibleAlias.json().resources.state).toBe("current");
   });
 
   it("checks npm on demand and accepts one fixed-version update operation", async () => {
@@ -385,7 +415,7 @@ describe("HTTP API", () => {
         updateAvailable: true,
       },
       upgrade: null,
-      skills: { managedSkillCount: 4 },
+      resources: { managedSkillCount: 4, managedHookCount: 1 },
     });
     expect(accepted.statusCode).toBe(202);
     expect(repeated.statusCode).toBe(202);
@@ -1622,10 +1652,11 @@ describe("HTTP API", () => {
     expect(page.body).toContain('id="update-primary"');
     expect(page.body).toContain('id="update-trigger"');
     expect(page.body).toContain('/api/system');
-    expect(page.body).toContain('system.install_skills');
+    expect(page.body).toContain('system.install_resources');
     expect(page.body).toContain('system.start_upgrade');
     expect(page.body).toContain('system.check_for_updates');
-    expect(page.body).toContain("Codrive 与 Skills 已对齐");
+    expect(page.body).toContain("Codrive 与托管资源已对齐");
+    expect(page.body).toContain("4 个托管 Skills、1 个托管 Hook");
     expect(page.body).toContain("Codrive 正在重启，页面会自动恢复连接");
     expect(page.body).toContain('id="update-timeline"');
     expect(page.body).not.toContain('codrive:skills-dismissed');

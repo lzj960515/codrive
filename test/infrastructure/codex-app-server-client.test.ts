@@ -39,6 +39,8 @@ describe("CodexAppServerClient", () => {
     await chmod(executable, 0o755);
 
     const client = new CodexAppServerClient({ executable });
+    const activities: unknown[] = [];
+    client.onActivity((activity) => activities.push(activity));
     try {
       const threadId = await client.startThread("/workspace/game", "Game task", {
         ephemeral: true,
@@ -68,6 +70,13 @@ describe("CodexAppServerClient", () => {
       await expect(client.readTurnStatus(threadId, turnId)).resolves.toBe(
         "inProgress",
       );
+      await expect(client.readTurnActivity(threadId, turnId)).resolves.toEqual({
+        status: "inProgress",
+        activity: {
+          category: "editing",
+          occurredAt: "2026-08-16T01:00:00.000Z",
+        },
+      });
       await client.interruptTurn(threadId, turnId);
     } finally {
       await client.stop();
@@ -114,7 +123,16 @@ describe("CodexAppServerClient", () => {
     expect(readThreads.map(({ params }) => params)).toEqual([
       { threadId: "thread_1" },
       { threadId: "thread_1", includeTurns: true },
+      { threadId: "thread_1", includeTurns: true },
     ]);
+    expect(activities).toContainEqual({
+      type: "activity",
+      threadId: "thread_1",
+      turnId: "turn_1",
+      category: "searching",
+      occurredAt: "2026-08-16T01:00:01.000Z",
+    });
+    expect(JSON.stringify(activities)).not.toContain("SECRET_QUERY");
   });
 });
 
@@ -147,8 +165,9 @@ lines.on("line", (line) => {
         ],
         nextCursor: "page_2"
       };
-  if (request.method === "thread/read") result = { thread: { status: { type: "active", activeFlags: [] }, turns: [{ id: "turn_1", status: "inProgress" }] } };
+  if (request.method === "thread/read") result = { thread: { status: { type: "active", activeFlags: [] }, turns: [{ id: "turn_1", status: "inProgress", startedAt: 1786842000, completedAt: null, items: [{ type: "fileChange", id: "item_1", changes: [{ path: "SECRET_PATH" }], status: "inProgress" }] }] } };
   process.stdout.write(JSON.stringify({ id: request.id, result }) + "\\n");
+  if (request.method === "thread/start") process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: "thread_1", turnId: "turn_1", startedAtMs: 1786842001000, item: { type: "commandExecution", id: "item_live", command: "SECRET_QUERY", commandActions: [{ type: "search", command: "SECRET_QUERY", query: "SECRET_QUERY", path: "/workspace" }] } } }) + "\\n");
 });
 `;
 }

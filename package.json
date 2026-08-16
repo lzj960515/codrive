@@ -27,6 +27,7 @@
   "files": [
     "dist",
     "skills",
+    "hooks",
     "docs/architecture/realtime-sync.md",
     "README.md",
     "README.zh-CN.md"

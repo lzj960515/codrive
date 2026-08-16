@@ -45,6 +45,7 @@ export function renderBoardClient(accessToken: string): string {
     let updatePoll = null;
     let productDetail = null;
     let taskDetail = null;
+    let currentActivity = null;
     let systemSettings = null;
     let updateActionError = null;
     let projectReadRevision = 0;
@@ -79,7 +80,7 @@ export function renderBoardClient(accessToken: string): string {
       checking: ["正在固定目标版本", 8],
       installing: ["正在安装 Codrive", 38],
       restarting: ["正在重启本机服务", 66],
-      syncing_skills: ["正在同步 4 个托管 Skills", 86],
+      syncing_skills: ["正在同步托管资源", 86],
       succeeded: ["更新完成", 100],
       failed: ["更新未完成", 100]
     };
@@ -100,24 +101,35 @@ export function renderBoardClient(accessToken: string): string {
 
     function renderSystemUpdate() {
       if (!systemUpdate) return;
-      const { version, upgrade, skills } = systemUpdate;
+      const { version, upgrade, skills, hook } = systemUpdate;
+      const resources = systemUpdate.resources || {
+        state: skills.state,
+        bundledVersion: skills.bundledVersion,
+        managedSkillCount: skills.managedSkillCount,
+        managedHookCount: hook?.managedHookCount || 0,
+        conflictPaths: [...skills.conflictPaths, ...(hook?.conflictPaths || [])],
+        skills,
+        hook
+      };
       const active = upgrade && activeUpdatePhases.includes(upgrade.phase);
       const triggerCopy = active
         ? updatePhaseCopy[upgrade.phase][0]
         : version?.updateAvailable
           ? "新版本 "+version.latestVersion+" 可用"
-          : skills.state === "conflict"
-            ? "本地 Skill 冲突待处理"
-          : version?.latestVersion && skills.state === "current"
-              ? "Codrive 与 Skills 已对齐"
-              : skills.state === "current" ? "等待稳定版检查" : "托管 Skills 需要补齐";
+          : resources.state === "conflict"
+            ? "本地托管资源冲突待处理"
+          : version?.latestVersion && resources.state === "current"
+              ? "Codrive 与托管资源已对齐"
+              : resources.state === "current" ? "等待稳定版检查" : "托管资源需要补齐";
       document.getElementById("update-trigger-copy").textContent = triggerCopy;
-      document.getElementById("update-trigger-icon").textContent = active ? "↻" : version?.updateAvailable ? "↑" : skills.state === "current" ? "✓" : "+";
-      document.getElementById("update-trigger").dataset.state = active ? "active" : version?.updateAvailable || skills.state !== "current" ? "attention" : "current";
+      document.getElementById("update-trigger-icon").textContent = active ? "↻" : version?.updateAvailable ? "↑" : resources.state === "current" ? "✓" : "+";
+      document.getElementById("update-trigger").dataset.state = active ? "active" : version?.updateAvailable || resources.state !== "current" ? "attention" : "current";
 
-      document.getElementById("update-current-version").textContent = version?.currentVersion || skills.bundledVersion;
+      document.getElementById("update-current-version").textContent = version?.currentVersion || resources.bundledVersion;
       document.getElementById("update-latest-version").textContent = version?.latestVersion || "待检查";
-      document.getElementById("update-skills").textContent = skills.state === "current" ? skills.managedSkillCount+" / "+skills.managedSkillCount+" 已对齐" : label(skills.state);
+      document.getElementById("update-resources").textContent = resources.state === "current"
+        ? resources.managedSkillCount+" Skills + "+resources.managedHookCount+" Hook 已对齐"
+        : label(resources.state);
       document.getElementById("update-checked-at").textContent = formatTime(version?.lastCheckedAt);
       document.getElementById("update-check-result").textContent = version?.checkError?.summary || (version?.latestVersion ? "npm latest 稳定版已读取" : "等待首次检查");
 
@@ -138,9 +150,16 @@ export function renderBoardClient(accessToken: string): string {
       ).join("");
 
       const conflict = document.getElementById("update-conflict");
-      conflict.hidden = skills.state !== "conflict";
-      conflict.innerHTML = skills.state === "conflict"
-        ? '<b>保留了本地同名 Skill</b><p>Codrive 不会覆盖未托管文件。请先移动以下路径，再重新同步：</p><code>'+escapeHtml(skills.conflictPaths.join("\\n"))+'</code>'
+      const conflictDetails = [];
+      if (skills.state === "conflict") {
+        conflictDetails.push('<b>保留了本地同名 Skill</b><code>'+escapeHtml(skills.conflictPaths.join("\\n"))+'</code>');
+      }
+      if (hook?.state === "conflict") {
+        conflictDetails.push('<b>保留了本地 Codex Hook</b><code>'+escapeHtml(hook.conflictPaths.join("\\n"))+'</code>');
+      }
+      conflict.hidden = conflictDetails.length === 0;
+      conflict.innerHTML = conflictDetails.length > 0
+        ? '<p>Codrive 不会覆盖未托管文件。请先移动冲突路径，再重新同步：</p>'+conflictDetails.join("")
         : "";
 
       const summary = upgrade?.phase === "failed"
@@ -148,27 +167,27 @@ export function renderBoardClient(accessToken: string): string {
         : active
           ? "目标版本 "+upgrade.targetVersion+" 已固定。页面断线时，独立进程仍会继续。"
           : version?.updateAvailable
-            ? "Codrive "+version.latestVersion+" 与该版本随附的 4 个托管 Skills 将在一次操作中更新。"
+            ? "Codrive "+version.latestVersion+" 与该版本随附的 4 个托管 Skills、1 个托管 Hook 将在一次操作中更新。"
             : version?.checkError
               ? "无法确认 npm latest 稳定版；看板与任务调度不受影响，可以重新检查。"
-              : version?.latestVersion && skills.state === "current"
-              ? "当前已是最新稳定版，Codrive 与随包托管 Skills 保持一致。"
-              : "Codrive 已安装；需要从当前包补齐 4 个托管 Skills。";
+              : version?.latestVersion && resources.state === "current"
+              ? "当前已是最新稳定版，Codrive 与随包托管资源保持一致。"
+              : "Codrive 已安装；需要从当前包补齐 4 个托管 Skills 和 1 个托管 Hook。";
       document.getElementById("update-summary").textContent = summary;
 
       const primary = document.getElementById("update-primary");
-      primary.disabled = Boolean(active) || skills.state === "conflict" || Boolean(version?.checking);
+      primary.disabled = Boolean(active) || resources.state === "conflict" || Boolean(version?.checking);
       primary.textContent = active
         ? "更新进行中"
         : version?.updateAvailable
-          ? upgrade?.phase === "failed" ? "重试更新" : "更新 Codrive 与 Skills"
-          : version?.latestVersion && skills.state === "current"
+          ? upgrade?.phase === "failed" ? "重试更新" : "更新 Codrive 与托管资源"
+          : version?.latestVersion && resources.state === "current"
             ? "已是最新版"
-            : skills.state === "current" ? "等待版本检查" : "补齐托管 Skills";
-      if (upgrade?.phase === "failed" && upgrade.targetVersion === version?.currentVersion && skills.state !== "current") {
-        primary.textContent = "补齐托管 Skills";
+            : resources.state === "current" ? "等待版本检查" : "补齐托管资源";
+      if (upgrade?.phase === "failed" && upgrade.targetVersion === version?.currentVersion && resources.state !== "current") {
+        primary.textContent = "补齐托管资源";
       }
-      if (!version?.updateAvailable && skills.state === "current") primary.disabled = true;
+      if (!version?.updateAvailable && resources.state === "current") primary.disabled = true;
       document.getElementById("update-check").disabled = Boolean(active) || Boolean(version?.checking);
       document.getElementById("update-status").textContent = updateActionError || upgrade?.error?.summary || version?.checkError?.summary || "";
       document.getElementById("update-fallback").hidden = upgrade?.phase !== "failed" && !version?.checkError;
@@ -204,13 +223,13 @@ export function renderBoardClient(accessToken: string): string {
         const repairCurrentVersion =
           systemUpdate.upgrade?.phase === "failed" &&
           systemUpdate.upgrade.targetVersion === systemUpdate.version?.currentVersion &&
-          systemUpdate.skills.state !== "current";
+          (systemUpdate.resources?.state ?? systemUpdate.skills.state) !== "current";
         if (systemUpdate.version?.updateAvailable && !repairCurrentVersion) {
           status.textContent = "正在启动独立更新进程...";
           systemUpdate = await command("system.start_upgrade", { targetVersion: systemUpdate.version.latestVersion });
         } else {
-          status.textContent = "正在同步托管 Skills...";
-          systemUpdate = await command("system.install_skills", {});
+          status.textContent = "正在同步托管资源...";
+          systemUpdate = await command("system.install_resources", {});
         }
       } catch (error) {
         updateActionError = error.message;
@@ -299,6 +318,7 @@ export function renderBoardClient(accessToken: string): string {
         if (revision !== taskReadRevision || selectedTaskId !== taskId) return;
         const viewState = taskDetail?.task.id === taskId ? captureViewState() : null;
         taskDetail = detail;
+        if (!activityMatchesCurrentExecution(currentActivity)) currentActivity = null;
         document.body.classList.add("detail-open");
         renderTaskDetail();
         if (viewState) restoreViewState(viewState);
@@ -393,6 +413,10 @@ export function renderBoardClient(accessToken: string): string {
       if (!socket.connected) throw new Error("Realtime connection unavailable");
       const result = await socket.timeout(2000).emitWithAck(event, payload);
       if (!result?.ok) throw new Error(result?.error || "Realtime watch failed");
+      if (event === "watch:task" && payload.taskId) {
+        setCurrentActivity(payload.taskId, result.activity ?? null);
+      }
+      return result;
     }
 
     const realtimeWatches = createWatchCoordinator({
@@ -421,6 +445,7 @@ export function renderBoardClient(accessToken: string): string {
       if (!projectId || projectId === selectedProjectId) return;
       selectedTaskId = null;
       taskDetail = null;
+      currentActivity = null;
       taskReadRevision += 1;
       document.body.classList.remove("detail-open", "nav-open");
       document.getElementById("task-detail").setAttribute("aria-hidden", "true");
@@ -438,6 +463,7 @@ export function renderBoardClient(accessToken: string): string {
       if (!taskId) return;
       selectedTaskId = taskId;
       taskDetail = null;
+      currentActivity = null;
       try {
         await syncCurrentWatches();
         await refreshSelectedTask(taskId);
@@ -636,6 +662,7 @@ export function renderBoardClient(accessToken: string): string {
       const hadSelectedTask = Boolean(selectedTaskId);
       selectedTaskId = null;
       taskDetail = null;
+      currentActivity = null;
       taskReadRevision += 1;
       if (hadSelectedTask) void syncCurrentWatches();
       document.body.classList.remove("detail-open");
@@ -668,6 +695,7 @@ export function renderBoardClient(accessToken: string): string {
         ? '<section class="current-conversation">'+
             '<div class="current-conversation-copy"><span>当前对话</span><div><b>'+escapeHtml(label(task.currentExecution.action))+'</b><i aria-hidden="true">·</i><strong>'+escapeHtml(label(task.currentExecution.status))+'</strong></div></div>'+
             (task.currentExecution.threadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(task.currentExecution.threadId)+'">'+(task.currentExecution.status === "waiting_for_input" ? "前往当前对话回复" : "打开当前对话")+' <span>↗</span></a>' : '')+
+            '<div id="current-execution-activity" class="current-execution-activity" role="status" aria-live="polite" aria-atomic="true"></div>'+
           '</section>'
         : '';
       const activityTimeline = activities.length
@@ -690,6 +718,7 @@ export function renderBoardClient(accessToken: string): string {
             '<dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
         '</div>';
       host.querySelector("[data-latest-activity]")?.scrollIntoView({ block: "end", inline: "nearest" });
+      renderCurrentActivity();
       document.getElementById("close-detail").onclick = closeDetail;
       const copyTaskId = host.querySelector("[data-copy-task-id]");
       copyTaskId?.addEventListener("click", async () => {
@@ -755,10 +784,76 @@ export function renderBoardClient(accessToken: string): string {
       return '<li class="activity-item '+escapeHtml(activity.type)+'" '+(index === all.length - 1 ? 'data-latest-activity' : '')+'><span class="activity-node"></span><article class="activity-card"><header><b>'+escapeHtml(label(activity.type))+'</b><div class="activity-card-actions">'+conversation+'<time>'+escapeHtml(formatTime(activity.occurredAt))+'</time></div></header><p class="activity-summary">'+escapeHtml(activity.summary)+'</p>'+(hasEvidence ? '<div class="activity-evidence">'+question+findings+tests+git+'</div>' : '')+'</article></li>';
     }
 
+    function setCurrentActivity(taskId, activity) {
+      if (taskId !== selectedTaskId) return;
+      currentActivity = activityMatchesCurrentExecution(activity) ? activity : null;
+      renderCurrentActivity();
+    }
+
+    function activityMatchesCurrentExecution(activity) {
+      const task = taskDetail?.task;
+      const execution = task?.currentExecution;
+      if (!activity) return false;
+      if (!task || !execution) return taskDetail === null && activity.taskId === selectedTaskId;
+      return activity.projectId === task.projectId &&
+        activity.taskId === task.id &&
+        activity.action === execution.action &&
+        activity.attemptId === execution.attemptId &&
+        activity.threadId === execution.threadId &&
+        activity.turnId === execution.turnId;
+    }
+
+    function renderCurrentActivity() {
+      const host = document.getElementById("current-execution-activity");
+      if (!host) return;
+      const activity = activityMatchesCurrentExecution(currentActivity)
+        ? currentActivity
+        : null;
+      const key = activity
+        ? [activity.attemptId, activity.turnId, activity.occurredAt, activity.category].join(":")
+        : "waiting";
+      if (host.firstElementChild?.dataset.activityKey === key) return;
+
+      const next = document.createElement("div");
+      next.className = activity
+        ? "current-activity-entry entering"
+        : "current-activity-entry current-activity-waiting entering";
+      next.dataset.activityKey = key;
+      const marker = document.createElement("span");
+      marker.className = "current-activity-marker";
+      marker.setAttribute("aria-hidden", "true");
+      const copy = document.createElement("span");
+      copy.textContent = activity?.label ?? "等待下一条活动信号";
+      next.append(marker, copy);
+      if (activity) {
+        const occurredAt = document.createElement("time");
+        occurredAt.dateTime = activity.occurredAt;
+        occurredAt.textContent = formatTime(activity.occurredAt);
+        next.append(occurredAt);
+      }
+
+      const previous = host.firstElementChild;
+      if (!previous) {
+        host.replaceChildren(next);
+        next.classList.remove("entering");
+        return;
+      }
+      previous.classList.add("leaving");
+      host.append(next);
+      const finish = () => {
+        if (!next.isConnected) return;
+        next.classList.remove("entering");
+        host.replaceChildren(next);
+      };
+      previous.addEventListener("animationend", finish, { once: true });
+      window.setTimeout(finish, 360);
+    }
+
     function closeDetail() {
       const viewState = captureViewState();
       selectedTaskId = null;
       taskDetail = null;
+      currentActivity = null;
       taskReadRevision += 1;
       void syncCurrentWatches();
       document.body.classList.remove("detail-open");
@@ -791,8 +886,15 @@ export function renderBoardClient(accessToken: string): string {
     socket.on("task:changed", event => {
       if (event.taskId === selectedTaskId) void refreshSelectedTask(event.taskId);
     });
+    socket.on("task:activity", event => {
+      setCurrentActivity(event.taskId, event.activity);
+    });
     socket.on("system:changed", () => { void refreshSystem(); });
-    socket.on("disconnect", showOffline);
+    socket.on("disconnect", () => {
+      currentActivity = null;
+      renderCurrentActivity();
+      showOffline();
+    });
     socket.on("connect_error", showOffline);
     socket.on("connect", () => {
       realtimeWatches.reset();

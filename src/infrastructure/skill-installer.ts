@@ -49,6 +49,7 @@ export class SkillInstaller {
   ) {}
 
   async install(): Promise<string[]> {
+    await this.assertInstallable();
     await mkdir(this.targetDirectory, { recursive: true });
     const installationMarker = await this.createMarker();
     const conflicts = await this.findConflicts();
@@ -72,6 +73,15 @@ export class SkillInstaller {
       await rename(temporary, target);
     }
     return managedSkills.map((skill) => join(this.targetDirectory, skill));
+  }
+
+  async assertInstallable(): Promise<void> {
+    const conflicts = await this.findConflicts();
+    if (conflicts.length > 0) {
+      throw new Error(
+        `Refusing to replace unmanaged Skill at ${conflicts.join(", ")}. Move it before running setup.`,
+      );
+    }
   }
 
   async getStatus(): Promise<SkillInstallationStatus> {

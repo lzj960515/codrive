@@ -51,11 +51,11 @@ export function renderBoardPage(accessToken: string): string {
         <div><div class="update-kicker">LOCAL RELEASE CONTROL</div><h2 id="update-title">Codrive 更新</h2></div>
         <button id="update-close" class="icon-button" type="button" aria-label="关闭 Codrive 更新">×</button>
       </header>
-      <p id="update-summary" class="update-summary">正在读取当前版本与托管 Skills。</p>
+      <p id="update-summary" class="update-summary">正在读取当前版本与托管资源。</p>
       <div class="version-ledger" aria-label="版本状态">
         <div><span>当前运行</span><strong id="update-current-version">—</strong></div>
         <div><span>最新稳定版</span><strong id="update-latest-version">—</strong></div>
-        <div><span>托管 Skills</span><strong id="update-skills">—</strong></div>
+        <div><span>托管资源</span><strong id="update-resources">—</strong></div>
       </div>
       <div id="update-progress" class="update-progress" hidden>
         <div class="update-progress-track"><span id="update-progress-bar"></span></div>

@@ -2,8 +2,6 @@
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CodriveServer } from "../../codrive-server.js";
@@ -14,6 +12,7 @@ import {
 } from "../../application/upgrade-coordinator.js";
 import { ConfigStore } from "../../infrastructure/config-store.js";
 import { LocalServiceManager } from "../../infrastructure/local-service-manager.js";
+import { ManagedResourceInstaller } from "../../infrastructure/managed-resource-installer.js";
 import { NpmPackageUpgrader } from "../../infrastructure/npm-package-upgrader.js";
 import { PackageVersionService } from "../../infrastructure/package-version-service.js";
 import { readPackageVersion } from "../../infrastructure/package-metadata.js";
@@ -21,7 +20,6 @@ import {
   MINIMUM_NODE_MAJOR,
   supportsNodeVersion,
 } from "../../infrastructure/runtime-requirements.js";
-import { SkillInstaller } from "../../infrastructure/skill-installer.js";
 import { UpgradeStateStore } from "../../infrastructure/upgrade-state-store.js";
 import type {
   PackageVersionStatus,
@@ -135,8 +133,10 @@ async function upgrade(): Promise<void> {
   }
   if (!checked.updateAvailable) {
     process.stdout.write(`Codrive ${currentVersion} is already current.\n`);
-    await new SkillInstaller().install();
-    process.stdout.write("Managed Codrive Skills are synchronized.\n");
+    await new ManagedResourceInstaller().install();
+    process.stdout.write(
+      "Codrive's 4 managed Skills and 1 managed Hook are synchronized.\n",
+    );
     return;
   }
 
@@ -161,7 +161,7 @@ async function upgrade(): Promise<void> {
   process.stdout.write(`Updating Codrive to ${request.targetVersion}...\n`);
   await createUpgradeRunner(store).run(request);
   process.stdout.write(
-    `Codrive ${request.targetVersion} and its managed Skills are ready.\n`,
+    `Codrive ${request.targetVersion} and its managed resources are ready.\n`,
   );
 }
 
@@ -196,10 +196,12 @@ async function upgradeThroughRunningService(
       `Codrive ${checked.version.currentVersion} is already current.\n`,
     );
     await sendSystemCommand(serviceUrl, config.accessToken, {
-      type: "system.install_skills",
+      type: "system.install_resources",
       payload: {},
     });
-    process.stdout.write("Managed Codrive Skills are synchronized.\n");
+    process.stdout.write(
+      "Codrive's 4 managed Skills and 1 managed Hook are synchronized.\n",
+    );
     return;
   }
 
@@ -217,7 +219,7 @@ async function upgradeThroughRunningService(
     throw new Error(completed.error?.summary ?? "Codrive update failed");
   }
   process.stdout.write(
-    `Codrive ${completed.targetVersion} and its managed Skills are ready.\n`,
+    `Codrive ${completed.targetVersion} and its managed resources are ready.\n`,
   );
 }
 
@@ -276,10 +278,9 @@ function createUpgradeRunner(store: UpgradeStateStore): SystemUpgradeRunner {
   return new SystemUpgradeRunner({
     store,
     packageUpgrader: new NpmPackageUpgrader(),
-    installSkills: async (packageRoot, targetVersion) => {
-      const installer = new SkillInstaller(
-        join(packageRoot, "skills"),
-        join(homedir(), ".agents", "skills"),
+    installResources: async (packageRoot, targetVersion) => {
+      const installer = ManagedResourceInstaller.fromPackageRoot(
+        packageRoot,
         targetVersion,
       );
       await installer.install();
@@ -355,9 +356,14 @@ async function serveForeground(): Promise<void> {
 async function setup(): Promise<void> {
   const configStore = new ConfigStore();
   const config = await configStore.loadOrCreate();
-  const installed = await new SkillInstaller().install();
+  const installed = await new ManagedResourceInstaller().install();
   process.stdout.write(`Codrive state initialized at ${config.stateDirectory}\n`);
-  process.stdout.write(`Installed ${installed.length} Skills:\n${installed.map((path) => `- ${path}`).join("\n")}\n`);
+  process.stdout.write(
+    `Installed 4 managed Skills and 1 managed Hook:\n${[
+      ...installed.skillPaths,
+      installed.hookPath,
+    ].map((path) => `- ${path}`).join("\n")}\n`,
+  );
   await doctor();
 }
 
@@ -382,6 +388,7 @@ async function doctor(): Promise<void> {
   const login = spawnSync(process.execPath, [script, "login", "status"], {
     encoding: "utf8",
   });
+  const resources = await new ManagedResourceInstaller().getStatus();
   const checks = [
     {
       name: `Node.js ${MINIMUM_NODE_MAJOR}+`,
@@ -397,6 +404,14 @@ async function doctor(): Promise<void> {
       name: "Codex login",
       ok: login.status === 0,
       detail: (login.stdout || login.stderr).trim(),
+    },
+    {
+      name: "Managed Codrive resources",
+      ok: resources.state === "current",
+      detail:
+        resources.state === "current"
+          ? `${resources.managedSkillCount} Skills + ${resources.managedHookCount} Hook`
+          : [resources.state, ...resources.conflictPaths].join(" "),
     },
   ];
   for (const check of checks) {
@@ -422,5 +437,5 @@ async function importProject(path?: string): Promise<void> {
 }
 
 function printHelp(): void {
-  process.stdout.write(`Codrive\n\nUsage:\n  codrive                         Start Codrive in the background\n  codrive start                   Start Codrive in the background\n  codrive stop                    Stop Codrive\n  codrive restart                 Restart Codrive\n  codrive upgrade                 Install the latest release and restart\n  codrive status                  Show service status\n  codrive setup                   Install Codrive Skills\n  codrive doctor                  Check Node.js, Codex, and login\n  codrive import <project.json>   Import a product\n  codrive serve                   Run in the foreground\n  codrive --version               Show the installed version\n`);
+  process.stdout.write(`Codrive\n\nUsage:\n  codrive                         Start Codrive in the background\n  codrive start                   Start Codrive in the background\n  codrive stop                    Stop Codrive\n  codrive restart                 Restart Codrive\n  codrive upgrade                 Install the latest release and restart\n  codrive status                  Show service status\n  codrive setup                   Install Codrive Skills and Hook\n  codrive doctor                  Check runtime, Codex, login, and managed resources\n  codrive import <project.json>   Import a product\n  codrive serve                   Run in the foreground\n  codrive --version               Show the installed version\n`);
 }

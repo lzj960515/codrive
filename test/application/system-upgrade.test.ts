@@ -236,7 +236,7 @@ describe("UpgradeCoordinator", () => {
     expect(current).not.toHaveProperty("error");
   });
 
-  it("finishes an interrupted current-version operation after managed Skills are repaired", async () => {
+  it("finishes an old interrupted current-version operation after managed resources are repaired", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-"));
     const store = new UpgradeStateStore(directory);
     await store.write({
@@ -254,7 +254,7 @@ describe("UpgradeCoordinator", () => {
     });
 
     await expect(
-      coordinator.completeAfterSkillRepair("0.7.0"),
+      coordinator.completeAfterResourceRepair("0.7.0"),
     ).resolves.toMatchObject({
       phase: "succeeded",
       completedAt: expect.any(String),
@@ -264,7 +264,7 @@ describe("UpgradeCoordinator", () => {
 });
 
 describe("SystemUpgradeRunner", () => {
-  it("reports success only after exact install, restart, Skill sync, and version health", async () => {
+  it("reports success only after exact install, restart, resource sync, and version health", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-"));
     const store = new UpgradeStateStore(directory);
     const phases: string[] = [];
@@ -288,9 +288,9 @@ describe("SystemUpgradeRunner", () => {
           calls.push(`restart:${stateDirectory}`);
         },
       },
-      installSkills: async (packageRoot, target) => {
-        calls.push(`skills:${packageRoot}:${target}`);
-        return { state: "current" };
+      installResources: async (packageRoot, target) => {
+        calls.push(`resources:${packageRoot}:${target}`);
+        return currentResources();
       },
       verifyHealth: async (target) => {
         calls.push(`health:${target}`);
@@ -307,7 +307,7 @@ describe("SystemUpgradeRunner", () => {
     expect(calls).toEqual([
       "install:0.7.0",
       `restart:${directory}`,
-      "skills:/global/codrive:0.7.0",
+      "resources:/global/codrive:0.7.0",
       "health:0.7.0",
     ]);
     expect((await store.read())?.phase).toBe("succeeded");
@@ -337,7 +337,7 @@ describe("SystemUpgradeRunner", () => {
         },
         restart: async () => undefined,
       },
-      installSkills: async () => ({ state: "current" }),
+      installResources: async () => currentResources(),
       verifyHealth: async () => undefined,
     });
 
@@ -353,6 +353,34 @@ describe("SystemUpgradeRunner", () => {
       error: { code: "permission_denied" },
     });
     expect((await store.read())?.error?.summary).not.toContain("SUPER_SECRET");
+  });
+
+  it("reports a managed Hook conflict separately from Skill conflicts", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-"));
+    const store = await createUpgradeStore(directory, "upgrade_hook_conflict");
+    const runner = new SystemUpgradeRunner({
+      store,
+      packageUpgrader: {
+        install: async () => ({
+          cliPath: "/global/codrive/dist/interfaces/cli/index.js",
+        }),
+        restart: async () => undefined,
+      },
+      installResources: async () => ({
+        state: "conflict",
+        skills: { state: "current" },
+        hook: { state: "conflict" },
+      }),
+      verifyHealth: async () => undefined,
+    });
+
+    await expect(
+      runner.run(upgradeRequest(directory, "upgrade_hook_conflict")),
+    ).rejects.toThrow(/Hook/);
+    expect(await store.read()).toMatchObject({
+      phase: "failed",
+      error: { code: "hook_conflict" },
+    });
   });
 
   it("keeps install errors containing a version number in the install failure category", async () => {
@@ -373,7 +401,7 @@ describe("SystemUpgradeRunner", () => {
         },
         restart: async () => undefined,
       },
-      installSkills: async () => ({ state: "current" }),
+      installResources: async () => currentResources(),
       verifyHealth: async () => undefined,
     });
 
@@ -407,7 +435,7 @@ describe("SystemUpgradeRunner", () => {
           install: async () => ({ cliPath: "/global/codrive/dist/interfaces/cli/index.js" }),
           restart: async () => undefined,
         },
-        installSkills: async () => ({ state: "current" }),
+        installResources: async () => currentResources(),
         verifyHealth: async () => {
           throw new Error(message);
         },
@@ -532,7 +560,7 @@ function createCommandRunner(
   return new SystemUpgradeRunner({
     store,
     packageUpgrader,
-    installSkills: async () => ({ state: "current" }),
+    installResources: async () => currentResources(),
     verifyHealth: async () => undefined,
   });
 }
@@ -542,5 +570,13 @@ function upgradeRequest(directory: string, operationId: string) {
     operationId,
     targetVersion: "0.7.0",
     stateDirectory: directory,
+  };
+}
+
+function currentResources() {
+  return {
+    state: "current" as const,
+    skills: { state: "current" as const },
+    hook: { state: "current" as const },
   };
 }

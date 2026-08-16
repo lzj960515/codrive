@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
 
-import type { SkillInstallationStatus } from "../infrastructure/skill-installer.js";
+import type { ManagedResourceInstallationStatus } from "../infrastructure/managed-resource-installer.js";
 import {
   PackageCommandError,
   type NpmPackageUpgrader,
@@ -16,13 +16,21 @@ import {
 interface SystemUpgradeRunnerOptions {
   store: UpgradeStateStore;
   packageUpgrader: Pick<NpmPackageUpgrader, "install" | "restart">;
-  installSkills: (
+  installResources: (
     packageRoot: string,
     targetVersion: string,
-  ) => Promise<Pick<SkillInstallationStatus, "state">>;
+  ) => Promise<ManagedResourceSyncStatus>;
   verifyHealth: (targetVersion: string) => Promise<void>;
   now?: () => Date;
 }
+
+type ManagedResourceSyncStatus = Pick<
+  ManagedResourceInstallationStatus,
+  "state"
+> & {
+  skills: Pick<ManagedResourceInstallationStatus["skills"], "state">;
+  hook: Pick<ManagedResourceInstallationStatus["hook"], "state">;
+};
 
 export class SystemUpgradeRunner {
   private readonly now: () => Date;
@@ -44,16 +52,11 @@ export class SystemUpgradeRunner {
       );
 
       await this.transition(request, "syncing_skills");
-      const skills = await this.options.installSkills(packageRoot, request.targetVersion);
-      if (skills.state !== "current") {
-        throw new UpgradeFailure({
-          code: skills.state === "conflict" ? "skill_conflict" : "skill_sync_failed",
-          summary:
-            skills.state === "conflict"
-              ? "A local unmanaged Skill has the same name. Move it aside, then retry the update."
-              : "Managed Skills did not match the updated Codrive package. Retry the update.",
-        });
-      }
+      const resources = await this.options.installResources(
+        packageRoot,
+        request.targetVersion,
+      );
+      if (resources.state !== "current") throw resourceSyncFailure(resources);
       await this.options.verifyHealth(request.targetVersion);
       await this.transition(request, "succeeded", true);
     } catch (error) {
@@ -91,6 +94,30 @@ class UpgradeFailure extends Error {
   constructor(readonly detail: SystemUpdateError) {
     super(detail.summary);
   }
+}
+
+function resourceSyncFailure(
+  resources: ManagedResourceSyncStatus,
+): UpgradeFailure {
+  if (resources.hook.state === "conflict") {
+    return new UpgradeFailure({
+      code: "hook_conflict",
+      summary:
+        "A local unmanaged Codex Hook conflicts with Codrive. Move it aside, then retry the update.",
+    });
+  }
+  if (resources.skills.state === "conflict") {
+    return new UpgradeFailure({
+      code: "skill_conflict",
+      summary:
+        "A local unmanaged Skill has the same name. Move it aside, then retry the update.",
+    });
+  }
+  return new UpgradeFailure({
+    code: "resource_sync_failed",
+    summary:
+      "Managed Skills and Hook did not match the updated Codrive package. Retry the update.",
+  });
 }
 
 function classifyUpgradeError(
@@ -144,6 +171,13 @@ function classifyUpgradeError(
       summary: "A local unmanaged Skill has the same name. Move it aside, then retry the update.",
     };
   }
+  if (/Refusing to replace unmanaged Hook/i.test(message)) {
+    return {
+      code: "hook_conflict",
+      summary:
+        "A local unmanaged Codex Hook conflicts with Codrive. Move it aside, then retry the update.",
+    };
+  }
   if (phase === "restarting") {
     return {
       code: "service_restart_failed",
@@ -152,8 +186,8 @@ function classifyUpgradeError(
   }
   if (phase === "syncing_skills") {
     return {
-      code: "skill_sync_failed",
-      summary: "Codrive restarted, but its managed Skills could not be synchronized. Retry from the Codrive update window.",
+      code: "resource_sync_failed",
+      summary: "Codrive restarted, but its managed resources could not be synchronized. Retry from the Codrive update window.",
     };
   }
   return {

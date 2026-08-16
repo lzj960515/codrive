@@ -44,7 +44,7 @@ codrive
 
 Codrive 会输出本地看板地址和日志位置。打开看板后：
 
-1. 在 **Codrive 更新**窗口中点击**补齐托管 Skills**。
+1. 在 **Codrive 更新**窗口中点击**补齐托管资源**。
 2. 用 Codex App 打开目标项目目录。
 3. 描述产品工作，并让 Codex 使用 Codrive 推进。
 
@@ -54,7 +54,7 @@ Codrive 会输出本地看板地址和日志位置。打开看板后：
 
 Codrive 常驻运行时会约每小时检查一次 npm latest 稳定版。已经打开的看板无需刷新就能收到检查结果；发现新版本后会显示更新提示。点击**重新检查**可以立即刷新状态，并从本次检查重新开始一小时周期。
 
-更新窗口会展示当前版本、最新稳定版、最后检查时间和四个托管 Skills 的状态。自动检查只更新这些状态，安装仍需用户明确确认。确认后，窗口可以安装指定版本、重启本地服务、同步随包 Skills，并验证升级结果。对应的终端命令是：
+更新窗口会展示当前版本、最新稳定版、最后检查时间，以及四个托管 Skills 和一个托管 Codex Hook 的状态。自动检查只更新这些状态，安装仍需用户明确确认。确认后，窗口可以安装指定版本、重启本地服务、同步全部五个随包资源，并验证升级结果。对应的终端命令是：
 
 ```bash
 codrive upgrade
@@ -63,6 +63,8 @@ codrive upgrade
 看板还提供运行设置，用于调整每个项目的并发上限、默认模型和 fallback 模型。
 
 打开看板后，浏览器会通过经过认证的 Socket.IO 连接，只订阅当前选中项目、当前打开任务和系统更新。实时事件只表示对应作用域已经变化，浏览器仍从 HTTP 重新读取权威快照，不从 Socket 接收业务状态。切换项目或任务时会同步切换房间；断线重连后只恢复当前房间和对应 HTTP 读取，不刷新页面，也不丢失当前界面状态。完整契约见[实时同步架构](./docs/architecture/realtime-sync.md)。
+
+任务执行期间，详情面板还会显示一条可替换的当前活动。Codrive 会合并经过净化的 App Server 事件与托管 Codex Hook 信号，并且只在进程内存中保留结果。活动只包含类别和执行身份，不包含 prompt、reasoning、命令参数、输出、路径、transcript 或环境变量。
 
 ## 工作方式
 
@@ -111,8 +113,8 @@ codrive stop                    停止 Codrive
 codrive restart                 重启 Codrive
 codrive upgrade                 安装最新版本并重启
 codrive status                  查看本地服务状态
-codrive setup                   安装或补齐托管 Skills
-codrive doctor                  检查 Node.js、Codex 和登录状态
+codrive setup                   安装或补齐托管 Skills 与 Hook
+codrive doctor                  检查运行环境、Codex、登录和托管资源
 codrive import <project.json>   导入产品
 codrive serve                   在前台运行
 codrive --version               显示当前安装版本

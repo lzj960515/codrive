@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CodexTaskDispatcher } from "./application/codex-task-dispatcher.js";
+import { ExecutionActivityBridge } from "./application/execution-activity-bridge.js";
 import { CodexProjectExecutor } from "./application/codex-project-executor.js";
 import { LifecycleRecorder } from "./application/lifecycle-recorder.js";
 import { PackageVersionCheckScheduler } from "./application/package-version-check-scheduler.js";
@@ -16,6 +17,8 @@ import { CodriveLog } from "./infrastructure/codrive-log.js";
 import { ConfigStore, type CodriveConfig } from "./infrastructure/config-store.js";
 import { InstanceLock } from "./infrastructure/instance-lock.js";
 import { DetachedUpgradeLauncher } from "./infrastructure/detached-upgrade-launcher.js";
+import { HookInstaller } from "./infrastructure/hook-installer.js";
+import { ManagedResourceInstaller } from "./infrastructure/managed-resource-installer.js";
 import { PackageVersionService } from "./infrastructure/package-version-service.js";
 import { readPackageVersion } from "./infrastructure/package-metadata.js";
 import { ProjectStore } from "./infrastructure/project-store.js";
@@ -27,6 +30,7 @@ export class CodriveServer {
   private readonly configStore: ConfigStore;
   private readonly lock: InstanceLock;
   private codex: CodexAppServerClient | null = null;
+  private activityBridge: ExecutionActivityBridge | null = null;
   private recovery: RecoveryManager | null = null;
   private http: ReturnType<typeof createHttpServer> | null = null;
   private config: CodriveConfig | null = null;
@@ -69,6 +73,10 @@ export class CodriveServer {
         onStderr: (text) => this.log!.write("codex", text),
       });
       await this.codex.start();
+      this.activityBridge = new ExecutionActivityBridge({
+        store,
+        codex: this.codex,
+      });
       const dispatcher = new CodexTaskDispatcher(this.codex);
       const projectExecutor = new CodexProjectExecutor(this.codex);
       const lifecycle = new LifecycleRecorder(store, {
@@ -90,6 +98,10 @@ export class CodriveServer {
         this.codex,
       );
       const skillInstaller = new SkillInstaller();
+      const resourceInstaller = new ManagedResourceInstaller(
+        skillInstaller,
+        new HookInstaller(),
+      );
       const versions = new PackageVersionService({
         currentVersion: version,
         stateDirectory: this.config.stateDirectory,
@@ -125,13 +137,15 @@ export class CodriveServer {
       const systemUpdateService = new SystemUpdateService(
         versions,
         upgrades,
-        skillInstaller,
+        resourceInstaller,
         this.versionChecks,
       );
       this.http = createHttpServer({
         store,
         workflow,
+        activityBridge: this.activityBridge,
         skillInstaller,
+        resourceInstaller,
         settingsService,
         systemUpdateService,
         systemUpdateEvents: [this.versionChecks, upgradeStore],
@@ -178,6 +192,8 @@ export class CodriveServer {
     this.recovery = null;
     await this.http?.close();
     this.http = null;
+    this.activityBridge?.close();
+    this.activityBridge = null;
     await this.codex?.stop();
     this.codex = null;
     await this.lock.release();

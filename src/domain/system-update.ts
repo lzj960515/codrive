@@ -15,7 +15,9 @@ export type SystemUpdateErrorCode =
   | "service_start_timeout"
   | "wrong_version"
   | "skill_sync_failed"
-  | "skill_conflict";
+  | "skill_conflict"
+  | "hook_conflict"
+  | "resource_sync_failed";
 
 export interface SystemUpdateError {
   code: SystemUpdateErrorCode;
