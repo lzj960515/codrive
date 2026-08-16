@@ -1,6 +1,9 @@
 import { SystemUpdateConflictError } from "../domain/errors.js";
 import { isActiveUpgradePhase } from "../domain/system-update.js";
-import type { ManagedResourceInstaller } from "../infrastructure/managed-resource-installer.js";
+import {
+  isManagedResourceInstallationComplete,
+  type ManagedResourceInstaller,
+} from "../infrastructure/managed-resource-installer.js";
 import type { PackageVersionService } from "../infrastructure/package-version-service.js";
 import type { PackageVersionCheckTrigger } from "./package-version-check-scheduler.js";
 import type { UpgradeCoordinator } from "./upgrade-coordinator.js";
@@ -50,7 +53,7 @@ export class SystemUpdateService {
       this.versions.read(),
       this.resources.getStatus(),
     ]);
-    if (resources.state === "current") {
+    if (isManagedResourceInstallationComplete(resources.state)) {
       await this.upgrades.completeAfterResourceRepair(version.currentVersion);
     }
     return this.read();

@@ -45,8 +45,9 @@ codrive
 Codrive prints the local board URL and log location. Open the board, then:
 
 1. Click **Complete managed resources** in the **Codrive update** window.
-2. Open the target project directory in Codex App.
-3. Describe the product work and ask Codex to use Codrive.
+2. In Codex, run `/hooks`, review the four Codrive activity Hook definitions, and trust their current hashes.
+3. Open the target project directory in Codex App.
+4. Describe the product work and ask Codex to use Codrive.
 
 ```text
 Use Codrive to add a leaderboard to this project, then start development after I confirm the plan.
@@ -59,6 +60,8 @@ The update window shows the installed version, the latest stable release, the la
 ```bash
 codrive upgrade
 ```
+
+Codex requires every non-managed command Hook to be reviewed before it can run. After setup or any release that changes the Hook definition, use `/hooks` in Codex to review and trust the new hash. `codrive doctor` reports `FAIL` with that instruction while the installed Hook is untrusted, modified, disabled, or unavailable.
 
 The board also provides runtime settings for per-project concurrency, the primary model, and the fallback model.
 

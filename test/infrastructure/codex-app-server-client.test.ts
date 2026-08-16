@@ -132,7 +132,15 @@ describe("CodexAppServerClient", () => {
       category: "searching",
       occurredAt: "2026-08-16T01:00:01.000Z",
     });
+    expect(activities).toContainEqual({
+      type: "activity",
+      threadId: "thread_1",
+      turnId: "turn_1",
+      category: "running_tests",
+      occurredAt: "2026-08-16T01:00:02.000Z",
+    });
     expect(JSON.stringify(activities)).not.toContain("SECRET_QUERY");
+    expect(JSON.stringify(activities)).not.toContain("SECRET_SUITE");
   });
 });
 
@@ -167,7 +175,10 @@ lines.on("line", (line) => {
       };
   if (request.method === "thread/read") result = { thread: { status: { type: "active", activeFlags: [] }, turns: [{ id: "turn_1", status: "inProgress", startedAt: 1786842000, completedAt: null, items: [{ type: "fileChange", id: "item_1", changes: [{ path: "SECRET_PATH" }], status: "inProgress" }] }] } };
   process.stdout.write(JSON.stringify({ id: request.id, result }) + "\\n");
-  if (request.method === "thread/start") process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: "thread_1", turnId: "turn_1", startedAtMs: 1786842001000, item: { type: "commandExecution", id: "item_live", command: "SECRET_QUERY", commandActions: [{ type: "search", command: "SECRET_QUERY", query: "SECRET_QUERY", path: "/workspace" }] } } }) + "\\n");
+  if (request.method === "thread/start") {
+    process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: "thread_1", turnId: "turn_1", startedAtMs: 1786842001000, item: { type: "commandExecution", id: "item_search", command: "SECRET_QUERY", commandActions: [{ type: "search", command: "SECRET_QUERY", query: "SECRET_QUERY", path: "/workspace" }] } } }) + "\\n");
+    process.stdout.write(JSON.stringify({ method: "item/started", params: { threadId: "thread_1", turnId: "turn_1", startedAtMs: 1786842002000, item: { type: "commandExecution", id: "item_test", command: "pnpm test -- SECRET_SUITE", commandActions: [] } } }) + "\\n");
+  }
 });
 `;
 }

@@ -39,7 +39,7 @@ describe("managed Codrive activity Hook", () => {
         prompt: "SECRET_PROMPT",
         cwd: "/SECRET/PATH",
         transcript_path: "/SECRET/TRANSCRIPT",
-        tool_input: { command: "SECRET_COMMAND" },
+        tool_input: { command: "pnpm test -- SECRET_COMMAND" },
         tool_response: "SECRET_OUTPUT",
       });
 
@@ -50,7 +50,7 @@ describe("managed Codrive activity Hook", () => {
         session_id: "session-live",
         turn_id: "turn-live",
         hook_event_name: "PostToolUse",
-        tool_name: "Bash",
+        tool_name: "test_command",
         occurred_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       });
       expect(receivedBody).not.toContain("SECRET");

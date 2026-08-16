@@ -356,7 +356,8 @@ async function serveForeground(): Promise<void> {
 async function setup(): Promise<void> {
   const configStore = new ConfigStore();
   const config = await configStore.loadOrCreate();
-  const installed = await new ManagedResourceInstaller().install();
+  const resourceInstaller = new ManagedResourceInstaller();
+  const installed = await resourceInstaller.install();
   process.stdout.write(`Codrive state initialized at ${config.stateDirectory}\n`);
   process.stdout.write(
     `Installed 4 managed Skills and 1 managed Hook:\n${[
@@ -364,7 +365,11 @@ async function setup(): Promise<void> {
       installed.hookPath,
     ].map((path) => `- ${path}`).join("\n")}\n`,
   );
-  await doctor();
+  const resources = await resourceInstaller.getStatus();
+  if (resources.hook.guidance) {
+    process.stdout.write(`Hook review required: ${resources.hook.guidance}\n`);
+  }
+  await doctor(resourceInstaller);
 }
 
 async function status(): Promise<void> {
@@ -381,14 +386,16 @@ async function status(): Promise<void> {
   process.exitCode = 1;
 }
 
-async function doctor(): Promise<void> {
+async function doctor(
+  resourceInstaller = new ManagedResourceInstaller(),
+): Promise<void> {
   const require = createRequire(import.meta.url);
   const script = require.resolve("@openai/codex/bin/codex.js");
   const codex = spawnSync(process.execPath, [script, "--version"], { encoding: "utf8" });
   const login = spawnSync(process.execPath, [script, "login", "status"], {
     encoding: "utf8",
   });
-  const resources = await new ManagedResourceInstaller().getStatus();
+  const resources = await resourceInstaller.getStatus();
   const checks = [
     {
       name: `Node.js ${MINIMUM_NODE_MAJOR}+`,
@@ -411,7 +418,9 @@ async function doctor(): Promise<void> {
       detail:
         resources.state === "current"
           ? `${resources.managedSkillCount} Skills + ${resources.managedHookCount} Hook`
-          : [resources.state, ...resources.conflictPaths].join(" "),
+          : resources.hook.guidance
+            ? `${resources.state} - ${resources.hook.guidance}`
+            : [resources.state, ...resources.conflictPaths].join(" "),
     },
   ];
   for (const check of checks) {

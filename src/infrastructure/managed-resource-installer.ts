@@ -13,6 +13,10 @@ import {
 export type ManagedResourceInstallationState =
   | "missing"
   | "outdated"
+  | "pending_trust"
+  | "disabled"
+  | "unsupported"
+  | "unavailable"
   | "current"
   | "conflict";
 
@@ -54,12 +58,12 @@ export class ManagedResourceInstaller {
         join(userHome, ".agents", "skills"),
         targetVersion,
       ),
-      new HookInstaller(
-        join(packageRoot, "hooks", "codrive"),
-        join(userHome, ".codex", "hooks", "codrive"),
-        join(userHome, ".codex", "hooks.json"),
-        targetVersion,
-      ),
+      new HookInstaller({
+        sourceDirectory: join(packageRoot, "hooks", "codrive"),
+        targetDirectory: join(userHome, ".codex", "hooks", "codrive"),
+        configPath: join(userHome, ".codex", "hooks.json"),
+        version: targetVersion,
+      }),
     );
   }
 
@@ -105,7 +109,17 @@ function combineStates(
   if (skills === "conflict" || hook === "conflict") return "conflict";
   if (skills === "missing" || hook === "missing") return "missing";
   if (skills === "outdated" || hook === "outdated") return "outdated";
+  if (hook === "unsupported") return "unsupported";
+  if (hook === "unavailable") return "unavailable";
+  if (hook === "disabled") return "disabled";
+  if (hook === "pending_trust") return "pending_trust";
   return "current";
+}
+
+export function isManagedResourceInstallationComplete(
+  state: ManagedResourceInstallationState,
+): boolean {
+  return state === "current" || state === "pending_trust";
 }
 
 function errorMessage(error: unknown): string {

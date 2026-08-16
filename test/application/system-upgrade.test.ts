@@ -319,6 +319,30 @@ describe("SystemUpgradeRunner", () => {
     ]);
   });
 
+  it("finishes the package upgrade when the installed Hook awaits user trust", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-"));
+    const store = await createUpgradeStore(directory, "upgrade_pending_trust");
+    const runner = new SystemUpgradeRunner({
+      store,
+      packageUpgrader: {
+        install: async () => ({
+          cliPath: "/global/codrive/dist/interfaces/cli/index.js",
+        }),
+        restart: async () => undefined,
+      },
+      installResources: async () => ({
+        state: "pending_trust",
+        skills: { state: "current" },
+        hook: { state: "pending_trust" },
+      }),
+      verifyHealth: async () => undefined,
+    });
+
+    await runner.run(upgradeRequest(directory, "upgrade_pending_trust"));
+
+    expect(await store.read()).toMatchObject({ phase: "succeeded" });
+  });
+
   it("persists a safe actionable failure instead of reporting partial success", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-"));
     const store = new UpgradeStateStore(directory);

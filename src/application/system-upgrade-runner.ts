@@ -1,6 +1,9 @@
 import { dirname } from "node:path";
 
-import type { ManagedResourceInstallationStatus } from "../infrastructure/managed-resource-installer.js";
+import {
+  isManagedResourceInstallationComplete,
+  type ManagedResourceInstallationStatus,
+} from "../infrastructure/managed-resource-installer.js";
 import {
   PackageCommandError,
   type NpmPackageUpgrader,
@@ -56,7 +59,9 @@ export class SystemUpgradeRunner {
         packageRoot,
         request.targetVersion,
       );
-      if (resources.state !== "current") throw resourceSyncFailure(resources);
+      if (!isManagedResourceInstallationComplete(resources.state)) {
+        throw resourceSyncFailure(resources);
+      }
       await this.options.verifyHealth(request.targetVersion);
       await this.transition(request, "succeeded", true);
     } catch (error) {

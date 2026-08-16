@@ -11,10 +11,13 @@ import type {
   CodexTurnStatus,
 } from "../application/codex-gateway.js";
 import {
+  classifyActivityCommand,
   classifyActivityTool,
   type ExecutionActivityCategory,
 } from "../domain/execution-activity.js";
 import type { InitializeResponse } from "./app-server-protocol/InitializeResponse.js";
+import type { HookTrustStatus } from "./app-server-protocol/v2/HookTrustStatus.js";
+import type { HooksListResponse } from "./app-server-protocol/v2/HooksListResponse.js";
 import type { ModelListResponse } from "./app-server-protocol/v2/ModelListResponse.js";
 import type { ThreadResumeResponse } from "./app-server-protocol/v2/ThreadResumeResponse.js";
 import type { ThreadReadResponse } from "./app-server-protocol/v2/ThreadReadResponse.js";
@@ -29,6 +32,18 @@ export interface CodexAppServerOptions {
   executable?: string;
   version?: string;
   onStderr?: (text: string) => void;
+  env?: NodeJS.ProcessEnv;
+}
+
+export interface CodexHookRuntimeInspection {
+  hooks: Array<{
+    eventName: string;
+    command: string | null;
+    enabled: boolean;
+    trustStatus: HookTrustStatus;
+  }>;
+  warnings: string[];
+  errors: string[];
 }
 
 export class CodexAppServerClient implements CodexGateway, CodexActivityGateway {
@@ -61,7 +76,7 @@ export class CodexAppServerClient implements CodexGateway, CodexActivityGateway 
     const command = resolveCodexCommand(this.options.executable);
     this.process = spawn(command.executable, [...command.args, "app-server"], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      env: this.options.env ?? process.env,
     });
     this.process.stderr.on("data", (data: Buffer) => {
       this.options.onStderr?.(data.toString("utf8"));
@@ -228,6 +243,33 @@ export class CodexAppServerClient implements CodexGateway, CodexActivityGateway 
     };
   }
 
+  async inspectHooks(cwd: string): Promise<CodexHookRuntimeInspection> {
+    await this.start();
+    const response = await this.requireConnection().request<HooksListResponse>(
+      "hooks/list",
+      { cwds: [cwd] },
+    );
+    const entry = response.data.find((candidate) => candidate.cwd === cwd)
+      ?? response.data[0];
+    if (!entry) {
+      return {
+        hooks: [],
+        warnings: [],
+        errors: [`Codex did not return Hook status for ${cwd}`],
+      };
+    }
+    return {
+      hooks: entry.hooks.map(({ eventName, command, enabled, trustStatus }) => ({
+        eventName,
+        command,
+        enabled,
+        trustStatus,
+      })),
+      warnings: entry.warnings,
+      errors: entry.errors.map(({ path, message }) => `${path}: ${message}`),
+    };
+  }
+
   onActivity(listener: (event: CodexActivityEvent) => void): () => void {
     this.activities.on("activity", listener);
     return () => this.activities.off("activity", listener);
@@ -310,7 +352,7 @@ function categoryForThreadItem(item: unknown): ExecutionActivityCategory | null 
       ) {
         return "reading";
       }
-      return "running_command";
+      return classifyActivityCommand(stringValue(item.command) ?? undefined);
     }
     case "fileChange":
       return "editing";

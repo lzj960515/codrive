@@ -9,6 +9,9 @@ const supportedEvents = new Set([
   "Stop",
 ]);
 
+// Match only shell segments that begin with a known test runner.
+const testCommandPattern = /(?:^|(?:&&|\|\||;|\n)\s*)(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:(?:npm|pnpm|yarn|bun)\b[^\n;&|]*\b(?:test(?::[\w-]+)?|vitest|jest)\b|(?:npx\s+)?(?:vitest|jest|pytest)\b|python(?:3)?\s+-m\s+pytest\b|node\s+--test\b|go\s+test\b|cargo\s+test\b|mvn\s+(?:[^\n;&|]+\s+)?test\b|(?:gradle|\.\/gradlew)\s+(?:[^\n;&|]+\s+)?test\b)/i;
+
 // Hook output must never affect the Codex turn, including when Codrive is offline.
 process.stdout.write("{}\n");
 
@@ -35,7 +38,7 @@ function safeActivity(input) {
   const turnId = safeString(input.turn_id);
   const event = safeString(input.hook_event_name);
   if (!sessionId || !turnId || !event || !supportedEvents.has(event)) return null;
-  const toolName = safeString(input.tool_name);
+  const toolName = safeToolName(input);
   return {
     schemaVersion: 1,
     session_id: sessionId,
@@ -44,6 +47,19 @@ function safeActivity(input) {
     ...(toolName ? { tool_name: toolName } : {}),
     occurred_at: new Date().toISOString(),
   };
+}
+
+function safeToolName(input) {
+  const toolName = safeString(input.tool_name);
+  if (toolName?.toLowerCase() !== "bash" || !isRecord(input.tool_input)) {
+    return toolName;
+  }
+  return isTestCommand(input.tool_input.command) ? "test_command" : toolName;
+}
+
+function isTestCommand(command) {
+  if (typeof command !== "string") return false;
+  return testCommandPattern.test(command);
 }
 
 async function sendActivity(activity) {
@@ -73,4 +89,8 @@ function safeString(value) {
   return typeof value === "string" && value.length > 0 && value.length <= 200
     ? value
     : null;
+}
+
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

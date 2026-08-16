@@ -90,7 +90,31 @@ async function createFixture() {
     hookTarget,
     installer: new ManagedResourceInstaller(
       new SkillInstaller(skillSource, skillTarget, "0.7.0"),
-      new HookInstaller(hookSource, hookTarget, hookConfig, "0.7.0"),
+      new HookInstaller({
+        sourceDirectory: hookSource,
+        targetDirectory: hookTarget,
+        configPath: hookConfig,
+        version: "0.7.0",
+        runtimeInspector: trustedRuntime(hookTarget),
+      }),
     ),
+  };
+}
+
+function trustedRuntime(targetDirectory: string) {
+  const command = `node ${JSON.stringify(join(targetDirectory, "codrive-activity-hook.mjs"))}`;
+  return {
+    inspectHooks: async () => ({
+      hooks: ["userPromptSubmit", "preToolUse", "postToolUse", "stop"].map(
+        (eventName) => ({
+          eventName,
+          command,
+          enabled: true,
+          trustStatus: "trusted" as const,
+        }),
+      ),
+      warnings: [],
+      errors: [],
+    }),
   };
 }

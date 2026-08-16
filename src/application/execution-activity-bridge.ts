@@ -153,6 +153,14 @@ export class ExecutionActivityBridge {
 
   private async record(signal: ExecutionActivitySignal): Promise<boolean> {
     if (!(await this.isCurrent(signal))) return false;
+    const latest = this.latestByTask.get(signal.taskId);
+    if (
+      latest &&
+      sameExecutionIdentity(latest, signal) &&
+      Date.parse(signal.occurredAt) < Date.parse(latest.occurredAt)
+    ) {
+      return false;
+    }
     this.latestByTask.set(signal.taskId, signal);
     if (!(await this.isCurrent(signal))) {
       this.clear(signal.taskId);
@@ -170,6 +178,20 @@ export class ExecutionActivityBridge {
   private publish(update: ExecutionActivityUpdate): void {
     for (const listener of this.listeners) listener(update);
   }
+}
+
+function sameExecutionIdentity(
+  left: ExecutionActivitySignal,
+  right: ExecutionActivitySignal,
+): boolean {
+  return (
+    left.projectId === right.projectId &&
+    left.taskId === right.taskId &&
+    left.action === right.action &&
+    left.attemptId === right.attemptId &&
+    left.threadId === right.threadId &&
+    left.turnId === right.turnId
+  );
 }
 
 function isObservableExecution(

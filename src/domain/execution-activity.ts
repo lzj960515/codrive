@@ -50,6 +50,9 @@ const labels: Record<ExecutionActivityCategory, string> = {
   preparing_response: "正在整理回复",
 };
 
+// Match only shell segments that begin with a known test runner.
+const testCommandPattern = /(?:^|(?:&&|\|\||;|\n)\s*)(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:(?:npm|pnpm|yarn|bun)\b[^\n;&|]*\b(?:test(?::[\w-]+)?|vitest|jest)\b|(?:npx\s+)?(?:vitest|jest|pytest)\b|python(?:3)?\s+-m\s+pytest\b|node\s+--test\b|go\s+test\b|cargo\s+test\b|mvn\s+(?:[^\n;&|]+\s+)?test\b|(?:gradle|\.\/gradlew)\s+(?:[^\n;&|]+\s+)?test\b)/i;
+
 export function executionActivityLabel(
   category: ExecutionActivityCategory,
 ): string {
@@ -67,4 +70,11 @@ export function classifyActivityTool(
   if (/request.*input|ask/.test(name)) return "waiting_input";
   if (/bash|exec|command|write_stdin/.test(name)) return "running_command";
   return "calling_tool";
+}
+
+export function classifyActivityCommand(
+  command?: string,
+): Extract<ExecutionActivityCategory, "running_command" | "running_tests"> {
+  if (!command) return "running_command";
+  return testCommandPattern.test(command) ? "running_tests" : "running_command";
 }

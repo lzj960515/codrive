@@ -96,6 +96,40 @@ describe("ExecutionActivityBridge", () => {
     });
   });
 
+  it("keeps the newest signal when Hook and App Server events arrive out of order", async () => {
+    const fixture = await createFixture();
+    const listener = vi.fn();
+    fixture.bridge.subscribe(listener);
+
+    fixture.publishCodex({
+      type: "activity",
+      threadId: "thread-current",
+      turnId: "turn-current",
+      category: "running_tests",
+      occurredAt: "2026-08-16T01:03:00.000Z",
+    });
+    await vi.waitFor(async () => {
+      await expect(fixture.bridge.read(fixture.task.id)).resolves.toMatchObject({
+        category: "running_tests",
+      });
+    });
+    await fixture.bridge.recordHook({
+      schemaVersion: 1,
+      sessionId: "session-family",
+      turnId: "turn-current",
+      event: "PreToolUse",
+      toolName: "apply_patch",
+      occurredAt: "2026-08-16T01:02:00.000Z",
+    });
+
+    await expect(fixture.bridge.read(fixture.task.id)).resolves.toMatchObject({
+      category: "running_tests",
+      occurredAt: "2026-08-16T01:03:00.000Z",
+      source: "app_server",
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("derives a safe initial activity from the exact current turn", async () => {
     const fixture = await createFixture({
       readTurnActivity: async () => ({

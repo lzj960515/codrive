@@ -45,8 +45,9 @@ codrive
 Codrive 会输出本地看板地址和日志位置。打开看板后：
 
 1. 在 **Codrive 更新**窗口中点击**补齐托管资源**。
-2. 用 Codex App 打开目标项目目录。
-3. 描述产品工作，并让 Codex 使用 Codrive 推进。
+2. 在 Codex 中运行 `/hooks`，审核四条 Codrive activity Hook 定义，并信任它们的当前 hash。
+3. 用 Codex App 打开目标项目目录。
+4. 描述产品工作，并让 Codex 使用 Codrive 推进。
 
 ```text
 用 Codrive 的方式给这个项目增加排行榜功能，我确认计划后开始开发。
@@ -59,6 +60,8 @@ Codrive 常驻运行时会约每小时检查一次 npm latest 稳定版。已经
 ```bash
 codrive upgrade
 ```
+
+Codex 要求每条非托管命令 Hook 在运行前经过人工审核。首次 setup 后，或新版本改变 Hook 定义后，请在 Codex 中运行 `/hooks`，审核并信任新的 hash。已安装的 Hook 仍处于未信任、已修改、已停用或不可用状态时，`codrive doctor` 会报告 `FAIL` 并给出对应操作指引。
 
 看板还提供运行设置，用于调整每个项目的并发上限、默认模型和 fallback 模型。
 

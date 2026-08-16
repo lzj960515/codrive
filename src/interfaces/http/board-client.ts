@@ -1,4 +1,5 @@
 import { createRealtimeWatchCoordinator } from "./board-realtime-client.js";
+import { createExecutionActivityRenderer } from "./execution-activity-renderer.js";
 import { taskBoardLayout } from "./task-board-layout.js";
 
 export function renderBoardClient(accessToken: string): string {
@@ -6,6 +7,7 @@ export function renderBoardClient(accessToken: string): string {
   const layout = JSON.stringify(taskBoardLayout);
   // The board is inline JavaScript, so embed the same coordinator exercised by unit tests.
   const watchCoordinator = createRealtimeWatchCoordinator.toString();
+  const activityRenderer = createExecutionActivityRenderer.toString();
   return `<script>
     const TOKEN = ${token};
     const boardLayout = ${layout};
@@ -25,7 +27,9 @@ export function renderBoardClient(accessToken: string): string {
       primary: "默认", fallback: "备用", user_confirmed: "用户确认",
       closed: "正常", open: "已熔断", half_open: "主模型探测",
       agent_decision: "Codex 判断", codex: "Codex", user: "用户",
-      missing: "待补齐", outdated: "待同步", current: "已对齐", conflict: "存在冲突",
+      missing: "待补齐", outdated: "待同步", pending_trust: "等待 Hook 信任",
+      disabled: "Hook 已停用", unsupported: "Hook 运行时不兼容",
+      unavailable: "Hook 状态不可用", current: "已对齐", conflict: "存在冲突",
       development_completed: "开发完成", rework_completed: "返工完成",
       review_approved: "审查通过", review_changes_requested: "审查退回",
       review_requested: "请求审查", integration_completed: "合入完成",
@@ -58,6 +62,13 @@ export function renderBoardClient(accessToken: string): string {
     const label = status => statusLabels[status] || String(status || "").replaceAll("_", " ");
     const formatTime = value => value ? new Date(value).toLocaleString("zh-CN", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" }) : "—";
     const initials = value => String(value || "C").trim().split(/\\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
+    const createActivityRenderer = ${activityRenderer};
+    const renderActivityEntry = createActivityRenderer({
+      getHost: () => document.getElementById("current-execution-activity"),
+      createElement: tagName => document.createElement(tagName),
+      formatTime,
+      schedule: (callback, delay) => window.setTimeout(callback, delay)
+    });
 
     async function api(path, options = {}) {
       const response = await fetch(path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
@@ -111,6 +122,8 @@ export function renderBoardClient(accessToken: string): string {
         skills,
         hook
       };
+      const hookNeedsTrust = resources.state === "pending_trust";
+      const resourcesInstalled = resources.state === "current" || hookNeedsTrust;
       const active = upgrade && activeUpdatePhases.includes(upgrade.phase);
       const triggerCopy = active
         ? updatePhaseCopy[upgrade.phase][0]
@@ -118,18 +131,22 @@ export function renderBoardClient(accessToken: string): string {
           ? "新版本 "+version.latestVersion+" 可用"
           : resources.state === "conflict"
             ? "本地托管资源冲突待处理"
-          : version?.latestVersion && resources.state === "current"
+          : hookNeedsTrust
+            ? "Codex Hook 等待信任"
+          : version?.latestVersion && resourcesInstalled
               ? "Codrive 与托管资源已对齐"
-              : resources.state === "current" ? "等待稳定版检查" : "托管资源需要补齐";
+              : resourcesInstalled ? "等待稳定版检查" : "托管资源需要补齐";
       document.getElementById("update-trigger-copy").textContent = triggerCopy;
-      document.getElementById("update-trigger-icon").textContent = active ? "↻" : version?.updateAvailable ? "↑" : resources.state === "current" ? "✓" : "+";
+      document.getElementById("update-trigger-icon").textContent = active ? "↻" : version?.updateAvailable ? "↑" : hookNeedsTrust ? "!" : resources.state === "current" ? "✓" : "+";
       document.getElementById("update-trigger").dataset.state = active ? "active" : version?.updateAvailable || resources.state !== "current" ? "attention" : "current";
 
       document.getElementById("update-current-version").textContent = version?.currentVersion || resources.bundledVersion;
       document.getElementById("update-latest-version").textContent = version?.latestVersion || "待检查";
-      document.getElementById("update-resources").textContent = resources.state === "current"
-        ? resources.managedSkillCount+" Skills + "+resources.managedHookCount+" Hook 已对齐"
-        : label(resources.state);
+      document.getElementById("update-resources").textContent = hookNeedsTrust
+        ? resources.managedSkillCount+" Skills 已对齐 · Hook 等待信任"
+        : resources.state === "current"
+          ? resources.managedSkillCount+" Skills + "+resources.managedHookCount+" Hook 已对齐"
+          : label(resources.state);
       document.getElementById("update-checked-at").textContent = formatTime(version?.lastCheckedAt);
       document.getElementById("update-check-result").textContent = version?.checkError?.summary || (version?.latestVersion ? "npm latest 稳定版已读取" : "等待首次检查");
 
@@ -157,9 +174,13 @@ export function renderBoardClient(accessToken: string): string {
       if (hook?.state === "conflict") {
         conflictDetails.push('<b>保留了本地 Codex Hook</b><code>'+escapeHtml(hook.conflictPaths.join("\\n"))+'</code>');
       }
+      const hasResourceConflict = conflictDetails.length > 0;
+      if (hookNeedsTrust) {
+        conflictDetails.push('<b>Codex Hook 已安装，等待安全审核</b><p>请在 Codex 中运行 <code>/hooks</code>，审核并信任 Codrive activity Hooks 的当前定义。</p>');
+      }
       conflict.hidden = conflictDetails.length === 0;
       conflict.innerHTML = conflictDetails.length > 0
-        ? '<p>Codrive 不会覆盖未托管文件。请先移动冲突路径，再重新同步：</p>'+conflictDetails.join("")
+        ? (hasResourceConflict ? '<p>Codrive 不会覆盖未托管文件。请先移动冲突路径，再重新同步：</p>' : '')+conflictDetails.join("")
         : "";
 
       const summary = upgrade?.phase === "failed"
@@ -170,6 +191,8 @@ export function renderBoardClient(accessToken: string): string {
             ? "Codrive "+version.latestVersion+" 与该版本随附的 4 个托管 Skills、1 个托管 Hook 将在一次操作中更新。"
             : version?.checkError
               ? "无法确认 npm latest 稳定版；看板与任务调度不受影响，可以重新检查。"
+              : hookNeedsTrust
+                ? "托管资源已经安装。请在 Codex 中运行 /hooks，审核并信任 Codrive activity Hooks 的当前定义；Hook 更新后需要重新审核。"
               : version?.latestVersion && resources.state === "current"
               ? "当前已是最新稳定版，Codrive 与随包托管资源保持一致。"
               : "Codrive 已安装；需要从当前包补齐 4 个托管 Skills 和 1 个托管 Hook。";
@@ -181,13 +204,15 @@ export function renderBoardClient(accessToken: string): string {
         ? "更新进行中"
         : version?.updateAvailable
           ? upgrade?.phase === "failed" ? "重试更新" : "更新 Codrive 与托管资源"
+          : hookNeedsTrust && !version?.updateAvailable
+            ? "请在 Codex 运行 /hooks"
           : version?.latestVersion && resources.state === "current"
             ? "已是最新版"
             : resources.state === "current" ? "等待版本检查" : "补齐托管资源";
-      if (upgrade?.phase === "failed" && upgrade.targetVersion === version?.currentVersion && resources.state !== "current") {
+      if (upgrade?.phase === "failed" && upgrade.targetVersion === version?.currentVersion && !resourcesInstalled) {
         primary.textContent = "补齐托管资源";
       }
-      if (!version?.updateAvailable && resources.state === "current") primary.disabled = true;
+      if (!version?.updateAvailable && resourcesInstalled) primary.disabled = true;
       document.getElementById("update-check").disabled = Boolean(active) || Boolean(version?.checking);
       document.getElementById("update-status").textContent = updateActionError || upgrade?.error?.summary || version?.checkError?.summary || "";
       document.getElementById("update-fallback").hidden = upgrade?.phase !== "failed" && !version?.checkError;
@@ -220,10 +245,17 @@ export function renderBoardClient(accessToken: string): string {
       const status = document.getElementById("update-status");
       updateActionError = null;
       try {
+        if (
+          (systemUpdate.resources?.state ?? systemUpdate.skills.state) === "pending_trust" &&
+          !systemUpdate.version?.updateAvailable
+        ) {
+          status.textContent = "请在 Codex 中运行 /hooks，审核并信任 Codrive activity Hooks。";
+          return;
+        }
         const repairCurrentVersion =
           systemUpdate.upgrade?.phase === "failed" &&
           systemUpdate.upgrade.targetVersion === systemUpdate.version?.currentVersion &&
-          (systemUpdate.resources?.state ?? systemUpdate.skills.state) !== "current";
+          !["current", "pending_trust"].includes(systemUpdate.resources?.state ?? systemUpdate.skills.state);
         if (systemUpdate.version?.updateAvailable && !repairCurrentVersion) {
           status.textContent = "正在启动独立更新进程...";
           systemUpdate = await command("system.start_upgrade", { targetVersion: systemUpdate.version.latestVersion });
@@ -804,49 +836,18 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     function renderCurrentActivity() {
-      const host = document.getElementById("current-execution-activity");
-      if (!host) return;
       const activity = activityMatchesCurrentExecution(currentActivity)
         ? currentActivity
         : null;
       const key = activity
         ? [activity.attemptId, activity.turnId, activity.occurredAt, activity.category].join(":")
         : "waiting";
-      if (host.firstElementChild?.dataset.activityKey === key) return;
-
-      const next = document.createElement("div");
-      next.className = activity
-        ? "current-activity-entry entering"
-        : "current-activity-entry current-activity-waiting entering";
-      next.dataset.activityKey = key;
-      const marker = document.createElement("span");
-      marker.className = "current-activity-marker";
-      marker.setAttribute("aria-hidden", "true");
-      const copy = document.createElement("span");
-      copy.textContent = activity?.label ?? "等待下一条活动信号";
-      next.append(marker, copy);
-      if (activity) {
-        const occurredAt = document.createElement("time");
-        occurredAt.dateTime = activity.occurredAt;
-        occurredAt.textContent = formatTime(activity.occurredAt);
-        next.append(occurredAt);
-      }
-
-      const previous = host.firstElementChild;
-      if (!previous) {
-        host.replaceChildren(next);
-        next.classList.remove("entering");
-        return;
-      }
-      previous.classList.add("leaving");
-      host.append(next);
-      const finish = () => {
-        if (!next.isConnected) return;
-        next.classList.remove("entering");
-        host.replaceChildren(next);
-      };
-      previous.addEventListener("animationend", finish, { once: true });
-      window.setTimeout(finish, 360);
+      renderActivityEntry({
+        key,
+        label: activity?.label ?? "等待下一条活动信号",
+        ...(activity ? { occurredAt: activity.occurredAt } : {}),
+        waiting: !activity
+      });
     }
 
     function closeDetail() {
