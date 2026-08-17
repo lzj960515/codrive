@@ -55,7 +55,8 @@ export function renderBoardPage(accessToken: string): string {
       <div class="version-ledger" aria-label="版本状态">
         <div><span>当前运行</span><strong id="update-current-version">—</strong></div>
         <div><span>最新稳定版</span><strong id="update-latest-version">—</strong></div>
-        <div><span>托管资源</span><strong id="update-resources">—</strong></div>
+        <div><span>托管 Skills</span><strong id="update-skills">—</strong></div>
+        <div><span>Codex Hook</span><strong id="update-hook">—</strong></div>
       </div>
       <div id="update-progress" class="update-progress" hidden>
         <div class="update-progress-track"><span id="update-progress-bar"></span></div>

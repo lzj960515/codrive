@@ -1729,12 +1729,16 @@ describe("HTTP API", () => {
     expect(page.body).toContain('id="update-dialog"');
     expect(page.body).toContain('id="update-primary"');
     expect(page.body).toContain('id="update-trigger"');
+    expect(page.body).toContain('id="update-skills"');
+    expect(page.body).toContain('id="update-hook"');
+    expect(page.body).not.toContain('id="update-resources"');
     expect(page.body).toContain('/api/system');
     expect(page.body).toContain('system.install_resources');
     expect(page.body).toContain('system.start_upgrade');
     expect(page.body).toContain('system.check_for_updates');
     expect(page.body).toContain("Codrive 与托管资源已对齐");
     expect(page.body).toContain("4 个托管 Skills、1 个托管 Hook");
+    expect(page.body).not.toContain("hookNeedsTrust");
     expect(page.body).toContain("Codrive 正在重启，页面会自动恢复连接");
     expect(page.body).toContain('id="update-timeline"');
     expect(page.body).not.toContain('codrive:skills-dismissed');

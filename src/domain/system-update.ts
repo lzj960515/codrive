@@ -44,6 +44,10 @@ export interface UpgradeState {
   phaseStartedAt?: Partial<Record<UpgradePhase, string>>;
   completedAt?: string;
   error?: SystemUpdateError;
+  resourceSync?: {
+    packageVersion: string;
+    completedAt: string;
+  };
 }
 
 export interface VersionStatusChangedEvent {

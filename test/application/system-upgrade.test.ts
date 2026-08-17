@@ -258,6 +258,7 @@ describe("UpgradeCoordinator", () => {
     ).resolves.toMatchObject({
       phase: "succeeded",
       completedAt: expect.any(String),
+      resourceSync: { packageVersion: "0.7.0" },
     });
     expect(await store.read()).not.toHaveProperty("error");
   });
@@ -311,6 +312,7 @@ describe("SystemUpgradeRunner", () => {
       "health:0.7.0",
     ]);
     expect((await store.read())?.phase).toBe("succeeded");
+    expect(await store.read()).not.toHaveProperty("resourceSync");
     expect(phases).toEqual([
       "installing",
       "restarting",

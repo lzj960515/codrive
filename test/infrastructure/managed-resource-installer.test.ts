@@ -60,6 +60,22 @@ describe("ManagedResourceInstaller", () => {
       hook: { state: "outdated" },
     });
   });
+
+  it("coalesces concurrent repair requests into one installation transaction", async () => {
+    const fixture = await createFixture();
+
+    const [first, second] = await Promise.all([
+      fixture.installer.install(),
+      fixture.installer.install(),
+    ]);
+
+    expect(second).toEqual(first);
+    await expect(fixture.installer.getStatus()).resolves.toMatchObject({
+      state: "current",
+      skills: { state: "current" },
+      hook: { state: "current" },
+    });
+  });
 });
 
 async function createFixture() {

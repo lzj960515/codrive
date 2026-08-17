@@ -55,7 +55,7 @@ Use Codrive to add a leaderboard to this project, then start development after I
 
 While the service is running, Codrive checks the npm latest stable release about once per hour. An open board receives the result without a page refresh and shows an update prompt when a newer version is available. **Check again** refreshes the status immediately and starts a new hourly interval.
 
-The update window shows the installed version, the latest stable release, the last check time, and the status of Codrive's four managed Skills and one managed Codex Hook. Automatic checks only update this status: installation still requires your confirmation. The window can then install an exact release, restart the local service, synchronize all five bundled resources, and verify the new version. The command-line equivalent is:
+The update window shows the installed version, the latest stable release, the last check time, and separate status rows for Codrive's four managed Skills and one managed Codex Hook. Automatic checks only update this status: installation still requires your confirmation. The window can then install an exact release, restart the local service, synchronize all five bundled resources, and verify the new version. The updated service performs the final resource verification, so an older detached updater cannot omit a resource introduced by the package it installs. The command-line equivalent is:
 
 ```bash
 codrive upgrade

@@ -2,7 +2,6 @@ import { dirname } from "node:path";
 
 import {
   isManagedResourceInstallationComplete,
-  type ManagedResourceInstallationStatus,
 } from "../infrastructure/managed-resource-installer.js";
 import {
   PackageCommandError,
@@ -15,6 +14,10 @@ import {
   type UpgradePhase,
   type UpgradeState,
 } from "../domain/system-update.js";
+import {
+  managedResourceSyncError,
+  type ManagedResourceSyncStatus,
+} from "./managed-resource-sync.js";
 
 interface SystemUpgradeRunnerOptions {
   store: UpgradeStateStore;
@@ -26,14 +29,6 @@ interface SystemUpgradeRunnerOptions {
   verifyHealth: (targetVersion: string) => Promise<void>;
   now?: () => Date;
 }
-
-type ManagedResourceSyncStatus = Pick<
-  ManagedResourceInstallationStatus,
-  "state"
-> & {
-  skills: Pick<ManagedResourceInstallationStatus["skills"], "state">;
-  hook: Pick<ManagedResourceInstallationStatus["hook"], "state">;
-};
 
 export class SystemUpgradeRunner {
   private readonly now: () => Date;
@@ -60,7 +55,7 @@ export class SystemUpgradeRunner {
         request.targetVersion,
       );
       if (!isManagedResourceInstallationComplete(resources.state)) {
-        throw resourceSyncFailure(resources);
+        throw new UpgradeFailure(managedResourceSyncError(resources));
       }
       await this.options.verifyHealth(request.targetVersion);
       await this.transition(request, "succeeded", true);
@@ -99,30 +94,6 @@ class UpgradeFailure extends Error {
   constructor(readonly detail: SystemUpdateError) {
     super(detail.summary);
   }
-}
-
-function resourceSyncFailure(
-  resources: ManagedResourceSyncStatus,
-): UpgradeFailure {
-  if (resources.hook.state === "conflict") {
-    return new UpgradeFailure({
-      code: "hook_conflict",
-      summary:
-        "A local unmanaged Codex Hook conflicts with Codrive. Move it aside, then retry the update.",
-    });
-  }
-  if (resources.skills.state === "conflict") {
-    return new UpgradeFailure({
-      code: "skill_conflict",
-      summary:
-        "A local unmanaged Skill has the same name. Move it aside, then retry the update.",
-    });
-  }
-  return new UpgradeFailure({
-    code: "resource_sync_failed",
-    summary:
-      "Managed Skills and Hook did not match the updated Codrive package. Retry the update.",
-  });
 }
 
 function classifyUpgradeError(

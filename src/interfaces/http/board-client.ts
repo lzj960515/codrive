@@ -1,5 +1,6 @@
 import { createRealtimeWatchCoordinator } from "./board-realtime-client.js";
 import { createExecutionActivityRenderer } from "./execution-activity-renderer.js";
+import { createSystemUpdateRenderer } from "./system-update-renderer.js";
 import { taskBoardLayout } from "./task-board-layout.js";
 
 export function renderBoardClient(accessToken: string): string {
@@ -8,6 +9,7 @@ export function renderBoardClient(accessToken: string): string {
   // The board is inline JavaScript, so embed the same coordinator exercised by unit tests.
   const watchCoordinator = createRealtimeWatchCoordinator.toString();
   const activityRenderer = createExecutionActivityRenderer.toString();
+  const systemUpdateRenderer = createSystemUpdateRenderer.toString();
   return `<script>
     const TOKEN = ${token};
     const boardLayout = ${layout};
@@ -67,6 +69,13 @@ export function renderBoardClient(accessToken: string): string {
       formatTime,
       schedule: (callback, delay) => window.setTimeout(callback, delay)
     });
+    const createUpdateRenderer = ${systemUpdateRenderer};
+    const renderSystemUpdateView = createUpdateRenderer({
+      getElementById: id => document.getElementById(id),
+      label,
+      formatTime,
+      escapeHtml
+    });
 
     async function api(path, options = {}) {
       const response = await fetch(path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
@@ -85,131 +94,27 @@ export function renderBoardClient(accessToken: string): string {
     });
 
     const activeUpdatePhases = ["checking", "installing", "restarting", "syncing_skills"];
-    const updatePhaseCopy = {
-      checking: ["正在固定目标版本", 8],
-      installing: ["正在安装 Codrive", 38],
-      restarting: ["正在重启本机服务", 66],
-      syncing_skills: ["正在同步托管资源", 86],
-      succeeded: ["更新完成", 100],
-      failed: ["更新未完成", 100]
-    };
-
     async function refreshSystem() {
+      let refreshed;
       try {
-        systemUpdate = await api("/api/system");
-        renderSystemUpdate();
-      } catch (error) {
+        refreshed = await api("/api/system");
+      } catch {
         if (systemUpdate?.upgrade && activeUpdatePhases.includes(systemUpdate.upgrade.phase)) {
           document.getElementById("update-status").textContent = "本机服务正在重启，恢复连接后会继续显示进度。";
           scheduleUpdatePoll();
           return;
         }
         document.getElementById("update-status").textContent = "暂时无法读取更新状态。";
+        return;
       }
+      systemUpdate = refreshed;
+      renderSystemUpdate();
     }
 
     function renderSystemUpdate() {
       if (!systemUpdate) return;
-      const { version, upgrade, skills, hook } = systemUpdate;
-      const resources = systemUpdate.resources || {
-        state: skills.state,
-        bundledVersion: skills.bundledVersion,
-        managedSkillCount: skills.managedSkillCount,
-        managedHookCount: hook?.managedHookCount || 0,
-        conflictPaths: [...skills.conflictPaths, ...(hook?.conflictPaths || [])],
-        skills,
-        hook
-      };
-      const resourcesInstalled = resources.state === "current";
-      const active = upgrade && activeUpdatePhases.includes(upgrade.phase);
-      const triggerCopy = active
-        ? updatePhaseCopy[upgrade.phase][0]
-        : version?.updateAvailable
-          ? "新版本 "+version.latestVersion+" 可用"
-          : resources.state === "conflict"
-            ? "本地托管资源冲突待处理"
-          : version?.latestVersion && resourcesInstalled
-              ? "Codrive 与托管资源已对齐"
-              : resourcesInstalled ? "等待稳定版检查" : "托管资源需要补齐";
-      document.getElementById("update-trigger-copy").textContent = triggerCopy;
-      document.getElementById("update-trigger-icon").textContent = active ? "↻" : version?.updateAvailable ? "↑" : resources.state === "current" ? "✓" : "+";
-      document.getElementById("update-trigger").dataset.state = active ? "active" : version?.updateAvailable || resources.state !== "current" ? "attention" : "current";
-
-      document.getElementById("update-current-version").textContent = version?.currentVersion || resources.bundledVersion;
-      document.getElementById("update-latest-version").textContent = version?.latestVersion || "待检查";
-      document.getElementById("update-resources").textContent = resources.state === "current"
-          ? resources.managedSkillCount+" Skills + "+resources.managedHookCount+" Hook 已对齐"
-          : label(resources.state);
-      document.getElementById("update-checked-at").textContent = formatTime(version?.lastCheckedAt);
-      document.getElementById("update-check-result").textContent = version?.checkError?.summary || (version?.latestVersion ? "npm latest 稳定版已读取" : "等待首次检查");
-
-      const progress = document.getElementById("update-progress");
-      progress.hidden = !upgrade;
-      if (upgrade) {
-        const phase = updatePhaseCopy[upgrade.phase] || [upgrade.phase, 0];
-        document.getElementById("update-phase").textContent = phase[0];
-        document.getElementById("update-progress-bar").style.width = phase[1]+"%";
-        document.getElementById("update-phase-time").textContent = formatTime(upgrade.updatedAt);
-        progress.dataset.phase = upgrade.phase;
-      }
-      const timeline = document.getElementById("update-timeline");
-      const timelinePhases = Object.entries(upgrade?.phaseStartedAt || {});
-      timeline.hidden = timelinePhases.length === 0;
-      timeline.innerHTML = timelinePhases.map(([phase, occurredAt]) =>
-        '<div><span>'+escapeHtml((updatePhaseCopy[phase] || [phase])[0])+'</span><time>'+escapeHtml(formatTime(occurredAt))+'</time></div>'
-      ).join("");
-
-      const conflict = document.getElementById("update-conflict");
-      const conflictDetails = [];
-      if (skills.state === "conflict") {
-        conflictDetails.push('<b>保留了本地同名 Skill</b><code>'+escapeHtml(skills.conflictPaths.join("\\n"))+'</code>');
-      }
-      if (hook?.state === "conflict") {
-        conflictDetails.push('<b>保留了本地 Codex Hook</b><code>'+escapeHtml(hook.conflictPaths.join("\\n"))+'</code>');
-      }
-      const hasResourceConflict = conflictDetails.length > 0;
-      if (hookNeedsTrust) {
-        conflictDetails.push('<b>Codex Hook 已安装，等待安全审核</b><p>请在 Codex 中运行 <code>/hooks</code>，审核并信任 Codrive activity Hooks 的当前定义。</p>');
-      }
-      conflict.hidden = conflictDetails.length === 0;
-      conflict.innerHTML = conflictDetails.length > 0
-        ? (hasResourceConflict ? '<p>Codrive 不会覆盖未托管文件。请先移动冲突路径，再重新同步：</p>' : '')+conflictDetails.join("")
-        : "";
-
-      const summary = upgrade?.phase === "failed"
-        ? upgrade.error?.summary || "更新未完成，可以安全重试。"
-        : active
-          ? "目标版本 "+upgrade.targetVersion+" 已固定。页面断线时，独立进程仍会继续。"
-          : version?.updateAvailable
-            ? "Codrive "+version.latestVersion+" 与该版本随附的 4 个托管 Skills、1 个托管 Hook 将在一次操作中更新。"
-            : version?.checkError
-              ? "无法确认 npm latest 稳定版；看板与任务调度不受影响，可以重新检查。"
-              : hookNeedsTrust
-                ? "托管资源已经安装。请在 Codex 中运行 /hooks，审核并信任 Codrive activity Hooks 的当前定义；Hook 更新后需要重新审核。"
-              : version?.latestVersion && resources.state === "current"
-              ? "当前已是最新稳定版，Codrive 与随包托管资源保持一致。"
-              : "Codrive 已安装；需要从当前包补齐 4 个托管 Skills 和 1 个托管 Hook。";
-      document.getElementById("update-summary").textContent = summary;
-
-      const primary = document.getElementById("update-primary");
-      primary.disabled = Boolean(active) || resources.state === "conflict" || Boolean(version?.checking);
-      primary.textContent = active
-        ? "更新进行中"
-        : version?.updateAvailable
-          ? upgrade?.phase === "failed" ? "重试更新" : "更新 Codrive 与托管资源"
-          : hookNeedsTrust && !version?.updateAvailable
-            ? "请在 Codex 运行 /hooks"
-          : version?.latestVersion && resources.state === "current"
-            ? "已是最新版"
-            : resources.state === "current" ? "等待版本检查" : "补齐托管资源";
-      if (upgrade?.phase === "failed" && upgrade.targetVersion === version?.currentVersion && !resourcesInstalled) {
-        primary.textContent = "补齐托管资源";
-      }
-      if (!version?.updateAvailable && resourcesInstalled) primary.disabled = true;
-      document.getElementById("update-check").disabled = Boolean(active) || Boolean(version?.checking);
-      document.getElementById("update-status").textContent = updateActionError || upgrade?.error?.summary || version?.checkError?.summary || "";
-      document.getElementById("update-fallback").hidden = upgrade?.phase !== "failed" && !version?.checkError;
-      if (active || version?.checking || !version?.lastCheckedAt) scheduleUpdatePoll();
+      const result = renderSystemUpdateView(systemUpdate, updateActionError);
+      if (result.shouldPoll) scheduleUpdatePoll();
       else if (updatePoll) {
         window.clearTimeout(updatePoll);
         updatePoll = null;

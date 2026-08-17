@@ -6,6 +6,7 @@ import { CodexTaskDispatcher } from "./application/codex-task-dispatcher.js";
 import { ExecutionActivityBridge } from "./application/execution-activity-bridge.js";
 import { CodexProjectExecutor } from "./application/codex-project-executor.js";
 import { LifecycleRecorder } from "./application/lifecycle-recorder.js";
+import { ManagedResourceUpgradeReconciler } from "./application/managed-resource-upgrade-reconciler.js";
 import { PackageVersionCheckScheduler } from "./application/package-version-check-scheduler.js";
 import { RecoveryManager } from "./application/recovery-manager.js";
 import { SystemSettingsService } from "./application/system-settings-service.js";
@@ -124,9 +125,18 @@ export class CodriveServer {
         ),
         stateDirectory: this.config.stateDirectory,
       });
-      await upgrades.reconcile();
+      const upgradeResources = new ManagedResourceUpgradeReconciler({
+        upgrades,
+        resources: resourceInstaller,
+        currentVersion: version,
+      });
+      const reconcileUpdates = async () => {
+        await upgrades.reconcile();
+        await upgradeResources.reconcile();
+      };
+      await reconcileUpdates();
       this.updateRecoveryTimer = setInterval(() => {
-        void upgrades.reconcile().catch((error: unknown) => {
+        void reconcileUpdates().catch((error: unknown) => {
           this.log?.error(
             "updates",
             error instanceof Error ? error.message : String(error),

@@ -430,9 +430,10 @@ export const boardStyles = `
   .update-kicker { color: var(--signal); font: 900 9px/1 var(--condensed); letter-spacing: .18em; }
   .update-head h2 { margin: 10px 0 0; font: 600 clamp(30px, 5vw, 46px)/1 var(--display); letter-spacing: -.045em; }
   .update-summary { max-width: 570px; margin: 18px 0 22px; color: #56615b; font-size: 13px; line-height: 1.65; }
-  .version-ledger { display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; background: #13251f; border-radius: 13px; box-shadow: 0 15px 34px rgba(11,31,23,.13); }
-  .version-ledger div { min-width: 0; padding: 16px; border-right: 1px solid rgba(255,255,255,.09); }
-  .version-ledger div:last-child { border-right: 0; }
+  .version-ledger { display: grid; grid-template-columns: repeat(2, 1fr); overflow: hidden; background: #13251f; border-radius: 13px; box-shadow: 0 15px 34px rgba(11,31,23,.13); }
+  .version-ledger div { min-width: 0; padding: 16px; border-right: 1px solid rgba(255,255,255,.09); border-bottom: 1px solid rgba(255,255,255,.09); }
+  .version-ledger div:nth-child(2n) { border-right: 0; }
+  .version-ledger div:nth-last-child(-n+2) { border-bottom: 0; }
   .version-ledger span, .version-ledger strong { display: block; }
   .version-ledger span { color: rgba(255,255,255,.52); font: 800 8px/1 var(--condensed); letter-spacing: .1em; text-transform: uppercase; }
   .version-ledger strong { margin-top: 9px; overflow: hidden; color: white; font: 800 16px/1.2 var(--ui); text-overflow: ellipsis; white-space: nowrap; }
@@ -506,7 +507,7 @@ export const boardStyles = `
     .update-backdrop { align-items: end; padding: 8px; }
     .update-panel { max-height: calc(100dvh - 16px); padding: 26px 20px; border-radius: 20px; }
     .version-ledger { grid-template-columns: 1fr; }
-    .version-ledger div { padding: 13px 15px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.09); }
+    .version-ledger div, .version-ledger div:nth-child(2n), .version-ledger div:nth-last-child(-n+2) { padding: 13px 15px; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.09); }
     .version-ledger div:last-child { border-bottom: 0; }
     .version-ledger strong { margin-top: 5px; font-size: 14px; }
     .update-actions { align-items: stretch; flex-direction: column; }

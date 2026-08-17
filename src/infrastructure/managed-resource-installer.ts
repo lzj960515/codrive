@@ -38,6 +38,9 @@ interface ManagedResource {
 }
 
 export class ManagedResourceInstaller {
+  private activeInstallation: Promise<ManagedResourceInstallationResult> | null =
+    null;
+
   constructor(
     private readonly skills: SkillInstaller = new SkillInstaller(),
     private readonly hook: HookInstaller = new HookInstaller(),
@@ -64,6 +67,16 @@ export class ManagedResourceInstaller {
   }
 
   async install(): Promise<ManagedResourceInstallationResult> {
+    if (this.activeInstallation) return this.activeInstallation;
+    this.activeInstallation = this.installResources();
+    try {
+      return await this.activeInstallation;
+    } finally {
+      this.activeInstallation = null;
+    }
+  }
+
+  private async installResources(): Promise<ManagedResourceInstallationResult> {
     await this.assertAllInstallable();
     const skillPaths = await this.skills.install();
     const hookPath = await this.hook.install();
