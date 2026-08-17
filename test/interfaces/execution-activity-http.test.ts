@@ -38,9 +38,6 @@ describe("execution activity HTTP and realtime boundary", () => {
     );
     bridge = new ExecutionActivityBridge({
       store,
-      codex: {
-        readTurnActivity: async () => null,
-      },
     });
     server = createHttpServer({
       store,
@@ -162,12 +159,11 @@ describe("execution activity HTTP and realtime boundary", () => {
         threadId: "thread-live",
         turnId: "turn-live",
         category: "editing",
-        label: "正在编辑文件",
+        label: "正在调用 apply_patch",
         source: "hook",
       }),
     });
     expect(JSON.stringify(activities)).not.toContain("session-live");
-    expect(JSON.stringify(activities)).not.toContain("apply_patch");
 
     await expect(watch(socket, "watch:task", { taskId: task.id })).resolves.toEqual({
       ok: true,

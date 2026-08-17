@@ -36,18 +36,19 @@ describe("HookInstaller", () => {
       { hooks: [{ type: "command", command: "user-hook" }] },
     ]);
     for (const event of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]) {
+      const handler = config.hooks[event]![0]!.hooks[0]!;
       expect(config.hooks[event]).toEqual([
         {
           hooks: [
             expect.objectContaining({
               type: "command",
-              async: true,
               timeout: 2,
               statusMessage: "Reporting Codrive activity",
             }),
           ],
         },
       ]);
+      expect(handler).not.toHaveProperty("async");
     }
     await expect(fixture.installer.getStatus()).resolves.toMatchObject({
       state: "current",

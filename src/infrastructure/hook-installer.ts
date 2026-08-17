@@ -201,7 +201,6 @@ function installManagedGroups(config: HookConfig, command: string): HookConfig {
           {
             type: "command",
             command,
-            async: true,
             timeout: 2,
             statusMessage: managedStatusMessage,
           },
@@ -263,7 +262,7 @@ function isExpectedHandler(handler: Record<string, unknown>, command: string): b
   return (
     handler.type === "command" &&
     handler.command === command &&
-    handler.async === true &&
+    handler.async === undefined &&
     handler.timeout === 2 &&
     handler.statusMessage === managedStatusMessage
   );

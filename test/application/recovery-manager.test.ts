@@ -56,9 +56,6 @@ class StubNotifications implements NotificationSource {
     return this.turnSnapshot;
   }
 
-  async readTurnActivity(): Promise<null> {
-    return null;
-  }
 }
 
 function requiredReportOpportunity(execution: {
@@ -1056,7 +1053,6 @@ describe("RecoveryManager", () => {
     const startedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => startedAt,
     });
     const silentRecovery = new RecoveryManager(store, workflow, notifications, {
@@ -1094,7 +1090,6 @@ describe("RecoveryManager", () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1124,7 +1119,6 @@ describe("RecoveryManager", () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1157,7 +1151,6 @@ describe("RecoveryManager", () => {
       const observedAt = new Date("2026-08-03T00:00:00.000Z");
       const activityBridge = new ExecutionActivityBridge({
         store,
-        codex: notifications,
         now: () => observedAt,
       });
       await activityBridge.initialize(observedAt);
@@ -1201,7 +1194,6 @@ describe("RecoveryManager", () => {
       const observedAt = new Date("2026-08-03T00:00:00.000Z");
       const activityBridge = new ExecutionActivityBridge({
         store,
-        codex: notifications,
         now: () => observedAt,
       });
       await activityBridge.initialize(observedAt);
@@ -1238,7 +1230,6 @@ describe("RecoveryManager", () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1276,7 +1267,6 @@ describe("RecoveryManager", () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1322,7 +1312,6 @@ describe("RecoveryManager", () => {
     });
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1382,7 +1371,6 @@ describe("RecoveryManager", () => {
     });
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1413,7 +1401,6 @@ describe("RecoveryManager", () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1446,7 +1433,6 @@ describe("RecoveryManager", () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1485,7 +1471,6 @@ describe("RecoveryManager", () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1515,7 +1500,6 @@ describe("RecoveryManager", () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);
@@ -1547,7 +1531,6 @@ describe("RecoveryManager", () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
-      codex: notifications,
       now: () => observedAt,
     });
     await activityBridge.initialize(observedAt);

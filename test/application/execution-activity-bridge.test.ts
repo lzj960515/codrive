@@ -4,7 +4,6 @@ import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { CodexTurnActivity } from "../../src/application/codex-gateway.js";
 import { ExecutionActivityBridge } from "../../src/application/execution-activity-bridge.js";
 import type { Task } from "../../src/domain/types.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
@@ -36,53 +35,27 @@ describe("ExecutionActivityBridge", () => {
       threadId: "thread-current",
       turnId: "turn-current",
       category: "editing",
-      label: "正在编辑文件",
+      label: "正在调用 apply_patch",
       occurredAt: "2026-08-16T01:00:00.000Z",
       source: "hook",
     });
     expect(JSON.stringify(activity)).not.toContain("session-family");
-    expect(JSON.stringify(activity)).not.toContain("apply_patch");
     expect(listener).toHaveBeenCalledWith({
       taskId: fixture.task.id,
       activity,
     });
   });
 
-  it("derives a safe initial activity from the exact current turn", async () => {
-    const fixture = await createFixture({
-      readTurnActivity: async () => ({
-        status: "inProgress",
-        activity: {
-          category: "calling_tool",
-          occurredAt: "2026-08-16T01:05:00.000Z",
-        },
-      }),
-    });
+  it("waits for a Hook instead of inferring live activity from App Server items", async () => {
+    const fixture = await createFixture();
 
-    await expect(fixture.bridge.read(fixture.task.id)).resolves.toMatchObject({
-      taskId: fixture.task.id,
-      attemptId: "attempt-current",
-      category: "calling_tool",
-      label: "正在调用工具",
-      source: "app_server",
-    });
-    expect(fixture.readTurnActivity).toHaveBeenCalledWith(
-      "thread-current",
-      "turn-current",
-    );
+    await expect(fixture.bridge.read(fixture.task.id)).resolves.toBeNull();
   });
 
-  it("does not renew the Hook silence window from an App Server detail snapshot", async () => {
+  it("does not renew the Hook silence window when task detail reads no activity", async () => {
     let now = new Date("2026-08-16T01:00:00.000Z");
     const fixture = await createFixture({
       now: () => now,
-      readTurnActivity: async () => ({
-        status: "inProgress",
-        activity: {
-          category: "calling_tool",
-          occurredAt: "2026-08-16T01:08:30.000Z",
-        },
-      }),
     });
     await fixture.bridge.initialize(now);
 
@@ -97,27 +70,31 @@ describe("ExecutionActivityBridge", () => {
     ).toMatchObject([{ lastSeenAt: "2026-08-16T01:00:00.000Z" }]);
   });
 
-  it("clears cached activity when the persisted execution identity changes", async () => {
+  it("clears the current activity when the turn stops", async () => {
     const fixture = await createFixture();
+    const listener = vi.fn();
+    fixture.bridge.subscribe(listener);
     await fixture.bridge.recordHook({
+      schemaVersion: 1,
+      sessionId: "session-family",
+      turnId: "turn-current",
+      event: "PreToolUse",
+      toolName: "Bash",
+      occurredAt: "2026-08-16T01:05:00.000Z",
+    });
+    await expect(fixture.bridge.recordHook({
       schemaVersion: 1,
       sessionId: "session-family",
       turnId: "turn-current",
       event: "Stop",
       occurredAt: "2026-08-16T01:06:00.000Z",
-    });
-    await fixture.store.saveTask(fixture.projectId, {
-      ...fixture.task,
-      currentExecution: {
-        ...fixture.task.currentExecution!,
-        attemptId: "attempt-next",
-        turnId: "turn-next",
-      },
-    });
-
-    await fixture.bridge.synchronize(fixture.task.id);
+    })).resolves.toBe(true);
 
     await expect(fixture.bridge.read(fixture.task.id)).resolves.toBeNull();
+    expect(listener).toHaveBeenLastCalledWith({
+      taskId: fixture.task.id,
+      activity: null,
+    });
   });
 
   it("starts an in-memory silence window and claims an exact execution only once", async () => {
@@ -253,7 +230,6 @@ describe("ExecutionActivityBridge", () => {
 });
 
 async function createFixture(options: {
-  readTurnActivity?: () => Promise<CodexTurnActivity | null>;
   now?: () => Date;
 } = {}) {
   const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-activity-"));
@@ -280,21 +256,14 @@ async function createFixture(options: {
     },
   };
   await store.saveTask(snapshot.project.id, task);
-  const readTurnActivity = vi.fn(
-    options.readTurnActivity ?? (async () => null),
-  );
   const bridge = new ExecutionActivityBridge({
     store,
     now: options.now,
-    codex: {
-      readTurnActivity,
-    },
   });
   return {
     bridge,
     projectId: snapshot.project.id,
     task,
     store,
-    readTurnActivity,
   };
 }

@@ -77,13 +77,6 @@ describe("CodexAppServerClient", () => {
           items: [{ type: "fileChange", status: "inProgress" }],
         },
       });
-      await expect(client.readTurnActivity(threadId, turnId)).resolves.toEqual({
-        status: "inProgress",
-        activity: {
-          category: "editing",
-          occurredAt: "2026-08-16T01:00:00.000Z",
-        },
-      });
       for (const status of ["completed", "interrupted", "failed"] as const) {
         await expect(
           client.readTurnSnapshot(threadId, `turn_${status}`),
@@ -152,7 +145,6 @@ describe("CodexAppServerClient", () => {
     });
     expect(readThreads.map(({ params }) => params)).toEqual([
       { threadId: "thread_1" },
-      { threadId: "thread_1", includeTurns: true },
       { threadId: "thread_1", includeTurns: true },
       { threadId: "thread_1", includeTurns: true },
       { threadId: "thread_1", includeTurns: true },

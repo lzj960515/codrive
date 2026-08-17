@@ -1,5 +1,3 @@
-import type { ExecutionActivityCategory } from "../domain/execution-activity.js";
-
 export type CodexTurnStatus =
   | "completed"
   | "interrupted"
@@ -13,14 +11,6 @@ export interface CodexModelOption {
   isDefault: boolean;
 }
 
-export interface CodexTurnActivity {
-  status: CodexTurnStatus;
-  activity: {
-    category: ExecutionActivityCategory;
-    occurredAt: string;
-  } | null;
-}
-
 export interface CodexTurnSnapshot {
   threadStatus: "notLoaded" | "idle" | "systemError" | "active";
   activeTurnIds: string[];
@@ -29,13 +19,6 @@ export interface CodexTurnSnapshot {
     status: CodexTurnStatus;
     items: Array<{ type: string; status: string | null }>;
   } | null;
-}
-
-export interface CodexActivityGateway {
-  readTurnActivity(
-    threadId: string,
-    turnId: string,
-  ): Promise<CodexTurnActivity | null>;
 }
 
 export interface CodexGateway {

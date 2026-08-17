@@ -10,8 +10,6 @@ export type ExecutionActivityCategory =
   | "waiting_input"
   | "preparing_response";
 
-export type ExecutionActivitySource = "app_server" | "hook";
-
 export interface ExecutionActivitySignal {
   projectId: string;
   taskId: string;
@@ -22,7 +20,7 @@ export interface ExecutionActivitySignal {
   category: ExecutionActivityCategory;
   label: string;
   occurredAt: string;
-  source: ExecutionActivitySource;
+  source: "hook";
 }
 
 export interface ExecutionActivityUpdate {
@@ -39,26 +37,6 @@ export interface HookActivityInput {
   occurredAt: string;
 }
 
-const labels: Record<ExecutionActivityCategory, string> = {
-  reading: "正在读取源码",
-  searching: "正在搜索",
-  editing: "正在编辑文件",
-  running_command: "正在运行命令",
-  running_tests: "正在运行测试",
-  calling_tool: "正在调用工具",
-  waiting_input: "正在等待输入",
-  preparing_response: "正在整理回复",
-};
-
-// Match only shell segments that begin with a known test runner.
-const testCommandPattern = /(?:^|(?:&&|\|\||;|\n)\s*)(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*(?:(?:npm|pnpm|yarn|bun)\b[^\n;&|]*\b(?:test(?::[\w-]+)?|vitest|jest)\b|(?:npx\s+)?(?:vitest|jest|pytest)\b|python(?:3)?\s+-m\s+pytest\b|node\s+--test\b|go\s+test\b|cargo\s+test\b|mvn\s+(?:[^\n;&|]+\s+)?test\b|(?:gradle|\.\/gradlew)\s+(?:[^\n;&|]+\s+)?test\b)/i;
-
-export function executionActivityLabel(
-  category: ExecutionActivityCategory,
-): string {
-  return labels[category];
-}
-
 export function classifyActivityTool(
   toolName?: string,
 ): ExecutionActivityCategory {
@@ -72,9 +50,19 @@ export function classifyActivityTool(
   return "calling_tool";
 }
 
-export function classifyActivityCommand(
-  command?: string,
-): Extract<ExecutionActivityCategory, "running_command" | "running_tests"> {
-  if (!command) return "running_command";
-  return testCommandPattern.test(command) ? "running_tests" : "running_command";
+export function describeHookActivity(
+  event: HookActivityInput["event"],
+  toolName?: string,
+): { category: ExecutionActivityCategory; label: string } | null {
+  if (event === "Stop") return null;
+  if (event === "UserPromptSubmit") {
+    return { category: "preparing_response", label: "正在处理任务" };
+  }
+  const displayName = toolName ?? "工具";
+  return {
+    category: classifyActivityTool(toolName),
+    label: event === "PreToolUse"
+      ? `正在调用 ${displayName}`
+      : `正在处理 ${displayName} 的结果`,
+  };
 }

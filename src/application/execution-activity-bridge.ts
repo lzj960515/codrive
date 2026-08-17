@@ -1,14 +1,9 @@
-import type { CodexActivityGateway } from "./codex-gateway.js";
 import type {
-  ExecutionActivityCategory,
   ExecutionActivitySignal,
   ExecutionActivityUpdate,
   HookActivityInput,
 } from "../domain/execution-activity.js";
-import {
-  classifyActivityTool,
-  executionActivityLabel,
-} from "../domain/execution-activity.js";
+import { describeHookActivity } from "../domain/execution-activity.js";
 import type {
   TaskExecution,
   TaskExecutionIdentity,
@@ -20,7 +15,6 @@ interface ExecutionActivityBridgeOptions {
     ProjectStore,
     "findTask" | "findTaskByTurnId" | "listProjects" | "subscribe"
   >;
-  codex: CodexActivityGateway;
   now?: (() => Date) | undefined;
 }
 
@@ -121,6 +115,11 @@ export class ExecutionActivityBridge {
     if (!isObservableExecution(execution) || execution.turnId !== input.turnId) {
       return false;
     }
+    const activity = describeHookActivity(input.event, input.toolName);
+    if (!activity) {
+      this.clear(found.task.id);
+      return true;
+    }
     return this.record({
       projectId: found.project.id,
       taskId: found.task.id,
@@ -128,8 +127,8 @@ export class ExecutionActivityBridge {
       attemptId: execution.attemptId,
       threadId: execution.threadId,
       turnId: execution.turnId,
-      category: hookCategory(input.event, input.toolName),
-      label: executionActivityLabel(hookCategory(input.event, input.toolName)),
+      category: activity.category,
+      label: activity.label,
       occurredAt: input.occurredAt,
       source: "hook",
     });
@@ -141,37 +140,7 @@ export class ExecutionActivityBridge {
       if (await this.isCurrent(cached)) return cached;
       this.clear(taskId);
     }
-
-    const found = await this.options.store.findTask(taskId);
-    const execution = found?.task.currentExecution;
-    if (!found || !isObservableExecution(execution)) return null;
-
-    let observation;
-    try {
-      observation = await this.options.codex.readTurnActivity(
-        execution.threadId,
-        execution.turnId,
-      );
-    } catch {
-      return null;
-    }
-    if (observation?.status !== "inProgress" || !observation.activity) return null;
-
-    const signal: ExecutionActivitySignal = {
-      projectId: found.project.id,
-      taskId: found.task.id,
-      action: execution.action,
-      attemptId: execution.attemptId,
-      threadId: execution.threadId,
-      turnId: execution.turnId,
-      category: observation.activity.category,
-      label: executionActivityLabel(observation.activity.category),
-      occurredAt: observation.activity.occurredAt,
-      source: "app_server",
-    };
-    if (!(await this.isCurrent(signal))) return null;
-    this.latestByTask.set(taskId, signal);
-    return signal;
+    return null;
   }
 
   async isCurrent(signal: ExecutionActivitySignal): Promise<boolean> {
@@ -348,14 +317,4 @@ function matchesExecution(
       execution.threadId === signal.threadId &&
       execution.turnId === signal.turnId,
   );
-}
-
-function hookCategory(
-  event: HookActivityInput["event"],
-  toolName?: string,
-): ExecutionActivityCategory {
-  if (event === "UserPromptSubmit" || event === "Stop") {
-    return "preparing_response";
-  }
-  return classifyActivityTool(toolName);
 }

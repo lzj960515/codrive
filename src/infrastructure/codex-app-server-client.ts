@@ -3,18 +3,11 @@ import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 
 import type {
-  CodexActivityGateway,
   CodexGateway,
   CodexModelOption,
-  CodexTurnActivity,
   CodexTurnSnapshot,
   CodexTurnStatus,
 } from "../application/codex-gateway.js";
-import {
-  classifyActivityCommand,
-  classifyActivityTool,
-  type ExecutionActivityCategory,
-} from "../domain/execution-activity.js";
 import type { InitializeResponse } from "./app-server-protocol/InitializeResponse.js";
 import type { ModelListResponse } from "./app-server-protocol/v2/ModelListResponse.js";
 import type { ThreadResumeResponse } from "./app-server-protocol/v2/ThreadResumeResponse.js";
@@ -33,7 +26,7 @@ export interface CodexAppServerOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-export class CodexAppServerClient implements CodexGateway, CodexActivityGateway {
+export class CodexAppServerClient implements CodexGateway {
   private process: ChildProcessWithoutNullStreams | null = null;
   private connection: JsonRpcConnection | null = null;
   private readonly notifications = new EventEmitter();
@@ -232,29 +225,6 @@ export class CodexAppServerClient implements CodexGateway, CodexActivityGateway 
     };
   }
 
-  async readTurnActivity(
-    threadId: string,
-    turnId: string,
-  ): Promise<CodexTurnActivity | null> {
-    await this.start();
-    const response = await this.requireConnection().request<ThreadReadResponse>(
-      "thread/read",
-      { threadId, includeTurns: true },
-    );
-    const turn = response.thread.turns.find(({ id }) => id === turnId);
-    if (!turn) return null;
-    const item = turn.items?.at(-1);
-    const category = item ? categoryForThreadItem(item) : null;
-    const timestamp = turn.completedAt ?? turn.startedAt;
-    return {
-      status: turn.status,
-      activity:
-        category && timestamp !== null
-          ? { category, occurredAt: new Date(timestamp * 1_000).toISOString() }
-          : null,
-    };
-  }
-
   onNotification(listener: (notification: JsonRpcNotification) => void): () => void {
     this.notifications.on("notification", listener);
     return () => this.notifications.off("notification", listener);
@@ -280,54 +250,6 @@ export class CodexAppServerClient implements CodexGateway, CodexActivityGateway 
       throw new Error("Codex App Server is not running");
     }
     return this.connection;
-  }
-}
-
-function categoryForThreadItem(item: unknown): ExecutionActivityCategory | null {
-  if (!isRecord(item)) return null;
-  switch (item.type) {
-    case "commandExecution": {
-      const actions = Array.isArray(item.commandActions) ? item.commandActions : [];
-      if (actions.some((action) => isRecord(action) && action.type === "search")) {
-        return "searching";
-      }
-      if (
-        actions.length > 0 &&
-        actions.every(
-          (action) =>
-            isRecord(action) && ["read", "listFiles"].includes(String(action.type)),
-        )
-      ) {
-        return "reading";
-      }
-      return classifyActivityCommand(stringValue(item.command) ?? undefined);
-    }
-    case "fileChange":
-      return "editing";
-    case "webSearch":
-      return "searching";
-    case "imageView":
-      return "reading";
-    case "mcpToolCall":
-    case "dynamicToolCall":
-    case "collabAgentToolCall":
-      return classifyActivityTool(stringValue(item.tool) ?? undefined);
-    case "sleep":
-      return "waiting_input";
-    case "userMessage":
-    case "agentMessage":
-    case "plan":
-    case "reasoning":
-    case "enteredReviewMode":
-    case "exitedReviewMode":
-    case "contextCompaction":
-      return "preparing_response";
-    case "hookPrompt":
-    case "subAgentActivity":
-    case "imageGeneration":
-      return "calling_tool";
-    default:
-      return null;
   }
 }
 

@@ -76,7 +76,6 @@ export class CodriveServer {
       await this.codex.start();
       this.activityBridge = new ExecutionActivityBridge({
         store,
-        codex: this.codex,
       });
       const dispatcher = new CodexTaskDispatcher(this.codex);
       const projectExecutor = new CodexProjectExecutor(this.codex);

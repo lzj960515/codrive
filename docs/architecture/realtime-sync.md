@@ -66,11 +66,9 @@ Managed Codex Hook ─ POST /api/hooks/activity ─ recordHook()
                                                                     │ 10 minutes silent
                                                                     v
 RecoveryManager minute scan ─ thread/read(includeTurns: true) ─ WorkflowEngine
-
-Task room open ─ thread/read(includeTurns: true) ─ safe initial label only
 ```
 
-`ExecutionActivityBridge` associates every accepted Hook request with the current project, task, action, attempt, thread, and turn. It keeps the replaceable activity and `lastSeen` only in process memory. An identity change starts a new observation, while a terminal or excluded execution removes the old observation. Startup initializes current `pending`, `running`, and `awaiting_report` turns at the startup time, so losing process memory never makes a persisted turn immediately recoverable. Opening a task detail can derive one safe activity category from the exact turn through App Server, but this display snapshot never updates `lastSeen`.
+`ExecutionActivityBridge` associates every accepted Hook request with the current project, task, action, attempt, thread, and turn. It keeps the replaceable activity and `lastSeen` only in process memory. `PreToolUse` displays the canonical safe tool name, `PostToolUse` shows that its result is being processed, and `Stop` clears the activity. An identity change starts a new observation, while a terminal or excluded execution removes the old observation. Startup initializes current `pending`, `running`, and `awaiting_report` turns at the startup time, so losing process memory never makes a persisted turn immediately recoverable. Opening a task detail reads only the latest accepted Hook activity and otherwise waits for the next signal; App Server items are not presented as live Activity.
 
 `RecoveryManager` claims each due observation before awaiting App Server, which prevents overlapping scans from checking or recovering the same window twice. A valid Hook request invalidates an outstanding claim. Read failures and uncertain snapshots remain retryable without creating a task activity, execution field, or presence status. Normal App Server lifecycle notifications such as turn completion, thread status changes, and transport disconnection continue through the existing workflow lifecycle; item notifications are not activity heartbeats.
 
