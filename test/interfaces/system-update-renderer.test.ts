@@ -25,8 +25,26 @@ describe("SystemUpdateRenderer", () => {
     view.render(systemUpdate("current", "current"), null);
 
     expect(view.element("update-skills").textContent).toBe("4 / 4 已对齐");
-    expect(view.element("update-hook").textContent).toBe("1 / 1 已对齐");
+    expect(view.element("update-hook").textContent).toBe("1 / 1 已启用");
     expect(view.element("update-primary").textContent).toBe("已是最新版");
+    expect(view.element("update-primary").disabled).toBe(true);
+  });
+
+  it("prompts for Codex review after the managed Hook files are installed", () => {
+    const view = createView();
+
+    view.render(systemUpdate("current", "current", "review_required"), null);
+
+    expect(view.element("update-hook").textContent).toBe("待 Codex 信任");
+    expect(view.element("update-trigger-copy").textContent).toBe(
+      "Codex Hook 待审核启用",
+    );
+    expect(view.element("update-trigger").dataset.state).toBe("attention");
+    expect(view.element("update-hook-trust").hidden).toBe(false);
+    expect(view.element("update-hook-trust").innerHTML).toContain("/hooks");
+    expect(view.element("update-summary").textContent).toContain(
+      "托管 Hook 已安装",
+    );
     expect(view.element("update-primary").disabled).toBe(true);
   });
 
@@ -73,6 +91,12 @@ function createView() {
 function systemUpdate(
   skillState: "missing" | "outdated" | "current" | "conflict",
   hookState: "missing" | "outdated" | "current" | "conflict",
+  hookRuntimeState:
+    | "ready"
+    | "review_required"
+    | "disabled"
+    | "missing"
+    | "unavailable" = "ready",
 ) {
   const resourcesState = [skillState, hookState].includes("conflict")
     ? "conflict"
@@ -117,6 +141,10 @@ function systemUpdate(
     },
     skills,
     hook,
+    hookRuntime: {
+      state: hookRuntimeState,
+      definitionCount: hookRuntimeState === "missing" ? 3 : 4,
+    },
   };
 }
 

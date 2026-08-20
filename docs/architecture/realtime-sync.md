@@ -26,7 +26,7 @@ Each connection has at most one project watch and one task watch. A task watch m
 | Open task | `task:<taskId>` | `task:changed` | `GET /api/tasks/:taskId` |
 | Update status | `system` | `system:changed` | `GET /api/system` |
 
-A project event publishes only to its project room. A task event publishes both `project:changed` to the owning project room and `task:changed` to that task's room. System version and update status signals publish only to the `system` room. Payloads identify the affected scope; they do not contain project, task, or system state.
+A projection-changing project event publishes only to its project room. A task event publishes both `project:changed` to the owning project room and `task:changed` to that task's room. Audit-only `command.*`, `recovery.*`, `app_server.*`, and `workflow.*` events remain in the lifecycle log without invalidating an unchanged HTTP projection. System version and update status signals publish only to the `system` room. Payloads identify the affected scope; they do not contain project, task, or system state.
 
 The server accepts only typed `watch:*` and `unwatch:*` requests containing a project ID, task ID, or the empty system request. Clients never submit room names.
 

@@ -6,11 +6,13 @@ import { fileURLToPath } from "node:url";
 
 import { CodriveServer } from "../../codrive-server.js";
 import { SystemUpgradeRunner } from "../../application/system-upgrade-runner.js";
+import { ManagedHookRuntimeInspector } from "../../application/managed-hook-runtime-inspector.js";
 import {
   UpgradeCoordinator,
   type UpgradeRequest,
 } from "../../application/upgrade-coordinator.js";
 import { ConfigStore } from "../../infrastructure/config-store.js";
+import { CodexAppServerClient } from "../../infrastructure/codex-app-server-client.js";
 import { LocalServiceManager } from "../../infrastructure/local-service-manager.js";
 import { ManagedResourceInstaller } from "../../infrastructure/managed-resource-installer.js";
 import { NpmPackageUpgrader } from "../../infrastructure/npm-package-upgrader.js";
@@ -25,6 +27,7 @@ import type {
   PackageVersionStatus,
   UpgradeState,
 } from "../../domain/system-update.js";
+import type { ManagedHookRuntimeStatus } from "../../domain/managed-hook.js";
 
 const [command = "start", ...args] = process.argv.slice(2);
 
@@ -365,6 +368,9 @@ async function setup(): Promise<void> {
       installed.hookPath,
     ].map((path) => `- ${path}`).join("\n")}\n`,
   );
+  process.stdout.write(
+    "Codex requires user review for new or changed Hook definitions. Run /hooks in Codex and trust the four Codrive activity definitions.\n",
+  );
   await doctor(resourceInstaller);
 }
 
@@ -391,7 +397,10 @@ async function doctor(
   const login = spawnSync(process.execPath, [script, "login", "status"], {
     encoding: "utf8",
   });
-  const resources = await resourceInstaller.getStatus();
+  const [resources, hookRuntime] = await Promise.all([
+    resourceInstaller.getStatus(),
+    readHookRuntimeStatus(),
+  ]);
   const checks = [
     {
       name: `Node.js ${MINIMUM_NODE_MAJOR}+`,
@@ -416,11 +425,40 @@ async function doctor(
           ? `${resources.managedSkillCount} Skills + ${resources.managedHookCount} Hook`
           : [resources.state, ...resources.conflictPaths].join(" "),
     },
+    {
+      name: "Codex Hook runtime",
+      ok: hookRuntime.state === "ready",
+      detail: hookRuntimeDetail(hookRuntime),
+    },
   ];
   for (const check of checks) {
     process.stdout.write(`${check.ok ? "OK" : "FAIL"}  ${check.name}  ${check.detail}\n`);
   }
   if (checks.some(({ ok }) => !ok)) process.exitCode = 1;
+}
+
+async function readHookRuntimeStatus(): Promise<ManagedHookRuntimeStatus> {
+  const codex = new CodexAppServerClient();
+  try {
+    return await new ManagedHookRuntimeInspector(codex).read();
+  } finally {
+    await codex.stop();
+  }
+}
+
+function hookRuntimeDetail(status: ManagedHookRuntimeStatus): string {
+  switch (status.state) {
+    case "ready":
+      return `${status.definitionCount} definitions enabled and trusted`;
+    case "review_required":
+      return `${status.definitionCount} definitions need review; run /hooks in Codex`;
+    case "disabled":
+      return `${status.definitionCount} definitions found but disabled; run /hooks in Codex`;
+    case "missing":
+      return `${status.definitionCount}/4 definitions loaded`;
+    case "unavailable":
+      return "unable to read hooks/list from Codex App Server";
+  }
 }
 
 async function importProject(path?: string): Promise<void> {

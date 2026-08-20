@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { CodriveEvent } from "../../domain/types.js";
+import { changesProjectProjection } from "../../domain/lifecycle-event.js";
 import type {
   ExecutionActivitySignal,
   ExecutionActivityUpdate,
@@ -237,6 +238,7 @@ export class BoardRealtimeGateway {
   }
 
   private publishProjectChange(event: CodriveEvent): void {
+    if (!changesProjectProjection(event.type)) return;
     this.io.to(projectRoom(event.projectId)).emit("project:changed", {
       projectId: event.projectId,
     });

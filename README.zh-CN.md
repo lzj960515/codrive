@@ -61,7 +61,7 @@ Codrive 常驻运行时会约每小时检查一次 npm latest 稳定版。已经
 codrive upgrade
 ```
 
-Hook 的审核和信任由 Codex 管理。首次 setup 后，或新版本改变 Hook 定义后，请在 Codex 中运行 `/hooks`，审核并信任新的 hash。Codrive 只检查自己拥有的静态资源：托管脚本目录、`hooks.json` 中的四条配置、版本 marker 和内容 fingerprint；`codrive doctor` 不使用 App Server 运行状态或信任状态作为安装门槛。
+Hook 的审核和信任由 Codex 管理。首次 setup 后，或新版本改变 Hook 定义后，请在 Codex 中运行 `/hooks`，审核并信任新的 hash。Codex 没有提供让 Codrive 代替用户持久化单条 Hook 信任的公共 API；进程级绕过还会同时信任无关的用户和项目 Hook，因此 Codrive 不使用它。更新窗口会持续提示，直到四条 Codrive 定义都已启用并信任；`codrive doctor` 会分别报告静态安装状态和运行时信任状态。
 
 看板还提供运行设置，用于调整每个项目的并发上限、默认模型和 fallback 模型。
 

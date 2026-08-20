@@ -10,6 +10,7 @@ import type {
   Project,
   Task,
 } from "../domain/types.js";
+import { changesProjectProjection } from "../domain/lifecycle-event.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
 
 export interface LifecycleContext {
@@ -64,7 +65,7 @@ export class LifecycleRecorder {
     };
     if (event.projectId) {
       await this.store.appendEvent(event as CodriveEvent, {
-        captureState: capturesSnapshot(event.type),
+        captureState: changesProjectProjection(event.type),
       });
     }
     this.options.onEvent?.(event);
@@ -74,15 +75,6 @@ export class LifecycleRecorder {
   id(prefix: string): string {
     return this.createId(prefix);
   }
-}
-
-function capturesSnapshot(type: string): boolean {
-  return ![
-    "command.",
-    "recovery.",
-    "app_server.",
-    "workflow.",
-  ].some((prefix) => type.startsWith(prefix));
 }
 
 export function projectLifecycleState(project: Project): LifecycleState {

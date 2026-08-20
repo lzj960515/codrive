@@ -15,15 +15,13 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readPackageVersion } from "./package-metadata.js";
+import {
+  managedHookDefinitions,
+  managedHookScriptName,
+  managedHookStatusMessage,
+} from "../domain/managed-hook.js";
 
-const hookEvents = [
-  "UserPromptSubmit",
-  "PreToolUse",
-  "PostToolUse",
-  "Stop",
-] as const;
-const hookScript = "codrive-activity-hook.mjs";
-const managedStatusMessage = "Reporting Codrive activity";
+const hookScript = managedHookScriptName;
 
 export type HookInstallationState =
   | "missing"
@@ -191,7 +189,8 @@ export class HookInstaller {
 
 function installManagedGroups(config: HookConfig, command: string): HookConfig {
   const hooks = isRecord(config.hooks) ? { ...config.hooks } : {};
-  for (const configName of hookEvents) {
+  for (const { configEvent } of managedHookDefinitions) {
+    const configName = configEvent;
     const groups = Array.isArray(hooks[configName]) ? hooks[configName] : [];
     const preserved = groups.flatMap((group) => preserveUserHandlers(group, command));
     hooks[configName] = [
@@ -202,7 +201,7 @@ function installManagedGroups(config: HookConfig, command: string): HookConfig {
             type: "command",
             command,
             timeout: 2,
-            statusMessage: managedStatusMessage,
+            statusMessage: managedHookStatusMessage,
           },
         ],
       },
@@ -221,7 +220,8 @@ function preserveUserHandlers(group: unknown, command: string): unknown[] {
 
 function hasCurrentManagedGroups(config: HookConfig, command: string): boolean {
   if (!isRecord(config.hooks)) return false;
-  return hookEvents.every((configName) => {
+  return managedHookDefinitions.every(({ configEvent }) => {
+    const configName = configEvent;
     const handlers = managedHandlers(config.hooks?.[configName], command);
     return handlers.length === 1 && isExpectedHandler(handlers[0]!, command);
   });
@@ -239,7 +239,7 @@ function hasConflictingManagedGroup(config: HookConfig, command: string): boolea
           group.hooks.some(
             (handler) =>
               isRecord(handler) &&
-              handler.statusMessage === managedStatusMessage &&
+              handler.statusMessage === managedHookStatusMessage &&
               handler.command !== command,
           ),
       ),
@@ -264,7 +264,7 @@ function isExpectedHandler(handler: Record<string, unknown>, command: string): b
     handler.command === command &&
     handler.async === undefined &&
     handler.timeout === 2 &&
-    handler.statusMessage === managedStatusMessage
+    handler.statusMessage === managedHookStatusMessage
   );
 }
 

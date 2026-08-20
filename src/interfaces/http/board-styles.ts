@@ -458,6 +458,11 @@ export const boardStyles = `
   .update-conflict b { font-size: 11px; }
   .update-conflict p { margin: 7px 0; font-size: 10px; line-height: 1.5; }
   .update-conflict code { overflow-wrap: anywhere; font-size: 9px; line-height: 1.55; white-space: pre-wrap; }
+  .update-hook-trust { margin-top: 16px; padding: 14px; color: #67470f; background: #fff7df; border: 1px solid #e7cf91; border-radius: 11px; }
+  .update-hook-trust b, .update-hook-trust p { display: block; }
+  .update-hook-trust b { margin-bottom: 6px; font-size: 11px; }
+  .update-hook-trust p { margin: 0; font-size: 10px; line-height: 1.6; }
+  .update-hook-trust code { padding: 1px 5px; color: #513708; background: #f4e5b9; border-radius: 4px; }
   .update-actions { display: flex; gap: 8px; }
   .update-status { min-height: 19px; margin: 12px 0 0; color: #4d665d; font-size: 10px; font-weight: 700; line-height: 1.5; }
   .update-fallback { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; padding: 10px 12px; color: #6c4835; background: #fff4e8; border-radius: 9px; font-size: 10px; }

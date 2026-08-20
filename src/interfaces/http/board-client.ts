@@ -164,6 +164,7 @@ export function renderBoardClient(accessToken: string): string {
       const dialog = document.getElementById("update-dialog");
       dialog.hidden = false;
       document.getElementById("update-close").focus();
+      void refreshSystem();
     }
 
     function closeUpdateDialog() {

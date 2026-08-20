@@ -129,6 +129,12 @@ describe("HTTP API", () => {
         upgrades,
         resourceInstaller,
         versionChecks,
+        {
+          read: async () => ({
+            state: "review_required",
+            definitionCount: 4,
+          }),
+        },
       ),
       systemUpdateEvents: [
         {
@@ -371,6 +377,10 @@ describe("HTTP API", () => {
       skills: { state: "missing" },
       hook: { state: "missing" },
     });
+    expect(missing.json().hookRuntime).toEqual({
+      state: "review_required",
+      definitionCount: 4,
+    });
     expect(missing.json().skills).toMatchObject({
       state: "missing",
       bundledVersion: "0.2.0",
@@ -504,6 +514,17 @@ describe("HTTP API", () => {
     await realtimeRequest(betaClient, "watch:task", {
       taskId: beta.tasks[0]!.id,
     });
+
+    await store.appendEvent({
+      eventId: "alpha-recovery-audit",
+      type: "recovery.planning_suppressed",
+      projectId: alpha.project.id,
+      occurredAt: new Date().toISOString(),
+      reason: "planning_revision_already_evaluated",
+    });
+    await settleRealtime();
+    expect(alphaProjectEvents).toEqual([]);
+    expect(alphaTaskEvents).toEqual([]);
 
     await store.appendEvent({
       eventId: "alpha-task-change",

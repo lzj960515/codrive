@@ -40,6 +40,10 @@ interface SystemUpdateProjection {
   };
   skills: ResourceStatus & { managedSkillCount: number };
   hook?: (ResourceStatus & { managedHookCount: number }) | null;
+  hookRuntime?: {
+    state: "ready" | "review_required" | "disabled" | "missing" | "unavailable";
+    definitionCount: number;
+  } | null;
 }
 
 interface SystemUpdateRendererOptions {
@@ -94,6 +98,12 @@ export function createSystemUpdateRenderer(
       hook,
     };
     const resourcesInstalled = resources.state === "current";
+    const hookRuntimeState = systemUpdate.hookRuntime?.state;
+    const hookRuntimeNeedsAction =
+      hook.state === "current" &&
+      ["review_required", "disabled", "missing"].includes(
+        hookRuntimeState ?? "",
+      );
     const active = Boolean(
       upgrade && activeUpdatePhases.includes(upgrade.phase),
     );
@@ -104,22 +114,26 @@ export function createSystemUpdateRenderer(
         ? `新版本 ${version.latestVersion} 可用`
         : resources.state === "conflict"
           ? "本地托管资源冲突待处理"
-          : version?.latestVersion && resourcesInstalled
-            ? "Codrive 与托管资源已对齐"
-            : resourcesInstalled
-              ? "等待稳定版检查"
-              : "托管资源需要补齐";
+          : hookRuntimeNeedsAction
+            ? "Codex Hook 待审核启用"
+            : version?.latestVersion && resourcesInstalled
+              ? "Codrive 与托管资源已对齐"
+              : resourcesInstalled
+                ? "等待稳定版检查"
+                : "托管资源需要补齐";
     options.getElementById("update-trigger-copy").textContent = triggerCopy;
     options.getElementById("update-trigger-icon").textContent = active
       ? "↻"
       : version?.updateAvailable
         ? "↑"
-        : resourcesInstalled
-          ? "✓"
-          : "+";
+        : hookRuntimeNeedsAction
+          ? "!"
+          : resourcesInstalled
+            ? "✓"
+            : "+";
     options.getElementById("update-trigger").dataset.state = active
       ? "active"
-      : version?.updateAvailable || !resourcesInstalled
+      : version?.updateAvailable || !resourcesInstalled || hookRuntimeNeedsAction
         ? "attention"
         : "current";
 
@@ -132,9 +146,19 @@ export function createSystemUpdateRenderer(
         ? `${skills.managedSkillCount} / ${skills.managedSkillCount} 已对齐`
         : options.label(skills.state);
     options.getElementById("update-hook").textContent =
-      hook.state === "current"
-        ? `${hook.managedHookCount} / ${hook.managedHookCount} 已对齐`
-        : options.label(hook.state);
+      hook.state !== "current"
+        ? options.label(hook.state)
+        : hookRuntimeState === "ready"
+          ? `${hook.managedHookCount} / ${hook.managedHookCount} 已启用`
+          : hookRuntimeState === "review_required"
+            ? "待 Codex 信任"
+            : hookRuntimeState === "disabled"
+              ? "已被 Codex 禁用"
+              : hookRuntimeState === "missing"
+                ? "Codex 未载入"
+                : hookRuntimeState === "unavailable"
+                  ? "已安装 · 状态待确认"
+                  : `${hook.managedHookCount} / ${hook.managedHookCount} 已对齐`;
     options.getElementById("update-checked-at").textContent =
       options.formatTime(version?.lastCheckedAt);
     options.getElementById("update-check-result").textContent =
@@ -180,6 +204,12 @@ export function createSystemUpdateRenderer(
       ? `<p>Codrive 不会覆盖未托管文件。请先移动冲突路径，再重新同步：</p>${conflictDetails.join("")}`
       : "";
 
+    const hookTrust = options.getElementById("update-hook-trust");
+    hookTrust.hidden = !hookRuntimeNeedsAction;
+    hookTrust.innerHTML = hookRuntimeNeedsAction
+      ? `<b>还需在 Codex 中审核 Hook</b><p>运行 <code>/hooks</code>，审核并信任四条 Codrive activity Hook 定义，然后点击“重新检查”。Codex 会跳过尚未信任或已被禁用的 Hook。</p>`
+      : "";
+
     const missingResources = [
       ...(skills.state === "current"
         ? []
@@ -196,9 +226,11 @@ export function createSystemUpdateRenderer(
           ? `Codrive ${version.latestVersion} 与该版本随附的 4 个托管 Skills、1 个托管 Hook 将在一次操作中更新。`
           : version?.checkError
             ? "无法确认 npm latest 稳定版；看板与任务调度不受影响，可以重新检查。"
-            : version?.latestVersion && resourcesInstalled
-              ? "当前已是最新稳定版，Codrive 与随包托管资源保持一致。"
-              : `Codrive 已安装；需要从当前包补齐 ${missingResources.join(" 和 ")}。`;
+            : hookRuntimeNeedsAction
+              ? "托管 Hook 已安装；完成 Codex 的安全审核后，任务活动才会实时推送到看板。"
+              : version?.latestVersion && resourcesInstalled
+                ? "当前已是最新稳定版，Codrive 与随包托管资源保持一致。"
+                : `Codrive 已安装；需要从当前包补齐 ${missingResources.join(" 和 ")}。`;
     options.getElementById("update-summary").textContent = summary;
 
     const primary = options.getElementById("update-primary");

@@ -64,6 +64,15 @@ describe("CodexAppServerClient", () => {
           isDefault: false,
         },
       ]);
+      await expect(client.listHooks(["/workspace/game"])).resolves.toEqual([
+        {
+          eventName: "preToolUse",
+          command: 'node "/home/user/.codex/hooks/codrive/codrive-activity-hook.mjs"',
+          statusMessage: "Reporting Codrive activity",
+          enabled: true,
+          trustStatus: "trusted",
+        },
+      ]);
       await expect(client.isThreadActive(threadId)).resolves.toBe(true);
       await expect(client.readTurnStatus(threadId, turnId)).resolves.toBe(
         "inProgress",
@@ -139,6 +148,9 @@ describe("CodexAppServerClient", () => {
       { includeHidden: false },
       { includeHidden: false, cursor: "page_2" },
     ]);
+    expect(requests.find(({ method }) => method === "hooks/list")?.params).toEqual({
+      cwds: ["/workspace/game"],
+    });
     expect(interruptTurn?.params).toEqual({
       threadId: "thread_1",
       turnId: "turn_1",
@@ -185,6 +197,7 @@ lines.on("line", (line) => {
         ],
         nextCursor: "page_2"
       };
+  if (request.method === "hooks/list") result = { data: [{ cwd: request.params.cwds[0], warnings: [], errors: [], hooks: [{ eventName: "preToolUse", command: "node \\\"/home/user/.codex/hooks/codrive/codrive-activity-hook.mjs\\\"", statusMessage: "Reporting Codrive activity", enabled: true, trustStatus: "trusted" }] }] };
   if (request.method === "thread/read") result = request.params.threadId === "thread_not_loaded"
     ? { thread: { status: { type: "notLoaded" }, turns: [
         { id: "turn_completed", status: "completed", startedAt: 1786841900, completedAt: 1786841950, items: [] }

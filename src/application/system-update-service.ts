@@ -7,6 +7,7 @@ import {
 import type { PackageVersionService } from "../infrastructure/package-version-service.js";
 import type { PackageVersionCheckTrigger } from "./package-version-check-scheduler.js";
 import type { UpgradeCoordinator } from "./upgrade-coordinator.js";
+import type { HookRuntimeStatusReader } from "./managed-hook-runtime-inspector.js";
 
 export class SystemUpdateService {
   constructor(
@@ -14,13 +15,15 @@ export class SystemUpdateService {
     private readonly upgrades: UpgradeCoordinator,
     private readonly resources: ManagedResourceInstaller,
     private readonly versionChecks: PackageVersionCheckTrigger,
+    private readonly hookRuntime: HookRuntimeStatusReader,
   ) {}
 
   async read() {
-    const [version, upgrade, resources] = await Promise.all([
+    const [version, upgrade, resources, hookRuntime] = await Promise.all([
       this.versions.read(),
       this.upgrades.read(),
       this.resources.getStatus(),
+      this.hookRuntime.read(),
     ]);
     return {
       version,
@@ -28,6 +31,7 @@ export class SystemUpdateService {
       resources,
       skills: resources.skills,
       hook: resources.hook,
+      hookRuntime,
     };
   }
 

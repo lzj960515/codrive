@@ -61,7 +61,7 @@ The update window shows the installed version, the latest stable release, the la
 codrive upgrade
 ```
 
-Codex owns Hook review and trust. After setup or any release that changes the Hook definition, use `/hooks` in Codex to review and trust the new hash. Codrive checks only the resources it owns: the managed script directory, all four `hooks.json` entries, the version marker, and the content fingerprint. `codrive doctor` does not use App Server runtime or trust state as an installation gate.
+Codex owns Hook review and trust. After setup or any release that changes the Hook definition, use `/hooks` in Codex to review and trust the new hash. Codex does not expose a public per-Hook API that lets Codrive persist that decision on the user's behalf; the process-wide bypass would also trust unrelated user and project Hooks, so Codrive does not use it. The update window shows an action prompt until all four Codrive definitions are enabled and trusted, and `codrive doctor` reports static installation and runtime trust as separate checks.
 
 The board also provides runtime settings for per-project concurrency, the primary model, and the fallback model.
 

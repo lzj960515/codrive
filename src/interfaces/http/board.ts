@@ -63,6 +63,7 @@ export function renderBoardPage(accessToken: string): string {
         <div class="update-progress-meta"><b id="update-phase">准备更新</b><time id="update-phase-time">—</time></div>
       </div>
       <div id="update-timeline" class="update-timeline" aria-label="更新阶段时间" hidden></div>
+      <div id="update-hook-trust" class="update-hook-trust" hidden></div>
       <div id="update-conflict" class="update-conflict" hidden></div>
       <dl class="update-meta">
         <dt>最后检查</dt><dd id="update-checked-at">—</dd>

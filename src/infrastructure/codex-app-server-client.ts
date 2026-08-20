@@ -10,6 +10,7 @@ import type {
 } from "../application/codex-gateway.js";
 import type { InitializeResponse } from "./app-server-protocol/InitializeResponse.js";
 import type { ModelListResponse } from "./app-server-protocol/v2/ModelListResponse.js";
+import type { HooksListResponse } from "./app-server-protocol/v2/HooksListResponse.js";
 import type { ThreadResumeResponse } from "./app-server-protocol/v2/ThreadResumeResponse.js";
 import type { ThreadReadResponse } from "./app-server-protocol/v2/ThreadReadResponse.js";
 import type { ThreadStartResponse } from "./app-server-protocol/v2/ThreadStartResponse.js";
@@ -18,6 +19,7 @@ import {
   JsonRpcConnection,
   type JsonRpcNotification,
 } from "./json-rpc-connection.js";
+import type { RuntimeHookDefinition } from "../domain/managed-hook.js";
 
 export interface CodexAppServerOptions {
   executable?: string;
@@ -169,6 +171,25 @@ export class CodexAppServerClient implements CodexGateway {
       cursor = response.nextCursor ?? undefined;
     } while (cursor !== undefined);
     return models;
+  }
+
+  async listHooks(cwds: string[]): Promise<RuntimeHookDefinition[]> {
+    await this.start();
+    const response = await this.requireConnection().request<HooksListResponse>(
+      "hooks/list",
+      { cwds },
+    );
+    return response.data.flatMap(({ hooks }) =>
+      hooks.map(
+        ({ eventName, command, statusMessage, enabled, trustStatus }) => ({
+          eventName,
+          command,
+          statusMessage,
+          enabled,
+          trustStatus,
+        }),
+      ),
+    );
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {

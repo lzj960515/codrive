@@ -7,6 +7,7 @@ import { ExecutionActivityBridge } from "./application/execution-activity-bridge
 import { CodexProjectExecutor } from "./application/codex-project-executor.js";
 import { LifecycleRecorder } from "./application/lifecycle-recorder.js";
 import { ManagedResourceUpgradeReconciler } from "./application/managed-resource-upgrade-reconciler.js";
+import { ManagedHookRuntimeInspector } from "./application/managed-hook-runtime-inspector.js";
 import { PackageVersionCheckScheduler } from "./application/package-version-check-scheduler.js";
 import { RecoveryManager } from "./application/recovery-manager.js";
 import { SystemSettingsService } from "./application/system-settings-service.js";
@@ -148,6 +149,7 @@ export class CodriveServer {
         upgrades,
         resourceInstaller,
         this.versionChecks,
+        new ManagedHookRuntimeInspector(this.codex),
       );
       this.http = createHttpServer({
         store,
