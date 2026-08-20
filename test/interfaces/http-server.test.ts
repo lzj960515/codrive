@@ -1718,6 +1718,10 @@ describe("HTTP API", () => {
     expect(page.body).not.toContain("任务对话</span>");
     expect(page.body).not.toContain("审查对话</span>");
     expect(page.body).toContain('id="project-sidebar"');
+    expect(page.body).toContain("codrive.project-order.v1");
+    expect(page.body).toContain("data-project-drag");
+    expect(page.body).toContain("dragstart");
+    expect(page.body).toContain("moveProjectInOrder");
     expect(page.body).toContain('id="task-detail"');
     expect(page.body).toContain("data-copy-task-id");
     expect(page.body).toContain("navigator.clipboard.writeText(task.id)");

@@ -89,6 +89,15 @@ export const boardStyles = `
   .project-list { display: grid; gap: 5px; margin: 0 -4px; padding: 0 4px 30px; overflow-y: auto; }
   .project-list::-webkit-scrollbar { width: 5px; }
   .project-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 10px; }
+  .project-item { position: relative; display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 2px; align-items: stretch; }
+  .project-item.dragging { opacity: .42; }
+  .project-item.drop-before::before, .project-item.drop-after::after { content: ""; position: absolute; z-index: 2; right: 4px; left: 4px; height: 2px; background: var(--mint); border-radius: 99px; box-shadow: 0 0 0 3px rgba(112,214,178,.18); pointer-events: none; }
+  .project-item.drop-before::before { top: -3px; }
+  .project-item.drop-after::after { bottom: -3px; }
+  .project-drag-handle { display: grid; width: 18px; place-items: center; padding: 0; color: rgba(255,255,255,.45); background: transparent; border: 0; border-radius: 7px; cursor: grab; opacity: .52; transition: color .16s ease, background .16s ease, opacity .16s ease; }
+  .project-drag-handle:hover, .project-drag-handle:focus-visible { color: white; background: rgba(255,255,255,.11); opacity: 1; }
+  .project-drag-handle:active { cursor: grabbing; }
+  .project-drag-mark { width: 8px; height: 14px; background-image: radial-gradient(circle, currentColor 1.2px, transparent 1.4px); background-position: 0 0; background-size: 4px 4px; }
   .project-button {
     display: grid;
     grid-template-columns: 34px 1fr auto;
@@ -107,8 +116,8 @@ export const boardStyles = `
   .project-button:hover { color: white; background: rgba(255,255,255,.07); transform: translateX(2px); }
   .project-button.active { color: white; background: rgba(255,255,255,.12); box-shadow: inset 3px 0 var(--signal); }
   .project-glyph { display: grid; width: 32px; height: 32px; place-items: center; color: var(--sidebar); background: #dce7de; border-radius: 9px; font: 900 13px/1 var(--condensed); }
-  .project-button:nth-child(3n+2) .project-glyph { background: #f4c989; }
-  .project-button:nth-child(3n+3) .project-glyph { background: #9ed8e7; }
+  .project-item:nth-child(3n+2) .project-glyph { background: #f4c989; }
+  .project-item:nth-child(3n+3) .project-glyph { background: #9ed8e7; }
   .project-label { min-width: 0; }
   .project-label b { display: block; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
   .project-label small { display: block; margin-top: 3px; color: rgba(255,255,255,.44); font: 700 10px/1 var(--condensed); text-transform: capitalize; }

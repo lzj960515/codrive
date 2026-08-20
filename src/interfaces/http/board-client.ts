@@ -1,6 +1,11 @@
 import { createRealtimeWatchCoordinator } from "./board-realtime-client.js";
 import { createExecutionActivityRenderer } from "./execution-activity-renderer.js";
 import { createSystemUpdateRenderer } from "./system-update-renderer.js";
+import {
+  moveProjectInOrder,
+  projectOrderStorageKey,
+  reconcileProjectOrder,
+} from "./project-ordering.js";
 import { taskBoardLayout } from "./task-board-layout.js";
 
 export function renderBoardClient(accessToken: string): string {
@@ -10,6 +15,8 @@ export function renderBoardClient(accessToken: string): string {
   const watchCoordinator = createRealtimeWatchCoordinator.toString();
   const activityRenderer = createExecutionActivityRenderer.toString();
   const systemUpdateRenderer = createSystemUpdateRenderer.toString();
+  const reorderProjects = moveProjectInOrder.toString();
+  const reconcileProjects = reconcileProjectOrder.toString();
   return `<script>
     const TOKEN = ${token};
     const boardLayout = ${layout};
@@ -52,10 +59,14 @@ export function renderBoardClient(accessToken: string): string {
     let currentActivity = null;
     let systemSettings = null;
     let updateActionError = null;
+    let draggedProjectId = null;
     let projectReadRevision = 0;
     let taskReadRevision = 0;
     const socket = io({ auth: { token: TOKEN }, autoConnect: false });
     const createWatchCoordinator = ${watchCoordinator};
+    const projectOrderStorageKey = ${JSON.stringify(projectOrderStorageKey)};
+    const moveProjectInOrder = ${reorderProjects};
+    const reconcileProjectOrder = ${reconcileProjects};
     const headers = { "x-codrive-token": TOKEN, "content-type": "application/json" };
     const escapeHtml = value => String(value ?? "").replace(/[&<>\"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[character]));
     const bucket = status => boardLayout.statusColumns[status] || status;
@@ -331,6 +342,93 @@ export function renderBoardClient(accessToken: string): string {
         .find(element => element.getAttribute(identity.attribute) === identity.value) || null;
     }
 
+    function readProjectOrder() {
+      try {
+        const serializedOrder = window.localStorage.getItem(projectOrderStorageKey);
+        return serializedOrder === null ? [] : JSON.parse(serializedOrder);
+      } catch {
+        return [];
+      }
+    }
+
+    function persistProjectOrder(projectIds) {
+      try {
+        window.localStorage.setItem(projectOrderStorageKey, JSON.stringify(projectIds));
+      } catch {}
+    }
+
+    function projectOrdersMatch(left, right) {
+      return left.length === right.length && left.every((projectId, index) => projectId === right[index]);
+    }
+
+    function getOrderedProjectSnapshots() {
+      const savedOrder = readProjectOrder();
+      const persistedOrder = Array.isArray(savedOrder) ? savedOrder : [];
+      const projectIds = snapshots.map(snapshot => snapshot.project.id);
+      const orderedProjectIds = reconcileProjectOrder(projectIds, persistedOrder);
+      if (!projectOrdersMatch(persistedOrder, orderedProjectIds)) {
+        persistProjectOrder(orderedProjectIds);
+      }
+      const snapshotsByProjectId = new Map(snapshots.map(snapshot => [snapshot.project.id, snapshot]));
+      return orderedProjectIds.map(projectId => snapshotsByProjectId.get(projectId)).filter(Boolean);
+    }
+
+    function clearProjectDropIndicators() {
+      document.querySelectorAll("[data-project-row]").forEach(row => {
+        row.classList.remove("dragging", "drop-before", "drop-after");
+      });
+    }
+
+    function projectDropPosition(event, row) {
+      const bounds = row.getBoundingClientRect();
+      return event.clientY - bounds.top < bounds.height / 2 ? "before" : "after";
+    }
+
+    function enableProjectSorting(host) {
+      host.querySelectorAll("[data-project-drag]").forEach(handle => {
+        handle.addEventListener("dragstart", event => {
+          draggedProjectId = handle.dataset.projectDrag;
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", draggedProjectId);
+          handle.closest("[data-project-row]").classList.add("dragging");
+        });
+        handle.addEventListener("dragend", () => {
+          draggedProjectId = null;
+          clearProjectDropIndicators();
+        });
+      });
+      host.querySelectorAll("[data-project-row]").forEach(row => {
+        row.addEventListener("dragover", event => {
+          if (!draggedProjectId || draggedProjectId === row.dataset.projectRow) return;
+          event.preventDefault();
+          clearProjectDropIndicators();
+          row.classList.add(projectDropPosition(event, row) === "before" ? "drop-before" : "drop-after");
+          event.dataTransfer.dropEffect = "move";
+        });
+        row.addEventListener("dragleave", event => {
+          if (!row.contains(event.relatedTarget)) {
+            row.classList.remove("drop-before", "drop-after");
+          }
+        });
+        row.addEventListener("drop", event => {
+          event.preventDefault();
+          const sourceProjectId = draggedProjectId || event.dataTransfer.getData("text/plain");
+          const targetProjectId = row.dataset.projectRow;
+          draggedProjectId = null;
+          clearProjectDropIndicators();
+          if (!sourceProjectId || !targetProjectId || sourceProjectId === targetProjectId) return;
+          const projectIds = getOrderedProjectSnapshots().map(snapshot => snapshot.project.id);
+          persistProjectOrder(moveProjectInOrder(
+            projectIds,
+            sourceProjectId,
+            targetProjectId,
+            projectDropPosition(event, row),
+          ));
+          renderProjects();
+        });
+      });
+    }
+
     const currentSnapshot = () => snapshots.find(snapshot => snapshot.project.id === selectedProjectId);
 
     async function realtimeRequest(event, payload = {}) {
@@ -408,13 +506,17 @@ export function renderBoardClient(accessToken: string): string {
     function renderProjects() {
       document.getElementById("project-count").textContent = snapshots.length;
       const host = document.getElementById("projects");
+      const orderedSnapshots = getOrderedProjectSnapshots();
       host.innerHTML = snapshots.length
-        ? snapshots.map(({ project, tasks }) =>
-            '<button class="project-button '+(project.id === selectedProjectId ? 'active' : '')+'" type="button" data-project="'+escapeHtml(project.id)+'" aria-pressed="'+(project.id === selectedProjectId)+'">'+
-              '<span class="project-glyph">'+escapeHtml(initials(project.name))+'</span>'+
-              '<span class="project-label"><b>'+escapeHtml(project.name)+'</b><small>'+escapeHtml(label(project.displayStatus))+'</small></span>'+
-              '<span class="project-total">'+tasks.length+'</span>'+
-            '</button>'
+        ? orderedSnapshots.map(({ project, tasks }) =>
+            '<div class="project-item" data-project-row="'+escapeHtml(project.id)+'">'+
+              '<button class="project-drag-handle" type="button" draggable="true" data-project-drag="'+escapeHtml(project.id)+'" aria-label="拖拽排序 '+escapeHtml(project.name)+'" title="拖拽排序"><span class="project-drag-mark" aria-hidden="true"></span></button>'+
+              '<button class="project-button '+(project.id === selectedProjectId ? 'active' : '')+'" type="button" data-project="'+escapeHtml(project.id)+'" aria-pressed="'+(project.id === selectedProjectId)+'">'+
+                '<span class="project-glyph">'+escapeHtml(initials(project.name))+'</span>'+
+                '<span class="project-label"><b>'+escapeHtml(project.name)+'</b><small>'+escapeHtml(label(project.displayStatus))+'</small></span>'+
+                '<span class="project-total">'+tasks.length+'</span>'+
+              '</button>'+
+            '</div>'
           ).join("")
         : '';
       host.querySelectorAll("[data-project]").forEach(button => {
@@ -426,6 +528,7 @@ export function renderBoardClient(accessToken: string): string {
           void selectProject(button.dataset.project);
         };
       });
+      enableProjectSorting(host);
     }
 
     function renderWorkspace() {
