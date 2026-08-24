@@ -1,4 +1,3 @@
-import type { Project, Task } from "../domain/types.js";
 import type { CodexGateway } from "./codex-gateway.js";
 import type {
   DispatchRequest,
@@ -20,12 +19,7 @@ export class CodexTaskDispatcher implements TaskDispatcher {
       return { threadId: existingThreadId, disposition: "resumed" };
     }
 
-    const title = threadTitle(
-      request.project,
-      request.task,
-      request.activity.conversations.reviewCount,
-    );
-    const threadId = await this.codex.startThread(cwd, title);
+    const threadId = await this.codex.startThread(cwd, request.task.title);
     return { threadId, disposition: "created" };
   }
 
@@ -106,11 +100,4 @@ function conversationThreadId(request: DispatchRequest): string | undefined {
 
 function conversationDirectory({ project }: DispatchRequest): string {
   return project.repositoryPath;
-}
-
-function threadTitle(project: Project, task: Task, reviewCount = 0): string {
-  if (task.currentExecution?.action === "review") {
-    return `[Codrive Review #${reviewCount + 1}] ${project.name} · ${task.title}`;
-  }
-  return `[Codrive] ${project.name} · ${task.title}`;
 }

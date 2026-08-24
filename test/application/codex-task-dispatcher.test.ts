@@ -128,7 +128,7 @@ describe("CodexTaskDispatcher", () => {
     expect(gateway.calls).toEqual([
       {
         method: "startThread",
-        args: ["/workspace/game", "[Codrive] Tiny Game · Playable loop"],
+        args: ["/workspace/game", "Playable loop"],
       },
       {
         method: "startTurn",
@@ -193,7 +193,7 @@ describe("CodexTaskDispatcher", () => {
         method: "startThread",
         args: [
           project.repositoryPath,
-          "[Codrive Review #1] Tiny Game · Playable loop",
+          "Playable loop",
         ],
       },
       {
@@ -284,7 +284,7 @@ describe("CodexTaskDispatcher", () => {
         method: "startThread",
         args: [
           project.repositoryPath,
-          "[Codrive Review #1] Tiny Game · Second loop",
+          "Second loop",
         ],
       },
     ]);
