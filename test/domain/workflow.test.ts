@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  applyTaskReport,
+  applyTaskReport as applyTaskReportWithIdentity,
   startTaskExecution as startTaskExecutionWithModel,
 } from "../../src/domain/workflow.js";
 import type { Task, TaskReport } from "../../src/domain/types.js";
@@ -10,7 +10,32 @@ import { testModelRouting } from "../support/recording-executors.js";
 const timestamp = "2026-08-03T00:00:00.000Z";
 
 function startTaskExecution(task: Task, attemptId: string, now: string): Task {
-  return startTaskExecutionWithModel(task, attemptId, now, testModelRouting());
+  return startTaskExecutionWithModel(
+    task,
+    attemptId,
+    `report_opportunity_${attemptId}`,
+    now,
+    testModelRouting(),
+  );
+}
+
+type TaskReportFixture = Omit<TaskReport, "reportOpportunityId"> & {
+  reportOpportunityId?: string;
+};
+
+function applyTaskReport(
+  task: Task,
+  report: TaskReportFixture,
+  now: string,
+): Task {
+  return applyTaskReportWithIdentity(
+    task,
+    {
+      reportOpportunityId: task.currentExecution!.reportOpportunityId,
+      ...report,
+    },
+    now,
+  );
 }
 
 function task(overrides: Partial<Task> = {}): Task {
@@ -55,6 +80,7 @@ describe("task workflow", () => {
     const stale: TaskReport = {
       taskId: running.id,
       attemptId: "stale_attempt",
+      reportOpportunityId: "report_opportunity_stale_attempt",
       outcome: "completed",
       summary: "Done",
     };
@@ -256,6 +282,7 @@ describe("task workflow", () => {
     const report = (overrides: Partial<TaskReport>): TaskReport => ({
       taskId: developing.id,
       attemptId: "develop_attempt",
+      reportOpportunityId: "report_opportunity_develop_attempt",
       outcome: "blocked",
       summary: "Wait for a dependency",
       ...overrides,
@@ -313,7 +340,7 @@ describe("task workflow", () => {
   });
 
   it("requires the artifacts consumed by later stages", () => {
-    const cases: Array<{ task: Task; report: TaskReport; expected: RegExp }> = [
+    const cases: Array<{ task: Task; report: TaskReportFixture; expected: RegExp }> = [
       {
         task: startTaskExecution(
           task({ requestedAction: "develop" }),

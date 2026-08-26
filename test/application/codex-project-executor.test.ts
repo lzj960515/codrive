@@ -62,11 +62,10 @@ function project(): Project {
       changeReason: "project_registered",
       concurrencyLimit: 4,
     },
-    productFacts: {
-      revision: 1,
-      digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      status: "current",
-      changedAt: timestamp,
+      productFacts: {
+        revision: 1,
+        digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        changedAt: timestamp,
     },
     currentExecution: {
       attemptId: "project_attempt_1",

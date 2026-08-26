@@ -126,8 +126,6 @@ describe("HTTP API", () => {
     server = createHttpServer({
       store,
       workflow: engine,
-      skillInstaller,
-      resourceInstaller,
       settingsService,
       systemUpdateService: new SystemUpdateService(
         versions,
@@ -271,24 +269,31 @@ describe("HTTP API", () => {
   async function appendTaskReportActivity(
     projectId: string,
     action: TaskAction,
-    report: TaskReport,
+    report: Omit<TaskReport, "reportOpportunityId"> & {
+      reportOpportunityId?: string;
+    },
     threadId?: string,
     occurredAt = "2026-08-03T00:00:00.000Z",
   ) {
+    const currentReport: TaskReport = {
+      reportOpportunityId: `report_opportunity_${report.attemptId}_${report.outcome}`,
+      ...report,
+    };
     const activity = createTaskReportActivity({
-      activityId: `activity_${report.attemptId}_${report.outcome}`,
+      activityId: `activity_${currentReport.attemptId}_${currentReport.outcome}`,
       projectId,
       action,
-      report,
+      report: currentReport,
       ...(threadId ? { threadId } : {}),
       occurredAt,
     });
     await store.appendEvent({
+      schemaVersion: 1,
       eventId: `event_${activity.id}`,
       type: "task.activity_recorded",
       projectId,
-      taskId: report.taskId,
-      attemptId: report.attemptId,
+      taskId: currentReport.taskId,
+      attemptId: currentReport.attemptId,
       ...(threadId ? { threadId } : {}),
       occurredAt,
       data: { activity },
@@ -386,23 +391,18 @@ describe("HTTP API", () => {
       state: "review_required",
       definitionCount: 4,
     });
-    expect(missing.json().skills).toMatchObject({
-      state: "missing",
-      bundledVersion: "0.2.0",
-    });
+    expect(missing.json()).not.toHaveProperty("skills");
+    expect(missing.json()).not.toHaveProperty("hook");
     expect(installed.statusCode).toBe(200);
     expect(installed.json().resources.state).toBe("current");
-    expect(installed.json().skills.state).toBe("current");
-    expect(installed.json().hook.state).toBe("current");
-    expect(current.json().skills.state).toBe("current");
+    expect(installed.json().resources.hook.state).toBe("current");
     expect(current.json().resources.state).toBe("current");
 
-    const compatibleAlias = await command({
+    const removedAlias = await command({
       type: "system.install_skills",
       payload: {},
     });
-    expect(compatibleAlias.statusCode).toBe(200);
-    expect(compatibleAlias.json().resources.state).toBe("current");
+    expect(removedAlias.statusCode).toBe(400);
   });
 
   it("checks npm on demand and accepts one fixed-version update operation", async () => {
@@ -419,8 +419,8 @@ describe("HTTP API", () => {
       type: "system.start_upgrade",
       payload: { targetVersion: "0.7.0" },
     });
-    const concurrentSkillRepair = await command({
-      type: "system.install_skills",
+    const concurrentResourceRepair = await command({
+      type: "system.install_resources",
       payload: {},
     });
 
@@ -436,7 +436,7 @@ describe("HTTP API", () => {
     });
     expect(accepted.statusCode).toBe(202);
     expect(repeated.statusCode).toBe(202);
-    expect(concurrentSkillRepair.statusCode).toBe(409);
+    expect(concurrentResourceRepair.statusCode).toBe(409);
     expect(repeated.json().upgrade.operationId).toBe(
       accepted.json().upgrade.operationId,
     );
@@ -521,6 +521,7 @@ describe("HTTP API", () => {
     });
 
     await store.appendEvent({
+      schemaVersion: 1,
       eventId: "alpha-recovery-audit",
       type: "recovery.planning_suppressed",
       projectId: alpha.project.id,
@@ -532,6 +533,7 @@ describe("HTTP API", () => {
     expect(alphaTaskEvents).toEqual([]);
 
     await store.appendEvent({
+      schemaVersion: 1,
       eventId: "alpha-task-change",
       type: "task.changed",
       projectId: alpha.project.id,
@@ -548,6 +550,7 @@ describe("HTTP API", () => {
     expect(betaTaskEvents).toEqual([]);
 
     await store.appendEvent({
+      schemaVersion: 1,
       eventId: "alpha-other-task-change",
       type: "task.changed",
       projectId: alpha.project.id,
@@ -575,6 +578,7 @@ describe("HTTP API", () => {
       projectId: beta.project.id,
     });
     await store.appendEvent({
+      schemaVersion: 1,
       eventId: "alpha-after-switch",
       type: "task.changed",
       projectId: alpha.project.id,
@@ -834,6 +838,7 @@ describe("HTTP API", () => {
       payload: {
         taskId: created.tasks[0]!.id,
         attemptId: "stale_attempt",
+        reportOpportunityId: "stale_report_opportunity",
         outcome: "completed",
         summary: "Stale",
         workspacePath: "/workspace/game/.worktrees/loop",
@@ -860,6 +865,7 @@ describe("HTTP API", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "attempt_1",
+        reportOpportunityId: "report_opportunity_1",
         action: "develop",
         status: "waiting_for_input",
         threadId: "development_thread",
@@ -873,6 +879,7 @@ describe("HTTP API", () => {
       {
         taskId: task.id,
         attemptId: "attempt_1",
+        reportOpportunityId: "report_opportunity_1",
         outcome: "needs_input",
         summary: "Wait for the architecture review",
         question: "Which entity model should this task use?",
@@ -1064,7 +1071,6 @@ describe("HTTP API", () => {
     const startingServer = createHttpServer({
       store,
       workflow: engine,
-      skillInstaller,
       accessToken: "secret",
       isReady: () => false,
     } as Parameters<typeof createHttpServer>[0]);
@@ -1111,6 +1117,7 @@ describe("HTTP API", () => {
       payload: {
         taskId: created.tasks[0]!.id,
         attemptId: "stale_attempt",
+        reportOpportunityId: "stale_report_opportunity",
         outcome: "blocked",
         summary: "PRIVATE_REPORT_BODY_MUST_NOT_APPEAR",
       },
@@ -1172,6 +1179,7 @@ describe("HTTP API", () => {
     const task = created.tasks[0]!;
     const execution = {
       attemptId: "attempt_scheduled",
+      reportOpportunityId: "report_opportunity_scheduled",
       action: "develop" as const,
       status: "running" as const,
       startedAt: new Date().toISOString(),
@@ -1193,6 +1201,7 @@ describe("HTTP API", () => {
       payload: {
         taskId: task.id,
         attemptId: execution.attemptId,
+        reportOpportunityId: execution.reportOpportunityId,
         outcome: "blocked",
         summary: "Wait for the remote build",
         resumeAt,
@@ -1273,6 +1282,7 @@ describe("HTTP API", () => {
       payload: {
         taskId: task.id,
         attemptId: execution.attemptId,
+        reportOpportunityId: execution.reportOpportunityId,
         outcome: "blocked",
         summary: "Wait for the remote build",
         resumeAt,
@@ -1287,10 +1297,10 @@ describe("HTTP API", () => {
         attemptId: execution.attemptId,
         outcome: "needs_input",
         summary: "The resumed work needs one product decision",
-        question: "Keep the compatibility mode?",
+        question: "Keep the temporary mode?",
       },
     });
-    expect(missingOpportunity.statusCode).toBe(409);
+    expect(missingOpportunity.statusCode).toBe(400);
     const decision = await skillCommand({
       type: "task.report",
       payload: {
@@ -1299,7 +1309,7 @@ describe("HTTP API", () => {
         reportOpportunityId,
         outcome: "needs_input",
         summary: "The resumed work needs one product decision",
-        question: "Keep the compatibility mode?",
+        question: "Keep the temporary mode?",
       },
     });
     expect(decision.statusCode).toBe(200);
@@ -1337,6 +1347,7 @@ describe("HTTP API", () => {
     const task = created.tasks[0]!;
     const execution = {
       attemptId: "attempt_scheduled_failure",
+      reportOpportunityId: "report_opportunity_scheduled_failure",
       action: "develop" as const,
       status: "running" as const,
       startedAt: new Date().toISOString(),
@@ -1354,6 +1365,7 @@ describe("HTTP API", () => {
     await engine.submitReport({
       taskId: task.id,
       attemptId: execution.attemptId,
+      reportOpportunityId: execution.reportOpportunityId,
       outcome: "blocked",
       summary: "Wait for the remote build",
       resumeAt,
@@ -1440,7 +1452,6 @@ describe("HTTP API", () => {
     expect(recorded.json()).toMatchObject({
       status: "active",
       productFacts: {
-        status: "current",
         revision: 2,
         digest: digest(document),
       },
@@ -1478,7 +1489,7 @@ describe("HTTP API", () => {
       type: "project.update_product_document",
       payload: {
         projectId: created.project.id,
-        decisionSummary: "Notify from an older document view.",
+        decisionSummary: "Notify from a stale document view.",
         expectedRevision: created.project.productFacts.revision + 1,
         expectedDigest: created.project.productFacts.digest,
         documentDigest: digest(document),
@@ -1538,6 +1549,7 @@ describe("HTTP API", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "active_1",
+        reportOpportunityId: "report_opportunity_active_1",
         action: "develop",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -1787,6 +1799,7 @@ describe("HTTP API", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "attempt_1",
+        reportOpportunityId: "report_opportunity_1",
         action: "develop",
         status: "waiting_for_input",
         threadId: "development_thread",
@@ -1992,7 +2005,7 @@ describe("HTTP API", () => {
         attemptId: "attempt_historical_decision",
         outcome: "needs_input",
         summary: "An earlier decision was requested",
-        question: "Keep the old branch?",
+        question: "Keep the superseded branch?",
       },
       "development_thread",
       "2026-08-03T03:00:00.000Z",
@@ -2030,7 +2043,7 @@ describe("HTTP API", () => {
         attemptId: "attempt_current_decision",
         outcome: "needs_input",
         summary: "The current decision needs a reply",
-        question: "Merge the compatibility layer?",
+        question: "Merge the temporary adapter?",
       },
       "development_thread",
       "2026-08-03T06:00:00.000Z",
@@ -2041,6 +2054,8 @@ describe("HTTP API", () => {
       requestedAction: "integrate",
       currentExecution: {
         attemptId: "attempt_current_decision",
+        reportOpportunityId:
+          "report_opportunity_attempt_current_decision_needs_input",
         action: "integrate",
         status: "waiting_for_input",
         threadId: "development_thread",
@@ -2075,7 +2090,7 @@ describe("HTTP API", () => {
     expect(detail.currentDecisionRequest).toMatchObject({
       id: "activity_attempt_current_decision_needs_input",
       threadId: "development_thread",
-      evidence: { question: "Merge the compatibility layer?" },
+      evidence: { question: "Merge the temporary adapter?" },
     });
     expect(detail).not.toHaveProperty("conversations");
   });

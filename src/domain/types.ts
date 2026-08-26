@@ -40,7 +40,6 @@ export type PlanningChangeReason =
   | "task_completed"
   | "task_cancelled"
   | "product_document_updated"
-  | "product_facts_reconciled"
   | "concurrency_changed"
   | "manual_replan";
 
@@ -52,19 +51,10 @@ export interface ProjectPlanningState {
   concurrencyLimit?: number;
 }
 
-export type ProductFactsStatus = "current" | "reconciliation_required";
-
-export type ProductFactsReconciliationReason =
-  | "legacy_context_notes"
-  | "empty_product_document"
-  | "uncommitted_document_change";
-
 export interface ProductFactsState {
   revision: number;
   digest: string;
-  status: ProductFactsStatus;
   changedAt: string;
-  reconciliationReason?: ProductFactsReconciliationReason;
 }
 
 export interface ProductDocumentChange {
@@ -197,7 +187,7 @@ export interface ScheduledTaskResume {
 
 export interface TaskExecution {
   attemptId: string;
-  reportOpportunityId?: string;
+  reportOpportunityId: string;
   action: TaskAction;
   threadId?: string;
   turnId?: string;
@@ -234,7 +224,7 @@ export type TaskReportOutcome =
 export interface TaskReport {
   taskId: string;
   attemptId: string;
-  reportOpportunityId?: string;
+  reportOpportunityId: string;
   outcome: TaskReportOutcome;
   summary: string;
   workspacePath?: string;
@@ -311,7 +301,7 @@ export interface Task {
 }
 
 export interface LifecycleEvent {
-  schemaVersion?: 1;
+  schemaVersion: 1;
   eventId: string;
   type: string;
   component?: LifecycleEventComponent;

@@ -2,7 +2,7 @@ export type UpgradePhase =
   | "checking"
   | "installing"
   | "restarting"
-  | "syncing_skills"
+  | "syncing_resources"
   | "succeeded"
   | "failed";
 
@@ -14,7 +14,6 @@ export type SystemUpdateErrorCode =
   | "service_restart_failed"
   | "service_start_timeout"
   | "wrong_version"
-  | "skill_sync_failed"
   | "skill_conflict"
   | "hook_conflict"
   | "resource_sync_failed";
@@ -44,10 +43,6 @@ export interface UpgradeState {
   phaseStartedAt?: Partial<Record<UpgradePhase, string>>;
   completedAt?: string;
   error?: SystemUpdateError;
-  resourceSync?: {
-    packageVersion: string;
-    completedAt: string;
-  };
 }
 
 export interface VersionStatusChangedEvent {

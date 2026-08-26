@@ -19,7 +19,8 @@ describe("NpmPackageUpgrader", () => {
     expect(cli).toContain('type: "system.start_upgrade"');
     expect(cli).toContain('"x-codrive-token": accessToken');
     expect(cli).toContain("waitForUpgradeCompletion");
-    expect(cli).toContain("supportsUnifiedUpdateApi");
+    expect(cli).not.toContain("supportsUnifiedUpdateApi");
+    expect(cli).not.toContain("predates unified updates");
   });
 
   it("installs the latest global package and restarts through the upgraded CLI", async () => {

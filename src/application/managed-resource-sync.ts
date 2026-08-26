@@ -10,16 +10,16 @@ export type ManagedResourceSyncStatus = Pick<
 };
 
 export function managedResourceSyncError(
-  resources?: ManagedResourceSyncStatus,
+  resources: ManagedResourceSyncStatus,
 ): SystemUpdateError {
-  if (resources?.hook.state === "conflict") {
+  if (resources.hook.state === "conflict") {
     return {
       code: "hook_conflict",
       summary:
         "A local unmanaged Codex Hook conflicts with Codrive. Move it aside, then retry the update.",
     };
   }
-  if (resources?.skills.state === "conflict") {
+  if (resources.skills.state === "conflict") {
     return {
       code: "skill_conflict",
       summary:

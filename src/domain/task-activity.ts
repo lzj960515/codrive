@@ -85,9 +85,7 @@ export function createTaskReportActivity({
     action,
     outcome: report.outcome,
     attemptId: report.attemptId,
-    ...(report.reportOpportunityId
-      ? { reportOpportunityId: report.reportOpportunityId }
-      : {}),
+    reportOpportunityId: report.reportOpportunityId,
     summary: report.summary,
     occurredAt,
     ...(threadId ? { threadId } : {}),
@@ -122,15 +120,18 @@ export function createTaskLifecycleActivity({
 }
 
 export function taskReportFromActivity(activity: TaskActivity): TaskReport {
-  if (!activity.attemptId || !activity.outcome || !activity.action) {
+  if (
+    !activity.attemptId ||
+    !activity.reportOpportunityId ||
+    !activity.outcome ||
+    !activity.action
+  ) {
     throw new Error(`Activity ${activity.id} is not a task report`);
   }
   return {
     taskId: activity.taskId,
     attemptId: activity.attemptId,
-    ...(activity.reportOpportunityId
-      ? { reportOpportunityId: activity.reportOpportunityId }
-      : {}),
+    reportOpportunityId: activity.reportOpportunityId,
     outcome: activity.outcome,
     summary: activity.summary,
     ...activity.evidence,

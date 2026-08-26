@@ -32,8 +32,8 @@ describe("local runtime state", () => {
     expect(mode).toBe(0o600);
   });
 
-  it("rejects an older config schema instead of carrying runtime compatibility", async () => {
-    const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-config-legacy-"));
+  it("rejects an unsupported config schema", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-config-unsupported-"));
     const store = new ConfigStore(stateDirectory);
     await writeFile(
       store.configPath,

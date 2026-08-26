@@ -49,7 +49,7 @@ export class SystemUpgradeRunner {
         request.stateDirectory,
       );
 
-      await this.transition(request, "syncing_skills");
+      await this.transition(request, "syncing_resources");
       const resources = await this.options.installResources(
         packageRoot,
         request.targetVersion,
@@ -160,7 +160,7 @@ function classifyUpgradeError(
       summary: "Codrive was installed, but the service could not restart. Run codrive upgrade to retry.",
     };
   }
-  if (phase === "syncing_skills") {
+  if (phase === "syncing_resources") {
     return {
       code: "resource_sync_failed",
       summary: "Codrive restarted, but its managed resources could not be synchronized. Retry from the Codrive update window.",

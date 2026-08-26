@@ -398,7 +398,6 @@ export class WorkflowEngine {
         productFacts: {
           revision: currentProject.productFacts.revision + 1,
           digest: acceptedDocument.digest,
-          status: "current",
           changedAt,
         },
         status: "active",
@@ -450,23 +449,18 @@ export class WorkflowEngine {
         ? await this.requireProjectExecutions().cancel(snapshot.project)
         : snapshot.project;
       const changedAt = this.now();
-      const wasReconciliation =
-        currentProject.productFacts.status === "reconciliation_required";
       const project: Project = {
         ...currentProject,
         productFacts: {
           revision: currentProject.productFacts.revision + 1,
           digest: acceptedDocument.digest,
-          status: "current",
           changedAt,
         },
         status: "active",
         requestedAction: null,
         planning: advancePlanning(
           currentProject.planning,
-          wasReconciliation
-            ? "product_facts_reconciled"
-            : "product_document_updated",
+          "product_document_updated",
           changedAt,
           this.maxConcurrentTasks,
         ),
@@ -499,32 +493,20 @@ export class WorkflowEngine {
       );
       if (
         execution?.attemptId === report.attemptId &&
-        !reportMatchesExecutionOpportunity(execution, report)
+        (!execution.reportOpportunityId ||
+          !report.reportOpportunityId ||
+          execution.reportOpportunityId !== report.reportOpportunityId)
       ) {
         throw new WorkflowConflictError(
           `Report opportunity does not match the current execution for ${report.taskId}`,
         );
       }
-      if (isLegacyReportReplay(activities, execution, report)) {
+      const previousActivity = reportActivityForIdempotency(activities, report);
+      if (previousActivity) {
+        if (taskActivityMatchesReport(previousActivity, report)) return found.task;
         throw new WorkflowConflictError(
           `Report conflicts with the recorded result for ${report.taskId}`,
         );
-      }
-      const previousActivity = reportActivityForIdempotency(
-        activities,
-        execution,
-        report,
-      );
-      if (previousActivity) {
-        if (taskActivityMatchesReport(previousActivity, report)) return found.task;
-        if (
-          execution?.status !== "waiting_for_input" ||
-          execution.reportOpportunityId !== undefined
-        ) {
-          throw new WorkflowConflictError(
-            `Report conflicts with the recorded result for ${report.taskId}`,
-          );
-        }
       }
       if (
         !execution ||
@@ -1447,9 +1429,7 @@ export class WorkflowEngine {
 
     try {
       const taskForTurn = this.prepareTaskForTurn(project, task, {
-        rotateReportOpportunity:
-          waitingExecution.submittedActivityId !== undefined ||
-          waitingExecution.reportOpportunityId === undefined,
+        rotateReportOpportunity: true,
       });
       const execution = taskForTurn.currentExecution!;
       if (taskForTurn !== task) {
@@ -1656,7 +1636,6 @@ export class WorkflowEngine {
       .filter(({ project, tasks }) =>
         project.status === "active" &&
         project.scheduling === "running" &&
-        project.productFacts.status === "current" &&
         !hasActiveProjectExecution(project) &&
         project.planning.evaluatedRevision !== project.planning.revision &&
         tasks.some(
@@ -1761,6 +1740,7 @@ export class WorkflowEngine {
       pending = startTaskExecution(
         task,
         attemptId,
+        this.createId("report_opportunity"),
         this.now(),
         task.modelRouting ?? initialModelRouting(this.modelSettingsFor(project)),
       );
@@ -2425,9 +2405,7 @@ export class WorkflowEngine {
       new Date(now),
       this.modelPrimaryProbeAfterMs,
     );
-    const assignReportOpportunity =
-      options.rotateReportOpportunity || !execution.reportOpportunityId;
-    if (!assignReportOpportunity && modelRouting === execution.modelRouting) {
+    if (!options.rotateReportOpportunity && modelRouting === execution.modelRouting) {
       return task;
     }
     const prepared: Task = {
@@ -2435,7 +2413,7 @@ export class WorkflowEngine {
       currentExecution: {
         ...execution,
         modelRouting,
-        ...(assignReportOpportunity
+        ...(options.rotateReportOpportunity
           ? { reportOpportunityId: this.createId("report_opportunity") }
           : {}),
       },
@@ -2452,7 +2430,6 @@ export class WorkflowEngine {
   }
 
   private async productDocumentIsCurrent(project: Project): Promise<boolean> {
-    if (project.productFacts.status !== "current") return false;
     const document = await this.store.readProductDocumentSnapshot(project.id);
     return (
       document.document.trim().length > 0 &&
@@ -2489,10 +2466,7 @@ export class WorkflowEngine {
         "PROJECT.md changed after the notification was prepared",
       );
     }
-    if (
-      document.digest === project.productFacts.digest &&
-      project.productFacts.status === "current"
-    ) {
+    if (document.digest === project.productFacts.digest) {
       throw new WorkflowConflictError("PROJECT.md has no unrecorded changes");
     }
     return { decisionSummary, digest: document.digest };
@@ -2503,12 +2477,8 @@ export class WorkflowEngine {
     project: Project,
     change: AcceptedProductDocumentChange,
   ): Promise<unknown> {
-    const reconciled =
-      previous.productFacts.status === "reconciliation_required";
     return this.recordEvent({
-      type: reconciled
-        ? "project.product_facts_reconciled"
-        : "project.product_document_updated",
+      type: "project.product_document_updated",
       projectId: project.id,
       decision: change.decisionSummary,
       before: projectLifecycleState(previous),
@@ -2746,7 +2716,7 @@ export class WorkflowEngine {
   }
 
   private recordEvent(
-    event: Omit<CodriveEvent, "eventId" | "occurredAt">,
+    event: Omit<CodriveEvent, "schemaVersion" | "eventId" | "occurredAt">,
   ): Promise<unknown> {
     return this.lifecycle.record(event);
   }
@@ -2957,66 +2927,13 @@ function eventForTask(task: Task): string {
 
 function reportActivityForIdempotency(
   activities: readonly TaskActivity[],
-  execution: Task["currentExecution"],
   report: TaskReport,
 ): TaskActivity | undefined {
-  const reportActivities = activities.filter(
-    ({ attemptId, outcome }) =>
-      attemptId === report.attemptId && outcome !== undefined,
-  );
-  if (report.reportOpportunityId) {
-    return reportActivities.find(
-      ({ reportOpportunityId }) =>
-        reportOpportunityId === report.reportOpportunityId,
-    );
-  }
-  if (
-    execution?.attemptId === report.attemptId &&
-    execution.reportOpportunityId === undefined
-  ) {
-    if (execution.submittedActivityId) {
-      return reportActivities.find(({ id }) => id === execution.submittedActivityId);
-    }
-    if (reportSubmissionStatuses.has(execution.status)) return undefined;
-  }
-  return (
-    reportActivities.find((activity) => taskActivityMatchesReport(activity, report)) ??
-    reportActivities.at(-1)
-  );
-}
-
-function reportMatchesExecutionOpportunity(
-  execution: NonNullable<Task["currentExecution"]>,
-  report: TaskReport,
-): boolean {
-  return execution.reportOpportunityId === report.reportOpportunityId;
-}
-
-function isUnboundLegacyReportOpportunity(
-  execution: Task["currentExecution"],
-  report: TaskReport,
-): boolean {
-  return Boolean(
-    execution?.attemptId === report.attemptId &&
-      execution.reportOpportunityId === undefined &&
-      execution.submittedActivityId === undefined &&
-      reportSubmissionStatuses.has(execution.status),
-  );
-}
-
-function isLegacyReportReplay(
-  activities: readonly TaskActivity[],
-  execution: Task["currentExecution"],
-  report: TaskReport,
-): boolean {
-  return (
-    isUnboundLegacyReportOpportunity(execution, report) &&
-    activities.some(
-      (activity) =>
-        activity.attemptId === report.attemptId &&
-        activity.outcome !== undefined &&
-        taskActivityMatchesReport(activity, report),
-    )
+  return activities.find(
+    ({ attemptId, outcome, reportOpportunityId }) =>
+      attemptId === report.attemptId &&
+      outcome !== undefined &&
+      reportOpportunityId === report.reportOpportunityId,
   );
 }
 

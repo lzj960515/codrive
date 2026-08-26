@@ -82,6 +82,7 @@ describe("ProjectStore", () => {
     const { store } = await createStore();
     const created = await store.createProject(projectInput);
     await store.appendEvent({
+      schemaVersion: 1,
       eventId: "activity_event_developed",
       type: "task.activity_recorded",
       projectId: created.project.id,
@@ -124,6 +125,7 @@ describe("ProjectStore", () => {
     };
     await store.saveTask(created.project.id, selected);
     await store.appendEvent({
+      schemaVersion: 1,
       eventId: "event_selected",
       type: "task.selected",
       projectId: created.project.id,
@@ -143,7 +145,7 @@ describe("ProjectStore", () => {
     });
   });
 
-  it("requires reconciliation when PROJECT.md changes while Codrive is stopped", async () => {
+  it("interrupts stale selection when PROJECT.md changes while Codrive is stopped", async () => {
     const { stateDirectory, store } = await createStore();
     const created = await store.createProject(projectInput);
     await store.saveProject({
@@ -174,16 +176,15 @@ describe("ProjectStore", () => {
     const project = (await restartedStore.getProject(created.project.id))!.project;
     expect(project).toMatchObject({
       requestedAction: null,
-      productFacts: {
-        status: "reconciliation_required",
-        reconciliationReason: "uncommitted_document_change",
-      },
+      productFacts: created.project.productFacts,
       currentExecution: { attemptId: "selection_1", status: "interrupted" },
     });
     expect(await restartedStore.listProjectEvents(created.project.id)).toContainEqual(
       expect.objectContaining({
-        type: "project.product_facts_reconciliation_required",
-        data: { reason: "uncommitted_document_change" },
+        type: "project.product_document_modified",
+        data: expect.objectContaining({
+          acceptedDocumentDigest: created.project.productFacts.digest,
+        }),
       }),
     );
   });

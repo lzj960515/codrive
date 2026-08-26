@@ -115,13 +115,8 @@ async function upgrade(): Promise<void> {
   const serviceStatus = await service.status();
   if (serviceStatus.state !== "stopped") {
     const running = await service.start();
-    if (await supportsUnifiedUpdateApi(running.url, config.accessToken)) {
-      await upgradeThroughRunningService(config, running.url);
-      return;
-    }
-    process.stdout.write(
-      "The running Codrive predates unified updates; continuing with the compatible local updater.\n",
-    );
+    await upgradeThroughRunningService(config, running.url);
+    return;
   }
 
   const currentVersion = await readPackageVersion();
@@ -166,18 +161,6 @@ async function upgrade(): Promise<void> {
   process.stdout.write(
     `Codrive ${request.targetVersion} and its managed resources are ready.\n`,
   );
-}
-
-async function supportsUnifiedUpdateApi(
-  serviceUrl: string,
-  accessToken: string,
-): Promise<boolean> {
-  const response = await fetch(`${serviceUrl}/api/system`, {
-    headers: { "x-codrive-token": accessToken },
-  });
-  if (!response.ok) throw new Error(await response.text());
-  const system = (await response.json()) as { version?: unknown };
-  return typeof system.version === "object" && system.version !== null;
 }
 
 async function upgradeThroughRunningService(

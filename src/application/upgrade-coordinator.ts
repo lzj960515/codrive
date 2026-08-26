@@ -5,7 +5,6 @@ import {
   compareSemanticVersions,
   isActiveUpgradePhase,
   type PackageVersionStatus,
-  type SystemUpdateError,
   type UpgradeState,
 } from "../domain/system-update.js";
 import { SystemUpdateConflictError } from "../domain/errors.js";
@@ -88,60 +87,6 @@ export class UpgradeCoordinator {
     );
   }
 
-  confirmResourceSync(currentVersion: string): Promise<UpgradeState | null> {
-    return this.options.store.withStartLock(async () => {
-      const current = await this.options.store.read();
-      if (
-        !current ||
-        current.phase !== "succeeded" ||
-        current.targetVersion !== currentVersion ||
-        current.resourceSync?.packageVersion === currentVersion
-      ) {
-        return current;
-      }
-      const timestamp = this.now().toISOString();
-      const confirmed: UpgradeState = {
-        ...current,
-        updatedAt: timestamp,
-        completedAt: timestamp,
-        resourceSync: {
-          packageVersion: currentVersion,
-          completedAt: timestamp,
-        },
-      };
-      await this.options.store.write(confirmed);
-      return confirmed;
-    });
-  }
-
-  failResourceSync(
-    currentVersion: string,
-    error: SystemUpdateError,
-  ): Promise<UpgradeState | null> {
-    return this.options.store.withStartLock(async () => {
-      const current = await this.options.store.read();
-      if (
-        !current ||
-        current.phase !== "succeeded" ||
-        current.targetVersion !== currentVersion ||
-        current.resourceSync?.packageVersion === currentVersion
-      ) {
-        return current;
-      }
-      const timestamp = this.now().toISOString();
-      const failed: UpgradeState = {
-        ...current,
-        phase: "failed",
-        updatedAt: timestamp,
-        completedAt: timestamp,
-        phaseStartedAt: { ...current.phaseStartedAt, failed: timestamp },
-        error,
-      };
-      await this.options.store.write(failed);
-      return failed;
-    });
-  }
-
   private async completeAfterResourceRepairExclusive(
     currentVersion: string,
   ): Promise<UpgradeState | null> {
@@ -160,20 +105,11 @@ export class UpgradeCoordinator {
       updatedAt: timestamp,
       completedAt: timestamp,
       phaseStartedAt: { ...current.phaseStartedAt, succeeded: timestamp },
-      resourceSync: {
-        packageVersion: currentVersion,
-        completedAt: timestamp,
-      },
     };
     delete succeeded.error;
     await this.options.store.write(succeeded);
     return succeeded;
   }
-
-  completeAfterSkillRepair(currentVersion: string): Promise<UpgradeState | null> {
-    return this.completeAfterResourceRepair(currentVersion);
-  }
-
   private async startExclusive(targetVersion: string): Promise<UpgradeState> {
     assertStableSemanticVersion(targetVersion);
     const existing = await this.reconcile();

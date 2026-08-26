@@ -109,7 +109,7 @@ export function renderBoardClient(accessToken: string): string {
       body: JSON.stringify({ type, payload })
     });
 
-    const activeUpdatePhases = ["checking", "installing", "restarting", "syncing_skills"];
+    const activeUpdatePhases = ["checking", "installing", "restarting", "syncing_resources"];
     async function refreshSystem() {
       let refreshed;
       try {
@@ -162,7 +162,7 @@ export function renderBoardClient(accessToken: string): string {
         const repairCurrentVersion =
           systemUpdate.upgrade?.phase === "failed" &&
           systemUpdate.upgrade.targetVersion === systemUpdate.version?.currentVersion &&
-          (systemUpdate.resources?.state ?? systemUpdate.skills.state) !== "current";
+          systemUpdate.resources.state !== "current";
         if (systemUpdate.version?.updateAvailable && !repairCurrentVersion) {
           status.textContent = "正在启动独立更新进程...";
           systemUpdate = await command("system.start_upgrade", { targetVersion: systemUpdate.version.latestVersion });
@@ -569,7 +569,7 @@ export function renderBoardClient(accessToken: string): string {
       if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
       const attention = project.attention;
       const attentionCopy = attention?.question || attention?.summary;
-      const cancellationReason = project.cancellation?.reason || (project.status === "cancelled" ? "历史取消记录未保存理由。" : null);
+      const cancellationReason = project.status === "cancelled" ? project.cancellation.reason : null;
       const planningBanner = cancellationReason
         ? '<div class="planning-notice cancellation"><b>取消理由</b><span title="'+escapeHtml(cancellationReason)+'">'+escapeHtml(cancellationReason)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'">查看详情</a></div>'
         : attentionCopy
@@ -625,7 +625,7 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     function taskCard(task) {
-      const copy = task.cancellation?.reason || task.description;
+      const copy = task.status === "cancelled" ? task.cancellation.reason : task.description;
       const alert = ["waiting_for_input", "blocked", "changes_requested"].includes(task.status) ? "task-alert" : "";
       const visibleStatus = ["retry_scheduled", "waiting_for_resume"].includes(task.executionStatus) ? task.executionStatus : task.status;
       return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
@@ -684,17 +684,15 @@ export function renderBoardClient(accessToken: string): string {
       const modelOptions = selected => availableModels.map(model =>
         '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
       ).join("");
-      const cancellationReason = project.cancellation?.reason || (project.status === "cancelled" ? "历史取消记录未保存理由。" : null);
+      const cancellationReason = project.status === "cancelled" ? project.cancellation.reason : null;
       const notice = cancellationReason
-        ? '<section id="planning" class="product-panel planning-panel cancellation"><div class="panel-heading"><span>取消理由</span><b>'+(project.cancellation ? escapeHtml(label(project.cancellation.decisionBasis)) : "历史记录")+'</b></div><p>'+escapeHtml(cancellationReason)+'</p>'+(project.cancellation ? '<div class="cancellation-meta">'+escapeHtml(label(project.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(project.cancellation.cancelledAt))+'</div>' : '<div class="cancellation-meta">该项目在取消理由成为必填项之前结束。</div>')+'</section>'
+        ? '<section id="planning" class="product-panel planning-panel cancellation"><div class="panel-heading"><span>取消理由</span><b>'+escapeHtml(label(project.cancellation.decisionBasis))+'</b></div><p>'+escapeHtml(cancellationReason)+'</p><div class="cancellation-meta">'+escapeHtml(label(project.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(project.cancellation.cancelledAt))+'</div></section>'
         : attention
         ? '<section id="attention" class="product-panel planning-panel '+escapeHtml(attention.kind)+'"><div class="panel-heading"><span>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</span><b>'+escapeHtml(formatTime(attention.occurredAt))+'</b></div><p>'+escapeHtml(attention.summary)+'</p>'+(attention.question ? '<div class="decision-question">'+escapeHtml(attention.question)+'</div>' : '')+'</section>'
         : '';
       const productFactsLabel = project.productFacts.status === "current"
         ? "已同步 · v"+project.productFacts.revision
-        : project.productFacts.status === "modified"
-          ? "磁盘有未记录修改 · v"+project.productFacts.revision
-          : "待归并 · v"+project.productFacts.revision;
+        : "磁盘有未记录修改 · v"+project.productFacts.revision;
       host.innerHTML =
         '<div class="page-screen product-screen">'+
           '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><a class="action-button" href="/settings">运行设置</a></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
@@ -789,7 +787,7 @@ export function renderBoardClient(accessToken: string): string {
         ? '<ul class="criteria-list '+(task.status === "done" ? "complete" : "")+'">'+task.acceptanceCriteria.map(item => '<li><i>'+(task.status === "done" ? "✓" : "")+'</i><span>'+escapeHtml(item)+'</span></li>').join("")+'</ul>'
         : '<div class="criteria-empty">未设置验收标准。</div>';
       const cancellation = task.status === "cancelled"
-        ? '<div class="cancellation-card"><b>取消理由</b><p>'+escapeHtml(task.cancellation?.reason || "历史取消记录未保存理由。")+'</p>'+(task.cancellation ? '<small>'+escapeHtml(label(task.cancellation.decisionBasis))+' · '+escapeHtml(label(task.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(task.cancellation.cancelledAt))+'</small>' : '<small>该任务在取消理由成为必填项之前结束。</small>')+'</div>'
+        ? '<div class="cancellation-card"><b>取消理由</b><p>'+escapeHtml(task.cancellation.reason)+'</p><small>'+escapeHtml(label(task.cancellation.decisionBasis))+' · '+escapeHtml(label(task.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(task.cancellation.cancelledAt))+'</small></div>'
         : '';
       const scheduledResume = task.currentExecution?.scheduledResume
         ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="action-button" type="button" data-continue-now>提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at></label><button class="action-button" type="button" data-reschedule>保存时间</button></div></section>'

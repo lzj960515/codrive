@@ -247,6 +247,7 @@ async function createFixture(options: {
     requestedAction: "develop",
     currentExecution: {
       attemptId: "attempt-current",
+      reportOpportunityId: "report_opportunity_current",
       action: "develop",
       threadId: "thread-current",
       turnId: "turn-current",

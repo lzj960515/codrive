@@ -55,7 +55,7 @@ Use Codrive to add a leaderboard to this project, then start development after I
 
 While the service is running, Codrive checks the npm latest stable release about once per hour. An open board receives the result without a page refresh and shows an update prompt when a newer version is available. **Check again** refreshes the status immediately and starts a new hourly interval.
 
-The update window shows the installed version, the latest stable release, the last check time, and separate status rows for Codrive's four managed Skills and one managed Codex Hook. Automatic checks only update this status: installation still requires your confirmation. The window can then install an exact release, restart the local service, synchronize all five bundled resources, and verify the new version. The updated service performs the final resource verification, so an older detached updater cannot omit a resource introduced by the package it installs. The command-line equivalent is:
+The update window shows the installed version, the latest stable release, the last check time, and separate status rows for Codrive's four managed Skills and one managed Codex Hook. Automatic checks only update this status: installation still requires your confirmation. The window can then install an exact release, restart the local service, synchronize and verify all five bundled resources, and verify the new version before recording success. The command-line equivalent is:
 
 ```bash
 codrive upgrade
@@ -82,7 +82,7 @@ The same in-memory bridge keeps a Hook `lastSeen` window for the exact task exec
 
 Codrive persists lifecycle state and enforces scheduling boundaries; Codex handles the work that requires judgment. Projects have independent concurrency limits, and planning runs again when its facts change rather than whenever a slot happens to become free.
 
-`PROJECT.md` is the single current product-facts source for every project and task turn. After registration, Agents edit that local file directly and send a small change notification containing document revisions and digests instead of retransmitting the full document. Codrive validates the file, records the decision summary in its append-only event history, replaces stale task selection, and replans. Legacy product notes remain audit evidence and require one explicit reconciliation instead of being concatenated into the document. See [Product facts lifecycle](./docs/architecture/product-facts.md).
+`PROJECT.md` is the single current product-facts source for every project and task turn. After registration, Agents edit that local file directly and send a small change notification containing document revisions and digests instead of retransmitting the full document. Codrive validates the file, records the decision summary in its append-only event history, replaces stale task selection, and replans. Codrive accepts only the current persisted-state schema and does not convert earlier product-context data. See [Product facts lifecycle](./docs/architecture/product-facts.md).
 
 Review findings represent real delivery blockers in supported product and operational paths, not unconditional rework instructions. The development conversation fixes valid issues or records evidence for findings that do not apply; the same independent review conversation then reevaluates the current candidate and that evidence.
 

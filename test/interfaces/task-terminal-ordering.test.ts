@@ -30,10 +30,15 @@ describe("terminal task ordering", () => {
     ]);
   });
 
-  it("keeps legacy tasks without a terminal timestamp after dated tasks", () => {
-    const legacy = { id: "task-legacy", order: 0, terminalAt: null };
+  it("uses workflow order as a deterministic tie breaker", () => {
+    const sameTime = [
+      { id: "task-second", order: 2, terminalAt: tasks[0]!.terminalAt },
+      { id: "task-first", order: 1, terminalAt: tasks[0]!.terminalAt },
+    ];
 
-    expect(sortTerminalTasks([legacy, ...tasks], "desc").at(-1)).toBe(legacy);
-    expect(sortTerminalTasks([legacy, ...tasks], "asc").at(-1)).toBe(legacy);
+    expect(sortTerminalTasks(sameTime, "desc").map(({ id }) => id)).toEqual([
+      "task-first",
+      "task-second",
+    ]);
   });
 });

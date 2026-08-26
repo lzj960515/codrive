@@ -293,6 +293,7 @@ describe("RecoveryManager", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "attempt_1",
+        reportOpportunityId: "report_opportunity_1",
         action: "develop",
         status: "waiting_for_resume",
         startedAt: "2026-08-02T23:00:00.000Z",
@@ -373,6 +374,7 @@ describe("RecoveryManager", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "attempt_1",
+        reportOpportunityId: "report_opportunity_1",
         action: "develop",
         status: "waiting_for_resume",
         startedAt: "2026-08-02T23:00:00.000Z",
@@ -456,6 +458,7 @@ describe("RecoveryManager", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "active_attempt",
+        reportOpportunityId: "report_opportunity_active",
         action: "develop",
         status: "running",
         startedAt: "2026-08-02T23:00:00.000Z",
@@ -470,6 +473,7 @@ describe("RecoveryManager", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "waiting_attempt",
+        reportOpportunityId: "report_opportunity_waiting",
         action: "develop",
         status: "waiting_for_resume",
         startedAt: "2026-08-02T23:00:00.000Z",
@@ -638,8 +642,11 @@ describe("RecoveryManager", () => {
         status: "running",
         attemptId: execution.attemptId,
         threadId: execution.threadId,
-        reportOpportunityId: deferredOpportunityId,
+        reportOpportunityId: expect.any(String),
       });
+      expect(
+        (await store.findTask(taskId))!.task.currentExecution!.reportOpportunityId,
+      ).not.toBe(deferredOpportunityId);
     } finally {
       recovery.stop();
       setTimeoutSpy.mockRestore();
@@ -1496,7 +1503,7 @@ describe("RecoveryManager", () => {
     activityBridge.close();
   });
 
-  it("does not let the legacy lease scan bypass an uncertain exact-turn snapshot", async () => {
+  it("does not let the periodic lease scan bypass an uncertain exact-turn snapshot", async () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const activityBridge = new ExecutionActivityBridge({
       store,
@@ -1599,6 +1606,7 @@ describe("RecoveryManager", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "attempt_1",
+        reportOpportunityId: "report_opportunity_1",
         action: "develop",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -1759,6 +1767,7 @@ describe("RecoveryManager", () => {
       status: "done",
     });
     await idleStore.appendEvent({
+      schemaVersion: 1,
       eventId: "activity_event_integrated",
       type: "task.activity_recorded",
       projectId: created.project.id,

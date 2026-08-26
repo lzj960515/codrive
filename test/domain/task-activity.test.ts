@@ -71,6 +71,7 @@ describe("task activities", () => {
     const report: TaskReport = {
       taskId,
       attemptId: "attempt_1",
+      reportOpportunityId: "report_opportunity_1",
       outcome: "blocked",
       summary: "Wait for the deployment",
       resumeAt: "2026-08-11T02:00:00.000Z",
@@ -194,14 +195,20 @@ describe("task activities", () => {
 
 function createActivity(
   action: TaskAction,
-  report: TaskReport,
+  report: Omit<TaskReport, "reportOpportunityId"> & {
+    reportOpportunityId?: string;
+  },
   threadId = "thread_1",
 ) {
+  const currentReport: TaskReport = {
+    reportOpportunityId: `report_opportunity_${report.attemptId}_${report.outcome}`,
+    ...report,
+  };
   return createTaskReportActivity({
-    activityId: `activity_${report.attemptId}_${report.outcome}`,
+    activityId: `activity_${currentReport.attemptId}_${currentReport.outcome}`,
     projectId,
     action,
-    report,
+    report: currentReport,
     threadId,
     occurredAt,
   });
@@ -211,6 +218,7 @@ function reportFor(outcome: TaskReport["outcome"]): TaskReport {
   return {
     taskId,
     attemptId: "attempt_1",
+    reportOpportunityId: "report_opportunity_1",
     outcome,
     summary: "Stage result",
     ...(outcome === "completed"

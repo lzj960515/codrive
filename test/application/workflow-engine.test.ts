@@ -192,52 +192,6 @@ async function waitForScheduledResume(
   };
 }
 
-async function resumePersistedLegacyScheduledExecution() {
-  const { projectId, taskId, execution } = await startTaskAtAction("develop");
-  const running = (await store.findTask(taskId))!.task;
-  const legacyRunningExecution = { ...running.currentExecution! };
-  delete legacyRunningExecution.reportOpportunityId;
-  await store.saveTask(projectId, {
-    ...running,
-    currentExecution: legacyRunningExecution,
-  });
-
-  const blockedReport = {
-    taskId,
-    attemptId: execution.attemptId,
-    outcome: "blocked" as const,
-    summary: "Wait for the legacy deployment",
-    resumeAt: "2026-08-03T02:00:00.000Z",
-    resumePrompt: "Inspect the legacy deployment and continue.",
-  };
-  await workflow.submitReport(blockedReport);
-  await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
-  await workflow.continueTaskNow(taskId);
-
-  const resumed = (await store.findTask(taskId))!.task;
-  const legacyResumedExecution = { ...resumed.currentExecution! };
-  delete legacyResumedExecution.reportOpportunityId;
-  await store.saveTask(projectId, {
-    ...resumed,
-    currentExecution: legacyResumedExecution,
-  });
-
-  const legacyResumed = (await store.findTask(taskId))!.task;
-  expect(legacyResumed.currentExecution).toMatchObject({
-    attemptId: execution.attemptId,
-    status: "running",
-  });
-  expect(legacyResumed.currentExecution).not.toHaveProperty("reportOpportunityId");
-  expect(legacyResumed.currentExecution).not.toHaveProperty("submittedActivityId");
-  expect(
-    (await store.listTaskActivities(projectId, taskId)).filter(
-      ({ type }) => type === "scheduled_resume_started",
-    ),
-  ).toHaveLength(1);
-
-  return { projectId, taskId, execution, blockedReport };
-}
-
 function successfulReportForAction(
   action: NonNullable<Task["requestedAction"]>,
   taskId: string,
@@ -861,6 +815,7 @@ describe("WorkflowEngine", () => {
         requestedAction: "develop",
         currentExecution: {
           attemptId: `busy_${index}`,
+          reportOpportunityId: `report_opportunity_busy_${index}`,
           action: "develop",
           status: "running",
           startedAt: "2026-08-03T00:00:00.000Z",
@@ -941,6 +896,7 @@ describe("WorkflowEngine", () => {
       requestedAction: "review",
       currentExecution: {
         attemptId: "developed",
+        reportOpportunityId: "report_opportunity_developed",
         action: "develop",
         status: "completed",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -1002,6 +958,7 @@ describe("WorkflowEngine", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "attempt_1",
+        reportOpportunityId: "report_opportunity_1",
         action: "develop",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -1054,6 +1011,7 @@ describe("WorkflowEngine", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "attempt_active",
+        reportOpportunityId: "report_opportunity_active",
         action: "develop",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -1289,7 +1247,6 @@ describe("WorkflowEngine", () => {
       productFacts: {
         revision: 2,
         digest: digest(productDocument),
-        status: "current",
       },
       planning: { revision: 2, changeReason: "product_document_updated" },
       currentExecution: { action: "select_tasks", planningRevision: 2 },
@@ -1357,38 +1314,6 @@ describe("WorkflowEngine", () => {
     expect((await store.findTask(created.tasks[0]!.id))!.task.requestedAction).toBe(
       null,
     );
-  });
-
-  it("resumes planning after an unchanged legacy document is explicitly reconciled", async () => {
-    const created = await store.createProject({
-      name: "Legacy Game",
-      repositoryPath: "/workspace/game",
-      defaultBranch: "main",
-      productDocument: "# Legacy Game\n",
-      tasks: [{ title: "Task", description: "Build", acceptanceCriteria: [] }],
-    });
-    await store.saveProject({
-      ...created.project,
-      productFacts: {
-        ...created.project.productFacts,
-        status: "reconciliation_required",
-        reconciliationReason: "legacy_context_notes",
-      },
-    });
-
-    const project = await workflow.updateProductDocument(created.project.id, {
-      decisionSummary: "Confirm PROJECT.md as the complete current product facts.",
-      expectedRevision: created.project.productFacts.revision,
-      expectedDigest: created.project.productFacts.digest,
-      documentDigest: created.project.productFacts.digest,
-    });
-
-    expect(project).toMatchObject({
-      productFacts: { revision: 2, status: "current" },
-      planning: { revision: 2, changeReason: "product_facts_reconciled" },
-      currentExecution: { action: "select_tasks", planningRevision: 2 },
-    });
-    expect(project.productFacts).not.toHaveProperty("reconciliationReason");
   });
 
   it("restarts temporary project selection when new work changes its facts", async () => {
@@ -1595,6 +1520,7 @@ describe("WorkflowEngine", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "attempt_1",
+        reportOpportunityId: "report_opportunity_1",
         action: "develop",
         status: "waiting_for_input",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -1868,7 +1794,7 @@ describe("WorkflowEngine", () => {
       reportOpportunityId: requiredReportOpportunity(originalExecution),
       outcome: "needs_input" as const,
       summary: "The meeting exposed one product choice",
-      question: "Should the task keep the compatibility mode?",
+      question: "Should the task keep the temporary mode?",
     };
     await expect(workflow.submitReport(decisionReport)).rejects.toThrow(
       /conflicts with the recorded result/i,
@@ -1936,7 +1862,7 @@ describe("WorkflowEngine", () => {
     );
   });
 
-  it("rejects an old report before the early resumed turn submits its result", async () => {
+  it("rejects a stale report before the early resumed turn submits its result", async () => {
     const { projectId, taskId, execution: originalExecution } =
       await startTaskAtAction("develop");
     const originalOpportunityId =
@@ -1993,7 +1919,9 @@ describe("WorkflowEngine", () => {
       candidateCommit: "candidate_1",
     };
 
-    await expect(workflow.submitReport(report)).rejects.toThrow(
+    await expect(
+      workflow.submitReport(report as unknown as TaskReport),
+    ).rejects.toThrow(
       /report opportunity/i,
     );
     await expect(
@@ -2009,89 +1937,33 @@ describe("WorkflowEngine", () => {
     ).toHaveLength(0);
   });
 
-  it("accepts a persisted legacy execution report without an opportunity", async () => {
+  it("rejects a persisted execution that lacks the current report identity", async () => {
     const { projectId, taskId, execution } = await startTaskAtAction("develop");
     const found = (await store.findTask(taskId))!.task;
-    const legacyExecution = { ...found.currentExecution! };
-    delete legacyExecution.reportOpportunityId;
+    const { reportOpportunityId: _reportOpportunityId, ...invalidExecution } =
+      found.currentExecution!;
     await store.saveTask(projectId, {
       ...found,
-      currentExecution: legacyExecution,
+      currentExecution:
+        invalidExecution as unknown as NonNullable<Task["currentExecution"]>,
     });
     const report = {
       taskId,
       attemptId: execution.attemptId,
       outcome: "completed" as const,
-      summary: "Implemented by an execution persisted before the upgrade",
+      summary: "Implemented without a current report identity",
       workspacePath: "/workspace/game/.worktrees/task_1",
-      candidateCommit: "candidate_legacy",
+      candidateCommit: "candidate_without_identity",
     };
 
-    const reported = await workflow.submitReport(report);
-    const activityCount = (await store.listTaskActivities(projectId, taskId)).length;
-    await workflow.submitReport(report);
-
-    expect(reported.currentExecution?.submittedActivityId).toBeDefined();
-    expect(await store.listTaskActivities(projectId, taskId)).toHaveLength(
-      activityCount,
+    await expect(
+      workflow.submitReport(report as unknown as TaskReport),
+    ).rejects.toThrow(
+      /report opportunity/i,
     );
     expect(
-      (await store.listTaskActivities(projectId, taskId)).at(-1),
-    ).not.toHaveProperty("reportOpportunityId");
-  });
-
-  it("accepts the first new report from a persisted legacy resumed execution", async () => {
-    const { projectId, taskId, execution } =
-      await resumePersistedLegacyScheduledExecution();
-    const completedReport = {
-      taskId,
-      attemptId: execution.attemptId,
-      outcome: "completed" as const,
-      summary: "Completed after the legacy scheduled resume",
-      workspacePath: "/workspace/game/.worktrees/task_1",
-      candidateCommit: "candidate_after_legacy_resume",
-    };
-
-    const reported = await workflow.submitReport(completedReport);
-    const reportActivities = (
       await store.listTaskActivities(projectId, taskId)
-    ).filter(({ attemptId, outcome }) =>
-      attemptId === execution.attemptId && outcome !== undefined,
-    );
-    await workflow.submitReport(completedReport);
-
-    expect(reported.currentExecution?.submittedActivityId).toBe(
-      reportActivities.at(-1)?.id,
-    );
-    expect(reportActivities.map(({ outcome }) => outcome)).toEqual([
-      "blocked",
-      "completed",
-    ]);
-    expect(
-      (await store.listTaskActivities(projectId, taskId)).filter(
-        ({ attemptId, outcome }) =>
-          attemptId === execution.attemptId && outcome !== undefined,
-      ),
-    ).toHaveLength(2);
-  });
-
-  it("rejects an exact historical report replay for a legacy resumed execution", async () => {
-    const { projectId, taskId, execution, blockedReport } =
-      await resumePersistedLegacyScheduledExecution();
-    const activityCount = (
-      await store.listTaskActivities(projectId, taskId)
-    ).length;
-
-    await expect(workflow.submitReport(blockedReport)).rejects.toThrow(
-      /conflicts with the recorded result/i,
-    );
-    expect(await store.listTaskActivities(projectId, taskId)).toHaveLength(
-      activityCount,
-    );
-    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
-      attemptId: execution.attemptId,
-      status: "running",
-    });
+    ).toHaveLength(0);
   });
 
   it("accepts a new planned blocker after a rescheduled wait resumes", async () => {
@@ -3379,6 +3251,7 @@ describe("WorkflowEngine", () => {
       requestedAction: "integrate",
       currentExecution: {
         attemptId: "integrate_1",
+        reportOpportunityId: "report_opportunity_integrate_1",
         action: "integrate",
         status: "waiting_for_input",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -3413,6 +3286,7 @@ describe("WorkflowEngine", () => {
       requestedAction: "integrate",
       currentExecution: {
         attemptId: "integrate_waiting",
+        reportOpportunityId: "report_opportunity_integrate_waiting",
         action: "integrate",
         status: "waiting_for_resume",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -3455,6 +3329,7 @@ describe("WorkflowEngine", () => {
         requestedAction: "develop",
         currentExecution: {
           attemptId: `wait_${index}`,
+          reportOpportunityId: `report_opportunity_wait_${index}`,
           action: "develop",
           status: "waiting_for_resume",
           startedAt: "2026-08-02T23:00:00.000Z",

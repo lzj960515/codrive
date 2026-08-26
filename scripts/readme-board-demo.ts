@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -7,9 +8,10 @@ import type {
   Task,
   TaskActivity,
 } from "../src/domain/types.js";
-import { ProjectStore } from "../src/infrastructure/project-store.js";
-import { renderBoardPage } from "../src/interfaces/http/board.js";
-import { createHttpServer } from "../src/interfaces/http/server.js";
+// Browser functions are serialized into the page, so the demo loads production output.
+import { ProjectStore } from "../dist/infrastructure/project-store.js";
+import { renderBoardPage } from "../dist/interfaces/http/board.js";
+import { createHttpServer } from "../dist/interfaces/http/server.js";
 
 // README artwork always rebuilds this synthetic store instead of reading local state.
 const demoHome = join(process.cwd(), "tmp", "readme-board-demo-home");
@@ -27,17 +29,6 @@ const server = createHttpServer({
       throw new Error("The README demo is read-only");
     },
   } as never,
-  skillInstaller: {
-    getStatus: async () => ({
-      state: "current",
-      bundledVersion: "0.6.1",
-      managedSkillCount: 4,
-      conflictPaths: [],
-    }),
-    install: async () => {
-      throw new Error("The README demo is read-only");
-    },
-  } as never,
   settingsService: {
     read: async () => ({
       settings: {
@@ -46,26 +37,60 @@ const server = createHttpServer({
       },
       availableModels: [],
     }),
+    readProject: async () => ({
+      settings: {
+        modelConfig: null,
+        effectiveModels: {
+          primary: "gpt-5.6-sol",
+          fallback: "gpt-5.6-terra",
+        },
+        source: "global",
+      },
+      globalModels: {
+        primary: "gpt-5.6-sol",
+        fallback: "gpt-5.6-terra",
+      },
+      availableModels: [],
+    }),
     update: async () => {
+      throw new Error("The README demo is read-only");
+    },
+    updateProject: async () => {
       throw new Error("The README demo is read-only");
     },
   } as never,
   systemUpdateService: {
     read: async () => ({
       version: {
-        currentVersion: "0.6.1",
-        latestVersion: "0.6.1",
+        currentVersion: "0.9.0",
+        latestVersion: "0.9.0",
         updateAvailable: false,
         checking: false,
         lastCheckedAt: timestamp,
       },
       upgrade: null,
-      skills: {
+      resources: {
         state: "current",
-        bundledVersion: "0.6.1",
+        bundledVersion: "0.9.0",
         managedSkillCount: 4,
+        managedHookCount: 1,
         conflictPaths: [],
+        skills: {
+          state: "current",
+          bundledVersion: "0.9.0",
+          installedVersion: "0.9.0",
+          managedSkillCount: 4,
+          conflictPaths: [],
+        },
+        hook: {
+          state: "current",
+          bundledVersion: "0.9.0",
+          installedVersion: "0.9.0",
+          managedHookCount: 1,
+          conflictPaths: [],
+        },
       },
+      hookRuntime: { state: "ready", definitionCount: 4 },
     }),
     refresh: async () => {
       throw new Error("The README demo is read-only");
@@ -73,11 +98,11 @@ const server = createHttpServer({
     start: async () => {
       throw new Error("The README demo is read-only");
     },
-    installSkills: async () => {
+    installResources: async () => {
       throw new Error("The README demo is read-only");
     },
   } as never,
-  currentVersion: "0.6.1",
+  currentVersion: "0.9.0",
   accessToken: "readme-demo-token",
 });
 
@@ -114,7 +139,7 @@ async function seedDemoState() {
   await mkdir(join(demoHome, "projects"), { recursive: true });
   await writeFile(
     join(demoHome, "state-schema.json"),
-    `${JSON.stringify({ schemaVersion: 2, migratedAt: timestamp }, null, 2)}\n`,
+    `${JSON.stringify({ schemaVersion: 3, createdAt: timestamp }, null, 2)}\n`,
     "utf8",
   );
 
@@ -177,7 +202,13 @@ function lumaquillProject(): ProjectSnapshot & {
   productDocument: string;
 } {
   const projectId = "project_00_lumaquill_studio";
-  const project = baseProject(projectId, "Lumaquill 内容工作室");
+  const productDocument =
+    "# Lumaquill 内容工作室\n\n让小型内容团队从选题到发布保持一份可追溯的进度。\n";
+  const project = baseProject(
+    projectId,
+    "Lumaquill 内容工作室",
+    productDocument,
+  );
   const tasks: Task[] = [
     task(projectId, 1, "梳理下季度选题池", "汇总读者问题并形成可排期的主题清单。", "backlog"),
     {
@@ -202,6 +233,11 @@ function lumaquillProject(): ProjectSnapshot & {
     {
       ...task(projectId, 5, "确定首批发布渠道", "为首轮内容确定邮件、博客与播客的优先级。", "waiting_for_input"),
       requestedAction: "develop",
+      currentExecution: execution(
+        "develop",
+        "waiting_for_input",
+        "thread_demo_channel_decision",
+      ),
     },
     task(projectId, 6, "生成周度复盘摘要", "汇总发布表现、读者反馈与下周动作。", "backlog"),
     task(projectId, 7, "建立内容资产目录", "统一索引图片、音频与引用来源。", "done"),
@@ -216,6 +252,7 @@ function lumaquillProject(): ProjectSnapshot & {
         action: "develop",
         outcome: "completed",
         attemptId: "attempt_demo_quality_development",
+        reportOpportunityId: "report_opportunity_demo_quality_development",
         summary: "质量门已覆盖标题、链接和授权状态，并提供清晰的失败说明。",
         occurredAt: "2026-08-12T15:20:00.000+08:00",
         threadId: "thread_demo_quality_development",
@@ -227,7 +264,7 @@ function lumaquillProject(): ProjectSnapshot & {
         },
       }),
     ],
-    productDocument: "# Lumaquill 内容工作室\n\n让小型内容团队从选题到发布保持一份可追溯的进度。\n",
+    productDocument,
   };
 }
 
@@ -236,17 +273,18 @@ function simpleProject(
   name: string,
   entries: Array<[string, Task["status"]]>,
 ): ProjectSnapshot & { activities: TaskActivity[]; productDocument: string } {
+  const productDocument = `# ${name}\n\n隔离演示项目。\n`;
   return {
-    project: baseProject(id, name),
+    project: baseProject(id, name, productDocument),
     tasks: entries.map(([title, status], index) =>
       task(id, index + 1, title, "在清晰的验收边界内持续推进这项工作。", status),
     ),
     activities: [],
-    productDocument: `# ${name}\n\n隔离演示项目。\n`,
+    productDocument,
   };
 }
 
-function baseProject(id: string, name: string): Project {
+function baseProject(id: string, name: string, productDocument: string): Project {
   return {
     id,
     name,
@@ -260,6 +298,11 @@ function baseProject(id: string, name: string): Project {
       evaluatedRevision: 3,
       changedAt: timestamp,
       changeReason: "task_completed",
+    },
+    productFacts: {
+      revision: 1,
+      digest: `sha256:${createHash("sha256").update(productDocument).digest("hex")}`,
+      changedAt: "2026-08-08T10:00:00.000+08:00",
     },
     createdAt: "2026-08-08T10:00:00.000+08:00",
     updatedAt: timestamp,
@@ -289,15 +332,16 @@ function task(
 
 function execution(
   action: "develop" | "review" | "integrate",
-  status: "running" | "awaiting_report",
+  status: "running" | "awaiting_report" | "waiting_for_input",
   threadId: string,
 ) {
   return {
-    attemptId: `attempt_demo_${action}`,
+    attemptId: `attempt_${threadId}`,
+    reportOpportunityId: `report_opportunity_${threadId}`,
     action,
     status,
     threadId,
-    turnId: `turn_demo_${action}`,
+    turnId: `turn_${threadId}`,
     turnStartedAt: timestamp,
     startedAt: timestamp,
     modelRouting: { model: "gpt-5.6-sol", route: "primary" as const, retryCount: 0 },

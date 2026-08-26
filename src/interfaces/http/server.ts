@@ -14,8 +14,6 @@ import {
 import type { CodriveCommand, Project, Task } from "../../domain/types.js";
 import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
-import type { ManagedResourceInstaller } from "../../infrastructure/managed-resource-installer.js";
-import type { SkillInstaller } from "../../infrastructure/skill-installer.js";
 import { renderBoardPage } from "./board.js";
 import { createBoardView } from "./board-view.js";
 import { createProjectDetailView } from "./project-detail-view.js";
@@ -30,15 +28,13 @@ export interface HttpServerDependencies {
     ExecutionActivityBridge,
     "read" | "subscribe" | "isCurrent" | "recordHook"
   >;
-  skillInstaller: SkillInstaller;
-  resourceInstaller?: ManagedResourceInstaller;
   settingsService: Pick<
     SystemSettingsService,
     "read" | "update" | "readProject" | "updateProject"
   >;
   systemUpdateService?: Pick<
     SystemUpdateService,
-    "read" | "refresh" | "start" | "installResources" | "installSkills"
+    "read" | "refresh" | "start" | "installResources"
   >;
   systemUpdateEvents?:
     | SystemStatusEventSource
@@ -67,7 +63,7 @@ const projectInputSchema = z.object({
 const taskReportSchema = z.object({
   taskId: z.string().min(1),
   attemptId: z.string().min(1),
-  reportOpportunityId: z.string().min(1).optional(),
+  reportOpportunityId: z.string().min(1),
   outcome: z.enum([
     "completed",
     "approved",
@@ -132,10 +128,6 @@ const productDocumentChangeSchema = z.object({
 const commandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("system.install_resources"),
-    payload: z.object({}),
-  }),
-  z.object({
-    type: z.literal("system.install_skills"),
     payload: z.object({}),
   }),
   z.object({
@@ -338,13 +330,12 @@ export function createHttpServer(
     },
   );
 
-  server.get("/api/system", async () =>
-    dependencies.systemUpdateService
-      ? dependencies.systemUpdateService.read()
-      : dependencies.resourceInstaller
-        ? projectResourceStatus(await dependencies.resourceInstaller.getStatus())
-        : { skills: await dependencies.skillInstaller.getStatus() },
-  );
+  server.get("/api/system", async () => {
+    if (!dependencies.systemUpdateService) {
+      throw new Error("System updates are unavailable");
+    }
+    return dependencies.systemUpdateService.read();
+  });
   server.get("/api/system/settings", async () => dependencies.settingsService.read());
 
   server.get<{ Params: { taskId: string } }>(
@@ -429,21 +420,11 @@ export function createHttpServer(
       );
     }
     const command = commandSchema.parse(request.body);
-    if (
-      command.type === "system.install_resources" ||
-      command.type === "system.install_skills"
-    ) {
-      if (dependencies.systemUpdateService) {
-        return dependencies.systemUpdateService.installResources();
+    if (command.type === "system.install_resources") {
+      if (!dependencies.systemUpdateService) {
+        throw new Error("System updates are unavailable");
       }
-      if (dependencies.resourceInstaller) {
-        await dependencies.resourceInstaller.install();
-        return projectResourceStatus(
-          await dependencies.resourceInstaller.getStatus(),
-        );
-      }
-      await dependencies.skillInstaller.install();
-      return { skills: await dependencies.skillInstaller.getStatus() };
+      return dependencies.systemUpdateService.installResources();
     }
     if (command.type === "system.check_for_updates") {
       if (!dependencies.systemUpdateService) {
@@ -476,16 +457,6 @@ export function createHttpServer(
   });
 
   return server;
-}
-
-function projectResourceStatus(
-  resources: Awaited<ReturnType<ManagedResourceInstaller["getStatus"]>>,
-) {
-  return {
-    resources,
-    skills: resources.skills,
-    hook: resources.hook,
-  };
 }
 
 function isPagePath(path: string): boolean {
@@ -529,16 +500,9 @@ async function productFactsContext(store: ProjectStore, project: Project) {
   const document = await store.readProductDocumentSnapshot(project.id);
   return {
     status:
-      project.productFacts.status === "reconciliation_required"
-        ? "reconciliation_required"
-        : document.digest === project.productFacts.digest
-          ? "current"
-          : "modified",
+      document.digest === project.productFacts.digest ? "current" : "modified",
     revision: project.productFacts.revision,
     acceptedDigest: project.productFacts.digest,
     documentDigest: document.digest,
-    ...(project.productFacts.reconciliationReason
-      ? { reconciliationReason: project.productFacts.reconciliationReason }
-      : {}),
   };
 }

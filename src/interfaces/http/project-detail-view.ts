@@ -10,24 +10,17 @@ export function createProjectDetailView(
   const { project } = snapshot;
   const { attention, ...projectView } = board.project;
   const tasksById = new Map(snapshot.tasks.map((task) => [task.id, task]));
+  const documentDigest = productDocumentDigest(productDocument);
   return {
     project: {
       ...projectView,
       repositoryPath: project.repositoryPath,
       defaultBranch: project.defaultBranch,
       productFacts: {
-        status:
-          project.productFacts.status === "reconciliation_required"
-            ? "reconciliation_required"
-            : productDocumentDigest(productDocument) === project.productFacts.digest
-              ? "current"
-              : "modified",
+        status: documentDigest === project.productFacts.digest ? "current" : "modified",
         revision: project.productFacts.revision,
         acceptedDigest: project.productFacts.digest,
-        documentDigest: productDocumentDigest(productDocument),
-        ...(project.productFacts.reconciliationReason
-          ? { reconciliationReason: project.productFacts.reconciliationReason }
-          : {}),
+        documentDigest,
       },
       createdAt: project.createdAt,
     },

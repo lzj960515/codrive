@@ -73,7 +73,6 @@ const project: Project = {
       productFacts: {
         revision: 1,
         digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        status: "current",
         changedAt: timestamp,
       },
       createdAt: timestamp,
@@ -92,6 +91,7 @@ function task(overrides: Partial<Task> = {}): Task {
     requestedAction: "develop",
     currentExecution: {
       attemptId: "attempt_1",
+      reportOpportunityId: "report_opportunity_attempt_1",
       action: "develop",
       status: "pending",
       startedAt: timestamp,
@@ -156,6 +156,7 @@ describe("CodexTaskDispatcher", () => {
       requestedAction: "review",
       currentExecution: {
         attemptId: "review_1",
+        reportOpportunityId: "report_opportunity_review_1",
         action: "review",
         status: "pending",
         startedAt: timestamp,
@@ -166,6 +167,7 @@ describe("CodexTaskDispatcher", () => {
       requestedAction: "rework",
       currentExecution: {
         attemptId: "rework_1",
+        reportOpportunityId: "report_opportunity_rework_1",
         action: "rework",
         status: "pending",
         startedAt: timestamp,
@@ -177,6 +179,7 @@ describe("CodexTaskDispatcher", () => {
       requestedAction: "integrate",
       currentExecution: {
         attemptId: "integrate_1",
+        reportOpportunityId: "report_opportunity_integrate_1",
         action: "integrate",
         status: "pending",
         startedAt: timestamp,
@@ -221,6 +224,7 @@ describe("CodexTaskDispatcher", () => {
       requestedAction: "review",
       currentExecution: {
         attemptId: "review_2",
+        reportOpportunityId: "report_opportunity_review_2",
         action: "review",
         status: "pending",
         startedAt: timestamp,
@@ -256,6 +260,7 @@ describe("CodexTaskDispatcher", () => {
       requestedAction: "review",
       currentExecution: {
         attemptId: "review_1",
+        reportOpportunityId: "report_opportunity_review_1",
         action: "review",
         status: "pending",
         startedAt: timestamp,
@@ -269,6 +274,7 @@ describe("CodexTaskDispatcher", () => {
       requestedAction: "review",
       currentExecution: {
         attemptId: "review_1_other",
+        reportOpportunityId: "report_opportunity_review_1_other",
         action: "review",
         status: "pending",
         startedAt: timestamp,
@@ -349,6 +355,7 @@ describe("CodexTaskDispatcher", () => {
       requestedAction: "review",
       currentExecution: {
         attemptId: "review_1",
+        reportOpportunityId: "report_opportunity_review_1",
         action: "review",
         status: "pending",
         startedAt: timestamp,
@@ -359,6 +366,7 @@ describe("CodexTaskDispatcher", () => {
       requestedAction: "rework",
       currentExecution: {
         attemptId: "rework_1",
+        reportOpportunityId: "report_opportunity_rework_1",
         action: "rework",
         status: "pending",
         startedAt: timestamp,
@@ -383,6 +391,7 @@ describe("CodexTaskDispatcher", () => {
       requestedAction: "review",
       currentExecution: {
         attemptId: "review_1",
+        reportOpportunityId: "report_opportunity_review_1",
         action: "review",
         status: "waiting_for_resume",
         startedAt: timestamp,
@@ -422,6 +431,7 @@ describe("CodexTaskDispatcher", () => {
       task({
         currentExecution: {
           attemptId: "attempt_2",
+          reportOpportunityId: "report_opportunity_attempt_2",
           action: "rework",
           status: "pending",
           startedAt: timestamp,
@@ -446,6 +456,7 @@ describe("CodexTaskDispatcher", () => {
     const active = task({
       currentExecution: {
         attemptId: "attempt_1",
+        reportOpportunityId: "report_opportunity_attempt_1",
         action: "develop",
         status: "running",
         startedAt: timestamp,

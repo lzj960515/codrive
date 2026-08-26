@@ -19,6 +19,7 @@ const occupiedExecutionStatuses = new Set([
 export function startTaskExecution(
   task: Task,
   attemptId: string,
+  reportOpportunityId: string,
   now: string,
   modelRouting: ExecutionModelRouting,
 ): Task {
@@ -38,6 +39,7 @@ export function startTaskExecution(
     status: statusForAction(action),
     currentExecution: {
       attemptId,
+      reportOpportunityId,
       action,
       status: "pending",
       startedAt: now,

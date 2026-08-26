@@ -24,7 +24,7 @@ node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-
 
 读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities` 和仓库 `AGENTS.md`。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务定义、当前状态和已有证据恢复连续上下文。
 
-`productFacts.status` 为 `modified` 时，磁盘文件尚未完成 Codrive 通知；负责这次修改的对话先用 `$codrive-control` 记录文档变更。状态为 `reconciliation_required` 时，旧产品上下文可能与文档冲突；项目选择停止，任务对话使用 `needs_input` 请求完成 `PROJECT.md` 归并，不自行采用旧文本。
+`productFacts.status` 为 `modified` 时，磁盘文件尚未完成 Codrive 通知；负责这次修改的对话先用 `$codrive-control` 记录文档变更。项目选择在状态恢复为 `current` 前保持停止。
 
 处理项目级任务选择时运行：
 
@@ -97,7 +97,7 @@ Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查
 node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 ```
 
-每份报告包含刚刚读取的 `context` 返回的 `attemptId` 和非空 `reportOpportunityId`，以及当前阶段允许的 `outcome` 和简明 `summary`。直接原样使用这两个执行身份，不从 turn、活动或历史 context 推导。升级前已经在途的旧执行可能返回 `reportOpportunityId: null`；仅在这个兼容场景省略该字段，后续 context 一旦返回非空值就按当前身份提交。Codrive 将每个报告机会的首次成功报告追加为一条不可变活动；同一机会的完全相同报告幂等返回，不追加活动。各阶段同时提供后续流程依赖的事实：
+每份报告包含刚刚读取的 `context` 返回的 `attemptId` 和非空 `reportOpportunityId`，以及当前阶段允许的 `outcome` 和简明 `summary`。直接原样使用这两个执行身份，不从 turn、活动或历史 context 推导。缺少任一身份时停止提交并重新读取 context。Codrive 将每个报告机会的首次成功报告追加为一条不可变活动；同一机会的完全相同报告幂等返回，不追加活动。各阶段同时提供后续流程依赖的事实：
 
 - `develop` 完成：`workspacePath`、`baseCommit`、`candidateCommit`、`tests`。
 - `rework` 完成：`candidateCommit`、`tests`，并在 `summary` 中记录 findings 的处理结论。

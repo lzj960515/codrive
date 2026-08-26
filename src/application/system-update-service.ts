@@ -29,8 +29,6 @@ export class SystemUpdateService {
       version,
       upgrade,
       resources,
-      skills: resources.skills,
-      hook: resources.hook,
       hookRuntime,
     };
   }
@@ -61,9 +59,5 @@ export class SystemUpdateService {
       await this.upgrades.completeAfterResourceRepair(version.currentVersion);
     }
     return this.read();
-  }
-
-  installSkills() {
-    return this.installResources();
   }
 }

@@ -4,17 +4,16 @@ This page defines how Codrive keeps one current product truth while preserving h
 
 ## Ownership
 
-`PROJECT.md` is the only current product-facts document read by project selection and task work. `Project.productFacts` records the accepted document revision, SHA-256 digest, synchronization status, and change time. Decision summaries belong to append-only lifecycle events and are not copied into Agent context.
+`PROJECT.md` is the only current product-facts document read by project selection and task work. `Project.productFacts` records the accepted document revision, SHA-256 digest, and change time. Decision summaries belong to append-only lifecycle events and are not copied into Agent context.
 
-The product document has three observable states:
+The product document has two observable states:
 
 | Status | Meaning | Scheduling behavior |
 | --- | --- | --- |
 | `current` | The file digest matches the accepted revision. | Project selection may run. |
 | `modified` | The live file differs from the accepted digest. This is computed at the HTTP read boundary. | The editor records the local change before further selection. |
-| `reconciliation_required` | Codrive found legacy notes, an empty file, or an unrecorded change during startup. | New project selection remains stopped until one explicit reconciliation. |
 
-Task activities and product lifecycle events remain historical evidence. Agents use them to understand execution and audit decisions, while current product behavior comes from `PROJECT.md`.
+Task activities remain in task context as execution history. Product lifecycle events are audit-only and are not returned by project or task context. Current product behavior comes from `PROJECT.md`.
 
 ## Local-file change contract
 
@@ -34,7 +33,7 @@ The bundled CLI computes `documentDigest`; the Agent does not transmit the docum
 After validation, Codrive:
 
 1. marks the edited document as the next accepted product-facts revision;
-2. stores the decision summary in `project.product_document_updated` or `project.product_facts_reconciled`;
+2. stores the decision summary in `project.product_document_updated`;
 3. interrupts an active task-selection execution and records it as superseded;
 4. advances the project planning revision; and
 5. reconciles scheduling from the new facts.
@@ -45,6 +44,6 @@ After validation, Codrive:
 
 Registration is the only operation that carries a complete `productDocument`, because the project has no Codrive-owned `PROJECT.md` yet. Codrive writes the initial file and creates product-facts revision 1.
 
-State schema v3 converts legacy `contextNotes` into append-only audit data without merging them into `PROJECT.md`. A project with any legacy notes enters `reconciliation_required`, and an active selection is marked interrupted. The user or Agent resolves conflicts in the file and sends the normal lightweight notification; confirming unchanged file content is valid for this one reconciliation.
+State schema v3 is the first state contract for this lifecycle. Codrive creates it for an empty state directory and accepts only that exact version. A directory containing projects without the current marker, or carrying any other schema version, fails startup without backup, conversion, or file changes.
 
-Startup also compares every accepted digest with its local file. A changed or empty document enters `reconciliation_required` before recovery can restart project selection. Existing task history and execution state remain available so task conversations can request the required product decision through their normal report lifecycle.
+Startup compares every accepted digest with its local file. A changed or empty document is exposed as `modified`; any active project-selection execution is marked interrupted before recovery. The editor must make the file non-empty and send the normal lightweight notification. Notifications for unchanged content are rejected.

@@ -8,7 +8,7 @@ import { ConfigStore } from "../../src/infrastructure/config-store.js";
 import { LocalServiceManager } from "../../src/infrastructure/local-service-manager.js";
 
 describe("LocalServiceManager", () => {
-  it("allows persisted task recovery to run longer than the old ten-second limit", async () => {
+  it("allows persisted task recovery to exceed the service start timeout", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-service-"));
     await new ConfigStore(stateDirectory).loadOrCreate();
     let clock = 0;

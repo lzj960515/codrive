@@ -236,7 +236,7 @@ describe("UpgradeCoordinator", () => {
     expect(current).not.toHaveProperty("error");
   });
 
-  it("finishes an old interrupted current-version operation after managed resources are repaired", async () => {
+  it("finishes a failed current-version operation after managed resources are repaired", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-"));
     const store = new UpgradeStateStore(directory);
     await store.write({
@@ -245,7 +245,7 @@ describe("UpgradeCoordinator", () => {
       phase: "failed",
       startedAt: "2026-08-13T05:00:00.000Z",
       updatedAt: "2026-08-13T05:01:00.000Z",
-      error: { code: "skill_sync_failed", summary: "retry" },
+      error: { code: "resource_sync_failed", summary: "retry" },
     });
     const coordinator = new UpgradeCoordinator({
       store,
@@ -258,7 +258,6 @@ describe("UpgradeCoordinator", () => {
     ).resolves.toMatchObject({
       phase: "succeeded",
       completedAt: expect.any(String),
-      resourceSync: { packageVersion: "0.7.0" },
     });
     expect(await store.read()).not.toHaveProperty("error");
   });
@@ -312,11 +311,10 @@ describe("SystemUpgradeRunner", () => {
       "health:0.7.0",
     ]);
     expect((await store.read())?.phase).toBe("succeeded");
-    expect(await store.read()).not.toHaveProperty("resourceSync");
     expect(phases).toEqual([
       "installing",
       "restarting",
-      "syncing_skills",
+      "syncing_resources",
       "succeeded",
     ]);
   });

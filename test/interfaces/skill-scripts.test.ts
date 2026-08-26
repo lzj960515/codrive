@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
 import type { ProjectSnapshot } from "../../src/domain/types.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
-import { SkillInstaller } from "../../src/infrastructure/skill-installer.js";
 import { createHttpServer } from "../../src/interfaces/http/server.js";
 import {
   RecordingProjectExecutor,
@@ -49,11 +48,6 @@ describe("bundled Skill scripts", () => {
     server = createHttpServer({
       store,
       workflow,
-      skillInstaller: new SkillInstaller(
-        resolve("skills"),
-        join(stateDirectory, "installed-skills"),
-        "0.2.0",
-      ),
       settingsService: {
         read: async () => ({ settings: runtimeSettings, availableModels: [] }),
         update: async (settings: typeof runtimeSettings) => {
@@ -161,10 +155,9 @@ describe("bundled Skill scripts", () => {
         expectedRevision: added.project.productFacts.revision,
         expectedDigest: added.project.productFacts.digest,
       }),
-    ) as { productFacts: { revision: number; status: string } };
+    ) as { productFacts: { revision: number } };
     expect(controlled.productFacts).toMatchObject({
       revision: added.project.productFacts.revision + 1,
-      status: "current",
     });
 
     const board = JSON.parse(

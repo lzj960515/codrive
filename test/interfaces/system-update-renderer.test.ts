@@ -139,8 +139,6 @@ function systemUpdate(
       skills,
       hook,
     },
-    skills,
-    hook,
     hookRuntime: {
       state: hookRuntimeState,
       definitionCount: hookRuntimeState === "missing" ? 3 : 4,

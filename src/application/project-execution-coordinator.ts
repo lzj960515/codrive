@@ -40,7 +40,7 @@ export interface ProjectExecutionCoordinatorOptions {
   modelCapacityRetryResetAfterMs: number;
   modelPrimaryProbeAfterMs: number;
   recordEvent: (
-    event: Omit<CodriveEvent, "eventId" | "occurredAt">,
+    event: Omit<CodriveEvent, "schemaVersion" | "eventId" | "occurredAt">,
   ) => Promise<void>;
 }
 

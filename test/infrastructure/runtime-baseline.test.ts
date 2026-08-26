@@ -9,7 +9,7 @@ import {
 } from "../../src/infrastructure/runtime-requirements.js";
 
 describe("Node.js runtime baseline", () => {
-  it("accepts Node.js 24 and rejects older runtimes", () => {
+  it("accepts Node.js 24 and rejects unsupported runtimes", () => {
     expect(MINIMUM_NODE_MAJOR).toBe(24);
     expect(supportsNodeVersion("23.11.1")).toBe(false);
     expect(supportsNodeVersion("24.0.0")).toBe(true);

@@ -6,7 +6,6 @@ import { CodexTaskDispatcher } from "./application/codex-task-dispatcher.js";
 import { ExecutionActivityBridge } from "./application/execution-activity-bridge.js";
 import { CodexProjectExecutor } from "./application/codex-project-executor.js";
 import { LifecycleRecorder } from "./application/lifecycle-recorder.js";
-import { ManagedResourceUpgradeReconciler } from "./application/managed-resource-upgrade-reconciler.js";
 import { ManagedHookRuntimeInspector } from "./application/managed-hook-runtime-inspector.js";
 import { PackageVersionCheckScheduler } from "./application/package-version-check-scheduler.js";
 import { RecoveryManager } from "./application/recovery-manager.js";
@@ -125,14 +124,8 @@ export class CodriveServer {
         ),
         stateDirectory: this.config.stateDirectory,
       });
-      const upgradeResources = new ManagedResourceUpgradeReconciler({
-        upgrades,
-        resources: resourceInstaller,
-        currentVersion: version,
-      });
       const reconcileUpdates = async () => {
         await upgrades.reconcile();
-        await upgradeResources.reconcile();
       };
       await reconcileUpdates();
       this.updateRecoveryTimer = setInterval(() => {
@@ -155,8 +148,6 @@ export class CodriveServer {
         store,
         workflow,
         activityBridge: this.activityBridge,
-        skillInstaller,
-        resourceInstaller,
         settingsService,
         systemUpdateService,
         systemUpdateEvents: [this.versionChecks, upgradeStore],

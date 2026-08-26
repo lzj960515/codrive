@@ -43,7 +43,7 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
           task.status === "done"
             ? task.updatedAt
             : task.status === "cancelled"
-              ? (task.cancellation?.cancelledAt ?? null)
+              ? task.cancellation!.cancelledAt
               : null,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
@@ -63,12 +63,10 @@ function createPlanningView(
       ? execution.result
       : undefined;
   const status =
-    project.productFacts.status === "reconciliation_required"
-      ? "needs_input"
-      : execution?.action === "select_tasks" &&
-          ["pending", "running", "retry_scheduled", "awaiting_report"].includes(
-            execution.status,
-          )
+    execution?.action === "select_tasks" &&
+    ["pending", "running", "retry_scheduled", "awaiting_report"].includes(
+      execution.status,
+    )
       ? execution.status === "retry_scheduled"
         ? "retry_scheduled"
         : "selecting"
@@ -95,16 +93,6 @@ function createPlanningView(
 
 function projectAttention(project: ProjectSnapshot["project"]) {
   if (project.status !== "active") return null;
-  if (project.productFacts.status === "reconciliation_required") {
-    return {
-      kind: "decision_requested",
-      summary:
-        "PROJECT.md 与旧产品上下文尚未完成归并，Codrive 已暂停新的任务选择。",
-      question:
-        "请确认并编辑 PROJECT.md，使它成为当前唯一产品事实，然后记录文档变更。",
-      occurredAt: project.productFacts.changedAt,
-    };
-  }
   const execution = project.currentExecution;
   const result = execution?.result;
   if (!execution || !result || !["needs_input", "blocked"].includes(result.outcome)) {

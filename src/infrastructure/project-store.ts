@@ -23,9 +23,8 @@ import { createPlanningState } from "../domain/planning.js";
 import {
   createProductFacts,
   productDocumentDigest,
-  requireProductFactsReconciliation,
 } from "../domain/product-facts.js";
-import { migrateStateDirectory } from "./state-migration.js";
+import { initializeStateDirectory } from "./state-schema.js";
 
 export class ProjectStore {
   readonly projectsDirectory: string;
@@ -82,12 +81,14 @@ export class ProjectStore {
       ),
     ]);
     await this.appendEvent({
+      schemaVersion: 1,
       eventId: randomUUID(),
       type: "project.created",
       projectId,
       occurredAt: now,
     });
     await this.appendEvent({
+      schemaVersion: 1,
       eventId: randomUUID(),
       type: "project.activated",
       projectId,
@@ -95,6 +96,7 @@ export class ProjectStore {
     });
     for (const task of tasks) {
       await this.appendEvent({
+        schemaVersion: 1,
         eventId: randomUUID(),
         type: "task.created",
         projectId,
@@ -217,6 +219,7 @@ export class ProjectStore {
     for (const task of tasks) {
       await this.saveTask(projectId, task);
       await this.appendEvent({
+        schemaVersion: 1,
         eventId: randomUUID(),
         type: "task.created",
         projectId,
@@ -344,8 +347,8 @@ export class ProjectStore {
   }
 
   private async initializeStore(): Promise<void> {
+    await initializeStateDirectory(this.stateDirectory);
     await mkdir(this.projectsDirectory, { recursive: true });
-    await migrateStateDirectory(this.stateDirectory);
     const entries = await readdir(this.projectsDirectory, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -357,7 +360,7 @@ export class ProjectStore {
 
   private async reconcileProductDocument(projectId: string): Promise<void> {
     const snapshot = await this.getProject(projectId);
-    if (!snapshot || snapshot.project.productFacts.status !== "current") return;
+    if (!snapshot) return;
     const document = await this.readProductDocumentSnapshot(projectId);
     if (document.digest === snapshot.project.productFacts.digest) return;
 
@@ -368,36 +371,29 @@ export class ProjectStore {
       ["pending", "running", "retry_scheduled", "awaiting_report"].includes(
         execution.status,
       );
-    const reason = document.document.trim()
-      ? "uncommitted_document_change"
-      : "empty_product_document";
+    if (!activeSelection) return;
     const project: Project = {
       ...snapshot.project,
-      requestedAction: activeSelection ? null : snapshot.project.requestedAction,
-      productFacts: requireProductFactsReconciliation(
-        snapshot.project.productFacts,
-        reason,
-        now,
-      ),
-      ...(activeSelection
-        ? {
-            currentExecution: {
-              ...execution,
-              status: "interrupted" as const,
-              finishedAt: now,
-            },
-          }
-        : {}),
+      requestedAction: null,
+      currentExecution: {
+        ...execution,
+        status: "interrupted",
+        finishedAt: now,
+      },
       updatedAt: now,
     };
     await this.saveProject(project);
     await this.appendEvent({
+      schemaVersion: 1,
       eventId: randomUUID(),
-      type: "project.product_facts_reconciliation_required",
+      type: "project.product_document_modified",
       source: "system",
       projectId,
       occurredAt: now,
-      data: { reason },
+      data: {
+        acceptedDocumentDigest: snapshot.project.productFacts.digest,
+        documentDigest: document.digest,
+      },
     });
   }
 

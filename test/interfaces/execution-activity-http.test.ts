@@ -1,6 +1,6 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { io as connectSocket, type Socket } from "socket.io-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,6 @@ import { SystemSettingsService } from "../../src/application/system-settings-ser
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
 import { ConfigStore } from "../../src/infrastructure/config-store.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
-import { SkillInstaller } from "../../src/infrastructure/skill-installer.js";
 import { createHttpServer } from "../../src/interfaces/http/server.js";
 import {
   RecordingProjectExecutor,
@@ -43,11 +42,6 @@ describe("execution activity HTTP and realtime boundary", () => {
       store,
       workflow,
       activityBridge: bridge,
-      skillInstaller: new SkillInstaller(
-        resolve("skills"),
-        join(stateDirectory, "skills"),
-        "0.7.0",
-      ),
       settingsService: new SystemSettingsService(configStore, workflow, {
         listModels: async () => [],
       }),
@@ -77,6 +71,7 @@ describe("execution activity HTTP and realtime boundary", () => {
       requestedAction: "develop",
       currentExecution: {
         attemptId: "attempt-live",
+        reportOpportunityId: "report_opportunity_live",
         action: "develop",
         threadId: "thread-live",
         turnId: "turn-live",

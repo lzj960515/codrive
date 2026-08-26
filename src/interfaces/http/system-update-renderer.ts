@@ -30,7 +30,7 @@ interface SystemUpdateProjection {
     phaseStartedAt?: Record<string, string>;
     error?: { summary: string };
   } | null;
-  resources?: {
+  resources: {
     state: string;
     bundledVersion: string;
     managedSkillCount: number;
@@ -38,8 +38,6 @@ interface SystemUpdateProjection {
     skills: ResourceStatus & { managedSkillCount: number };
     hook: ResourceStatus & { managedHookCount: number };
   };
-  skills: ResourceStatus & { managedSkillCount: number };
-  hook?: (ResourceStatus & { managedHookCount: number }) | null;
   hookRuntime?: {
     state: "ready" | "review_required" | "disabled" | "missing" | "unavailable";
     definitionCount: number;
@@ -60,43 +58,22 @@ export function createSystemUpdateRenderer(
     "checking",
     "installing",
     "restarting",
-    "syncing_skills",
+    "syncing_resources",
   ];
   const updatePhaseCopy: Record<string, [string, number]> = {
     checking: ["正在固定目标版本", 8],
     installing: ["正在安装 Codrive", 38],
     restarting: ["正在重启本机服务", 66],
-    syncing_skills: ["正在同步托管资源", 86],
+    syncing_resources: ["正在同步托管资源", 86],
     succeeded: ["更新完成", 100],
     failed: ["更新未完成", 100],
   };
-  const combinedResourceState = (states: string[]) => {
-    if (states.includes("conflict")) return "conflict";
-    if (states.includes("missing")) return "missing";
-    if (states.includes("outdated")) return "outdated";
-    return "current";
-  };
-
   return function renderSystemUpdate(
     systemUpdate: SystemUpdateProjection,
     updateActionError: string | null,
   ): { shouldPoll: boolean; resourcesInstalled: boolean } {
-    const { version, upgrade, skills } = systemUpdate;
-    const hook = systemUpdate.hook ?? {
-      state: "missing",
-      bundledVersion: skills.bundledVersion,
-      installedVersion: null,
-      managedHookCount: 1,
-      conflictPaths: [],
-    };
-    const resources = systemUpdate.resources ?? {
-      state: combinedResourceState([skills.state, hook.state]),
-      bundledVersion: skills.bundledVersion,
-      managedSkillCount: skills.managedSkillCount,
-      managedHookCount: hook.managedHookCount,
-      skills,
-      hook,
-    };
+    const { version, upgrade, resources } = systemUpdate;
+    const { skills, hook } = resources;
     const resourcesInstalled = resources.state === "current";
     const hookRuntimeState = systemUpdate.hookRuntime?.state;
     const hookRuntimeNeedsAction =
