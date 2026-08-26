@@ -82,6 +82,8 @@ The same in-memory bridge keeps a Hook `lastSeen` window for the exact task exec
 
 Codrive persists lifecycle state and enforces scheduling boundaries; Codex handles the work that requires judgment. Projects have independent concurrency limits, and planning runs again when its facts change rather than whenever a slot happens to become free.
 
+`PROJECT.md` is the single current product-facts source for every project and task turn. After registration, Agents edit that local file directly and send a small change notification containing document revisions and digests instead of retransmitting the full document. Codrive validates the file, records the decision summary in its append-only event history, replaces stale task selection, and replans. Legacy product notes remain audit evidence and require one explicit reconciliation instead of being concatenated into the document. See [Product facts lifecycle](./docs/architecture/product-facts.md).
+
 Review findings represent real delivery blockers in supported product and operational paths, not unconditional rework instructions. The development conversation fixes valid issues or records evidence for findings that do not apply; the same independent review conversation then reevaluates the current candidate and that evidence.
 
 Waiting and recovery are part of the same workflow. A task can pause until a specific time without holding project capacity, capacity errors can move work to a fallback model, and an authoritatively interrupted task can resume from its persisted conversation and execution state. Recovery rechecks the exact action, attempt, thread, turn, project capacity, and integration lease before starting one replacement turn. The task timeline records actual recovery transitions and surfaces only decisions or failures that need attention.
@@ -104,8 +106,8 @@ Task details link each execution and activity to its source conversation. They a
 | --- | --- |
 | `$codrive-forge` | Turn a product idea into a confirmed plan and initial task set |
 | `$codrive-task` | Select project work or execute the current task stage |
-| `$codrive-work` | Add requirements, milestones, or another round of work |
-| `$codrive-control` | Inspect progress and control project or task execution |
+| `$codrive-work` | Edit the local product document and add confirmed work in one planning revision |
+| `$codrive-control` | Inspect progress, record local product-document changes, and control execution |
 
 Skills read live context from Codrive, so task messages stay short and product state remains consistent across conversations.
 

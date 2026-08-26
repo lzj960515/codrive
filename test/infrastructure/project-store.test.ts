@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -141,5 +141,50 @@ describe("ProjectStore", () => {
       project: { name: "Tiny game" },
       tasks: [{ status: "backlog", requestedAction: "develop" }],
     });
+  });
+
+  it("requires reconciliation when PROJECT.md changes while Codrive is stopped", async () => {
+    const { stateDirectory, store } = await createStore();
+    const created = await store.createProject(projectInput);
+    await store.saveProject({
+      ...created.project,
+      requestedAction: "select_tasks",
+      currentExecution: {
+        attemptId: "selection_1",
+        action: "select_tasks",
+        status: "running",
+        threadId: "thread_1",
+        turnId: "turn_1",
+        startedAt: "2026-08-26T00:00:00.000Z",
+        modelRouting: {
+          model: "gpt-5.6-sol",
+          route: "primary",
+          retryCount: 0,
+        },
+      },
+    });
+    await writeFile(
+      store.productDocumentPath(created.project.id),
+      "# Tiny game\n\nChanged while stopped.\n",
+    );
+
+    const restartedStore = new ProjectStore(stateDirectory);
+    await restartedStore.initialize();
+
+    const project = (await restartedStore.getProject(created.project.id))!.project;
+    expect(project).toMatchObject({
+      requestedAction: null,
+      productFacts: {
+        status: "reconciliation_required",
+        reconciliationReason: "uncommitted_document_change",
+      },
+      currentExecution: { attemptId: "selection_1", status: "interrupted" },
+    });
+    expect(await restartedStore.listProjectEvents(created.project.id)).toContainEqual(
+      expect.objectContaining({
+        type: "project.product_facts_reconciliation_required",
+        data: { reason: "uncommitted_document_change" },
+      }),
+    );
   });
 });

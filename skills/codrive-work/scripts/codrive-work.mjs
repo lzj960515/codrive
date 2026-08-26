@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -8,11 +9,22 @@ if (!projectId || !["show", "add"].includes(command)) fail("Usage: codrive-work 
 if (command === "show") print(await request(`/api/contexts/projects/${encodeURIComponent(projectId)}`));
 else {
   const payload = JSON.parse(await readStdin());
+  const context = await request(`/api/contexts/projects/${encodeURIComponent(projectId)}`);
+  const document = await readFile(context.projectDocument, "utf8");
   print(await request("/api/commands", {
     method: "POST",
     body: JSON.stringify({
       type: "project.add_work",
-      payload: { projectId, ...payload },
+      payload: {
+        projectId,
+        tasks: payload.tasks,
+        productDocumentChange: {
+          decisionSummary: payload.decisionSummary,
+          expectedRevision: payload.expectedRevision,
+          expectedDigest: payload.expectedDigest,
+          documentDigest: `sha256:${createHash("sha256").update(document).digest("hex")}`,
+        },
+      },
     }),
   }));
 }

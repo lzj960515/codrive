@@ -111,9 +111,19 @@ describe("bundled Skill scripts", () => {
 
     const projectContext = JSON.parse(
       await runSkill("codrive-task", ["project-context", created.project.id]),
-    ) as { requestedAction: string; taskDocuments: string[] };
+    ) as {
+      requestedAction: string;
+      taskDocuments: string[];
+      projectDocument: string;
+      productFacts: {
+        revision: number;
+        acceptedDigest: string;
+        status: string;
+      };
+    };
     expect(projectContext).toMatchObject({ requestedAction: "select_tasks" });
     expect(projectContext.taskDocuments).toHaveLength(1);
+    expect(projectContext.productFacts.status).toBe("current");
 
     const reported = JSON.parse(
       await runSkill("codrive-task", ["project-report", created.project.id], {
@@ -125,8 +135,15 @@ describe("bundled Skill scripts", () => {
     ) as { currentExecution: { result: { outcome: string } } };
     expect(reported.currentExecution.result.outcome).toBe("selected");
 
+    await writeFile(
+      projectContext.projectDocument,
+      "# Game\n\n## Audio\n\nAdd an audio milestone.\n",
+    );
     const added = JSON.parse(
       await runSkill("codrive-work", ["add", created.project.id], {
+        decisionSummary: "Add the audio milestone.",
+        expectedRevision: projectContext.productFacts.revision,
+        expectedDigest: projectContext.productFacts.acceptedDigest,
         tasks: [
           { title: "Audio", description: "Add audio", acceptanceCriteria: [] },
         ],
@@ -134,12 +151,21 @@ describe("bundled Skill scripts", () => {
     ) as ProjectSnapshot;
     expect(added.tasks).toHaveLength(2);
 
+    await writeFile(
+      projectContext.projectDocument,
+      "# Game\n\n## Controls\n\nUse keyboard controls.\n\n## Audio\n\nAdd an audio milestone.\n",
+    );
     const controlled = JSON.parse(
-      await runSkill("codrive-control", ["record-decision", created.project.id], {
-        decision: "Use keyboard controls.",
+      await runSkill("codrive-control", ["product-document-changed", created.project.id], {
+        decisionSummary: "Use keyboard controls.",
+        expectedRevision: added.project.productFacts.revision,
+        expectedDigest: added.project.productFacts.digest,
       }),
-    ) as { contextNotes: string[] };
-    expect(controlled.contextNotes).toEqual(["Use keyboard controls."]);
+    ) as { productFacts: { revision: number; status: string } };
+    expect(controlled.productFacts).toMatchObject({
+      revision: added.project.productFacts.revision + 1,
+      status: "current",
+    });
 
     const board = JSON.parse(
       await runSkill("codrive-control", ["board"]),
@@ -168,7 +194,8 @@ describe("bundled Skill scripts", () => {
     const project = JSON.parse(
       await runSkill("codrive-control", ["project", created.project.id]),
     ) as { productDocument: string };
-    expect(project.productDocument).toBe("# Game\n");
+    expect(project.productDocument).toContain("Use keyboard controls.");
+    expect(project.productDocument).toContain("Add an audio milestone.");
 
     const task = JSON.parse(
       await runSkill("codrive-control", ["task", created.tasks[0]!.id]),

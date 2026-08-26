@@ -70,6 +70,12 @@ const project: Project = {
         changeReason: "project_registered",
         concurrencyLimit: 4,
       },
+      productFacts: {
+        revision: 1,
+        digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        status: "current",
+        changedAt: timestamp,
+      },
       createdAt: timestamp,
   updatedAt: timestamp,
 };

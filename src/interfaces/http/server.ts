@@ -122,6 +122,13 @@ const cancellationDecisionSchema = {
   reason: z.string().trim().min(1).max(2_000),
 };
 
+const productDocumentChangeSchema = z.object({
+  decisionSummary: z.string().trim().min(1).max(2_000),
+  expectedRevision: z.number().int().positive(),
+  expectedDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  documentDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+});
+
 const commandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("system.install_resources"),
@@ -169,7 +176,7 @@ const commandSchema = z.discriminatedUnion("type", [
     payload: z.object({
       projectId: z.string().min(1),
       tasks: z.array(taskInputSchema).min(1),
-      productDocument: z.string().optional(),
+      productDocumentChange: productDocumentChangeSchema,
     }),
   }),
   z.object({
@@ -187,11 +194,9 @@ const commandSchema = z.discriminatedUnion("type", [
     ]),
   }),
   z.object({
-    type: z.literal("project.record_decision"),
-    payload: z.object({
+    type: z.literal("project.update_product_document"),
+    payload: productDocumentChangeSchema.extend({
       projectId: z.string().min(1),
-      decision: z.string().min(1),
-      productDocument: z.string().optional(),
     }),
   }),
   z.object({
@@ -376,7 +381,10 @@ export function createHttpServer(
         projectDirectory: dependencies.store.projectDirectory(snapshot.project.id),
         projectDocument: dependencies.store.productDocumentPath(snapshot.project.id),
         repositoryPath: snapshot.project.repositoryPath,
-        contextNotes: snapshot.project.contextNotes ?? [],
+        productFacts: await productFactsContext(
+          dependencies.store,
+          snapshot.project,
+        ),
         cancellation: snapshot.project.cancellation ?? null,
         planning: snapshot.project.planning,
         taskDocuments: snapshot.tasks.map((task) =>
@@ -505,7 +513,7 @@ async function taskContext(
     projectDocument: store.productDocumentPath(project.id),
     taskDocument: store.taskPath(project.id, task.id),
     repositoryPath: project.repositoryPath,
-    projectContextNotes: project.contextNotes ?? [],
+    productFacts: await productFactsContext(store, project),
     workspacePath: delivery.workspacePath ?? null,
     delivery: {
       baseCommit: delivery.baseCommit ?? null,
@@ -514,5 +522,23 @@ async function taskContext(
       mergedCommit: delivery.mergedCommit ?? null,
     },
     activities,
+  };
+}
+
+async function productFactsContext(store: ProjectStore, project: Project) {
+  const document = await store.readProductDocumentSnapshot(project.id);
+  return {
+    status:
+      project.productFacts.status === "reconciliation_required"
+        ? "reconciliation_required"
+        : document.digest === project.productFacts.digest
+          ? "current"
+          : "modified",
+    revision: project.productFacts.revision,
+    acceptedDigest: project.productFacts.digest,
+    documentDigest: document.digest,
+    ...(project.productFacts.reconciliationReason
+      ? { reconciliationReason: project.productFacts.reconciliationReason }
+      : {}),
   };
 }

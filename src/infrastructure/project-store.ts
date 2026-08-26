@@ -20,6 +20,11 @@ import type {
 } from "../domain/types.js";
 import { projectTaskActivities } from "../domain/task-activity.js";
 import { createPlanningState } from "../domain/planning.js";
+import {
+  createProductFacts,
+  productDocumentDigest,
+  requireProductFactsReconciliation,
+} from "../domain/product-facts.js";
 import { migrateStateDirectory } from "./state-migration.js";
 
 export class ProjectStore {
@@ -50,6 +55,7 @@ export class ProjectStore {
       scheduling: "running",
       requestedAction: null,
       planning: createPlanningState(now),
+      productFacts: createProductFacts(input.productDocument, now),
       createdAt: now,
       updatedAt: now,
     };
@@ -221,12 +227,15 @@ export class ProjectStore {
     return tasks;
   }
 
-  async saveProductDocument(projectId: string, document: string): Promise<void> {
-    await writeFile(this.productDocumentPath(projectId), document, "utf8");
-  }
-
   async readProductDocument(projectId: string): Promise<string> {
     return readFile(this.productDocumentPath(projectId), "utf8");
+  }
+
+  async readProductDocumentSnapshot(
+    projectId: string,
+  ): Promise<{ document: string; digest: string }> {
+    const document = await this.readProductDocument(projectId);
+    return { document, digest: productDocumentDigest(document) };
   }
 
   async saveProject(project: Project): Promise<void> {
@@ -276,6 +285,10 @@ export class ProjectStore {
           left.occurredAt.localeCompare(right.occurredAt) ||
           left.id.localeCompare(right.id),
       );
+  }
+
+  async listProjectEvents(projectId: string): Promise<CodriveEvent[]> {
+    return this.readEvents(projectId);
   }
 
   subscribe(listener: (event: CodriveEvent) => void): () => void {
@@ -337,8 +350,55 @@ export class ProjectStore {
     for (const entry of entries) {
       if (entry.isDirectory()) {
         await this.rebuildSnapshots(entry.name);
+        await this.reconcileProductDocument(entry.name);
       }
     }
+  }
+
+  private async reconcileProductDocument(projectId: string): Promise<void> {
+    const snapshot = await this.getProject(projectId);
+    if (!snapshot || snapshot.project.productFacts.status !== "current") return;
+    const document = await this.readProductDocumentSnapshot(projectId);
+    if (document.digest === snapshot.project.productFacts.digest) return;
+
+    const now = new Date().toISOString();
+    const execution = snapshot.project.currentExecution;
+    const activeSelection =
+      execution?.action === "select_tasks" &&
+      ["pending", "running", "retry_scheduled", "awaiting_report"].includes(
+        execution.status,
+      );
+    const reason = document.document.trim()
+      ? "uncommitted_document_change"
+      : "empty_product_document";
+    const project: Project = {
+      ...snapshot.project,
+      requestedAction: activeSelection ? null : snapshot.project.requestedAction,
+      productFacts: requireProductFactsReconciliation(
+        snapshot.project.productFacts,
+        reason,
+        now,
+      ),
+      ...(activeSelection
+        ? {
+            currentExecution: {
+              ...execution,
+              status: "interrupted" as const,
+              finishedAt: now,
+            },
+          }
+        : {}),
+      updatedAt: now,
+    };
+    await this.saveProject(project);
+    await this.appendEvent({
+      eventId: randomUUID(),
+      type: "project.product_facts_reconciliation_required",
+      source: "system",
+      projectId,
+      occurredAt: now,
+      data: { reason },
+    });
   }
 
   private async rebuildSnapshots(projectId: string): Promise<void> {

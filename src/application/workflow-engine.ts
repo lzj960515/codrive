@@ -17,6 +17,7 @@ import type {
   CreateProjectInput,
   CreateTaskInput,
   Project,
+  ProductDocumentChange,
   ProjectReport,
   ProjectSnapshot,
   Task,
@@ -69,6 +70,11 @@ interface TaskTurnRecovery {
   resumePersistedThread: true;
   recoveredTurnId?: string;
   previousTask?: Task;
+}
+
+interface AcceptedProductDocumentChange {
+  decisionSummary: string;
+  digest: string;
 }
 
 const activeExecutionStatuses = new Set([
@@ -217,7 +223,7 @@ export class WorkflowEngine {
         return this.addProjectWork(
           command.payload.projectId,
           command.payload.tasks,
-          command.payload.productDocument,
+          command.payload.productDocumentChange,
         );
       case "project.control":
         if (command.payload.action === "retry") {
@@ -233,11 +239,10 @@ export class WorkflowEngine {
           command.payload.projectId,
           command.payload.action,
         );
-      case "project.record_decision":
-        return this.recordProjectDecision(
+      case "project.update_product_document":
+        return this.updateProductDocument(
           command.payload.projectId,
-          command.payload.decision,
-          command.payload.productDocument,
+          command.payload,
         );
       case "task.control":
         switch (command.payload.action) {
@@ -276,7 +281,12 @@ export class WorkflowEngine {
 
   async availableTaskSlots(projectId: string): Promise<number> {
     const snapshot = await this.store.getProject(projectId);
-    if (!snapshot) return 0;
+    if (
+      !snapshot ||
+      !(await this.productDocumentIsCurrent(snapshot.project))
+    ) {
+      return 0;
+    }
     const execution = snapshot.project.currentExecution;
     if (
       execution?.action === "select_tasks" &&
@@ -367,33 +377,47 @@ export class WorkflowEngine {
   addProjectWork(
     projectId: string,
     tasks: CreateTaskInput[],
-    productDocument?: string,
+    productDocumentChange: ProductDocumentChange,
   ): Promise<ProjectSnapshot> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
       if (snapshot.project.status === "cancelled") {
         throw new WorkflowConflictError(`Cancelled project ${projectId} cannot accept work`);
       }
-      if (productDocument) {
-        await this.store.saveProductDocument(projectId, productDocument);
-      }
+      const acceptedDocument = await this.acceptProductDocumentChange(
+        snapshot.project,
+        productDocumentChange,
+      );
       await this.store.addTasks(projectId, tasks);
       const currentProject = hasActiveProjectExecution(snapshot.project)
         ? await this.requireProjectExecutions().cancel(snapshot.project)
         : snapshot.project;
+      const changedAt = this.now();
       const project: Project = {
         ...currentProject,
+        productFacts: {
+          revision: currentProject.productFacts.revision + 1,
+          digest: acceptedDocument.digest,
+          status: "current",
+          changedAt,
+        },
         status: "active",
         requestedAction: null,
         planning: advancePlanning(
           currentProject.planning,
           "work_added",
-          this.now(),
+          changedAt,
           this.maxConcurrentTasks,
         ),
-        updatedAt: this.now(),
+        updatedAt: changedAt,
       };
       await this.store.saveProject(project);
+      await this.recordProductDocumentChange(
+        snapshot.project,
+        project,
+        acceptedDocument,
+      );
+      await this.recordSupersededSelection(snapshot.project, project, "work_added");
       await this.recordEvent({
         type: "project.work_added",
         projectId,
@@ -407,44 +431,58 @@ export class WorkflowEngine {
     });
   }
 
-  recordProjectDecision(
+  updateProductDocument(
     projectId: string,
-    decision: string,
-    productDocument?: string,
+    change: ProductDocumentChange,
   ): Promise<Project> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
       if (snapshot.project.status === "cancelled") {
         throw new WorkflowConflictError(
-          `Cancelled project ${projectId} cannot accept decisions`,
+          `Cancelled project ${projectId} cannot update product facts`,
         );
       }
-      if (productDocument) {
-        await this.store.saveProductDocument(projectId, productDocument);
-      }
+      const acceptedDocument = await this.acceptProductDocumentChange(
+        snapshot.project,
+        change,
+      );
       const currentProject = hasActiveProjectExecution(snapshot.project)
         ? await this.requireProjectExecutions().cancel(snapshot.project)
         : snapshot.project;
+      const changedAt = this.now();
+      const wasReconciliation =
+        currentProject.productFacts.status === "reconciliation_required";
       const project: Project = {
         ...currentProject,
-        contextNotes: [...(currentProject.contextNotes ?? []), decision],
+        productFacts: {
+          revision: currentProject.productFacts.revision + 1,
+          digest: acceptedDocument.digest,
+          status: "current",
+          changedAt,
+        },
         status: "active",
         requestedAction: null,
         planning: advancePlanning(
           currentProject.planning,
-          "project_decision_recorded",
-          this.now(),
+          wasReconciliation
+            ? "product_facts_reconciled"
+            : "product_document_updated",
+          changedAt,
           this.maxConcurrentTasks,
         ),
-        updatedAt: this.now(),
+        updatedAt: changedAt,
       };
       await this.store.saveProject(project);
-      await this.recordEvent({
-        type: "project.decision_recorded",
-        projectId,
-        before: projectLifecycleState(snapshot.project),
-        after: projectLifecycleState(project),
-      });
+      await this.recordProductDocumentChange(
+        snapshot.project,
+        project,
+        acceptedDocument,
+      );
+      await this.recordSupersededSelection(
+        snapshot.project,
+        project,
+        project.planning.changeReason,
+      );
       await this.recordPlanningRevision(project, snapshot.project.planning.revision);
       await this.reconcileInternal();
       return (await this.requireSnapshot(projectId)).project;
@@ -1618,6 +1656,7 @@ export class WorkflowEngine {
       .filter(({ project, tasks }) =>
         project.status === "active" &&
         project.scheduling === "running" &&
+        project.productFacts.status === "current" &&
         !hasActiveProjectExecution(project) &&
         project.planning.evaluatedRevision !== project.planning.revision &&
         tasks.some(
@@ -1628,18 +1667,20 @@ export class WorkflowEngine {
       .sort(comparePlanningCandidates);
 
     for (const candidate of candidates) {
+      const current = await this.requireSnapshot(candidate.project.id);
+      if (!(await this.productDocumentIsCurrent(current.project))) continue;
       const capacity = availableProjectPlanningCapacity(
-        candidate,
+        current,
         projectConcurrencyLimit(
-          candidate.project,
+          current.project,
           this.maxConcurrentTasks,
         ),
       );
       if (capacity <= 0) continue;
       await this.projectExecutions.start(
-        candidate.project,
+        current.project,
         {
-          planningRevision: candidate.project.planning.revision,
+          planningRevision: current.project.planning.revision,
           selectionCapacity: capacity,
         },
       );
@@ -2068,6 +2109,11 @@ export class WorkflowEngine {
     project: Project,
     report: ProjectReport,
   ): Promise<Project> {
+    if (!(await this.productDocumentIsCurrent(project))) {
+      throw new WorkflowConflictError(
+        "PROJECT.md has unrecorded changes; task selection was superseded",
+      );
+    }
     const execution = project.currentExecution!;
     const planningRevision = execution.planningRevision ?? project.planning.revision;
     if (planningRevision !== project.planning.revision) {
@@ -2113,6 +2159,11 @@ export class WorkflowEngine {
     project: Project,
     report: ProjectReport,
   ): Promise<void> {
+    if (!(await this.productDocumentIsCurrent(project))) {
+      throw new WorkflowConflictError(
+        "PROJECT.md has unrecorded changes; update product facts before task selection",
+      );
+    }
     await this.validateTaskSelectionReport(project.id, report);
   }
 
@@ -2398,6 +2449,102 @@ export class WorkflowEngine {
 
   private modelSettingsFor(project: Project): ModelRoutingSettings {
     return project.modelConfig ?? this.models;
+  }
+
+  private async productDocumentIsCurrent(project: Project): Promise<boolean> {
+    if (project.productFacts.status !== "current") return false;
+    const document = await this.store.readProductDocumentSnapshot(project.id);
+    return (
+      document.document.trim().length > 0 &&
+      document.digest === project.productFacts.digest
+    );
+  }
+
+  private async acceptProductDocumentChange(
+    project: Project,
+    change: ProductDocumentChange,
+  ): Promise<AcceptedProductDocumentChange> {
+    const decisionSummary = change.decisionSummary.trim();
+    if (!decisionSummary) {
+      throw new WorkflowConflictError(
+        "Product document changes require a decision summary",
+      );
+    }
+    if (
+      change.expectedRevision !== project.productFacts.revision ||
+      change.expectedDigest !== project.productFacts.digest
+    ) {
+      throw new WorkflowConflictError(
+        `Product document revision ${change.expectedRevision} is stale; ` +
+          `current revision is ${project.productFacts.revision}`,
+      );
+    }
+
+    const document = await this.store.readProductDocumentSnapshot(project.id);
+    if (!document.document.trim()) {
+      throw new WorkflowConflictError("PROJECT.md must not be empty");
+    }
+    if (document.digest !== change.documentDigest) {
+      throw new WorkflowConflictError(
+        "PROJECT.md changed after the notification was prepared",
+      );
+    }
+    if (
+      document.digest === project.productFacts.digest &&
+      project.productFacts.status === "current"
+    ) {
+      throw new WorkflowConflictError("PROJECT.md has no unrecorded changes");
+    }
+    return { decisionSummary, digest: document.digest };
+  }
+
+  private recordProductDocumentChange(
+    previous: Project,
+    project: Project,
+    change: AcceptedProductDocumentChange,
+  ): Promise<unknown> {
+    const reconciled =
+      previous.productFacts.status === "reconciliation_required";
+    return this.recordEvent({
+      type: reconciled
+        ? "project.product_facts_reconciled"
+        : "project.product_document_updated",
+      projectId: project.id,
+      decision: change.decisionSummary,
+      before: projectLifecycleState(previous),
+      after: projectLifecycleState(project),
+      data: {
+        previousDocumentRevision: previous.productFacts.revision,
+        documentRevision: project.productFacts.revision,
+        previousDocumentDigest: previous.productFacts.digest,
+        documentDigest: project.productFacts.digest,
+      },
+    });
+  }
+
+  private recordSupersededSelection(
+    previous: Project,
+    project: Project,
+    reason: string,
+  ): Promise<unknown> {
+    const execution = previous.currentExecution;
+    if (!execution || !hasActiveProjectExecution(previous)) {
+      return Promise.resolve();
+    }
+    return this.recordEvent({
+      type: "project.selection_superseded",
+      projectId: project.id,
+      attemptId: execution.attemptId,
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      ...(execution.turnId ? { turnId: execution.turnId } : {}),
+      before: projectLifecycleState(previous),
+      after: projectLifecycleState(project),
+      data: {
+        planningRevision:
+          execution.planningRevision ?? previous.planning.revision,
+        reason,
+      },
+    });
   }
 
   private rotateReportOpportunity(task: Task): Task {
@@ -2883,8 +3030,8 @@ function commandSummary(command: CodriveCommand): Record<string, unknown> {
   if ("tasks" in command.payload) {
     summary.taskCount = command.payload.tasks.length;
   }
-  if (command.type === "project.record_decision") {
-    summary.updatesProductDocument = Boolean(command.payload.productDocument);
+  if (command.type === "project.update_product_document") {
+    summary.expectedDocumentRevision = command.payload.expectedRevision;
   }
   return summary;
 }

@@ -1,6 +1,6 @@
 ---
 name: codrive-control
-description: 查询和控制本地 Codrive 项目、任务与运行设置，包括产品详情、看板状态、暂停、恢复、取消、重试、重新规划、模型路由和补充上下文。用户询问 Codrive 进度、阻塞原因、模型容量恢复或要求干预自动流程时使用。
+description: 查询和控制本地 Codrive 项目、任务与运行设置，包括产品详情、产品文档事实、看板状态、暂停、恢复、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、产品事实归并、模型容量恢复或要求干预自动流程时使用。
 compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
@@ -16,7 +16,7 @@ node <skill-directory>/scripts/codrive-control.mjs project <project-id>
 node <skill-directory>/scripts/codrive-control.mjs task <task-id>
 ```
 
-`project` 返回注册信息、完整 `PROJECT.md`、产品上下文、最小规划状态、任务与当前执行信息。`task` 返回任务定义、当前状态、完整进展记录和推导后的 Codex 对话链接。
+`project` 返回注册信息、完整 `PROJECT.md`、产品事实同步状态、最小规划状态、任务与当前执行信息。`task` 返回任务定义、当前状态、完整进展记录和推导后的 Codex 对话链接。
 
 项目的 `attention` 只表达需要处理的异常状态：`decision_requested` 表示需要在对应 Codex App 对话中作出决定，`blocked` 表示项目存在确定阻塞。没有 `attention` 时，项目按当前任务和规划状态正常推进。
 
@@ -90,13 +90,27 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel
 
 `user_confirmed` 的取消理由概括用户同意的范围和原因；`agent_decision` 的取消理由写明支持直接取消的事实。取消命令作为这次处理的最后一个副作用，完成后报告新的终态。
 
-## 记录产品决策
+## 更新当前产品事实
 
-用户在 Codex App 中回答产品级问题后，把整理后的长期产品决策写入 Codrive。通过标准输入传入 `decision`，需要更新产品契约时同时传入完整的 `productDocument`：
+`PROJECT.md` 是 Agent 读取的唯一当前产品事实。修改前读取 project context，保存 `productFacts.revision` 和 `productFacts.acceptedDigest`；使用普通文件编辑工具局部修改返回的 `projectDocument`，然后立即发送轻量通知：
 
 ```text
-node <skill-directory>/scripts/codrive-control.mjs record-decision <project-id>
+node <skill-directory>/scripts/codrive-control.mjs product-document-changed <project-id>
 ```
+
+标准输入只传文档修改前的身份和本次决定摘要，不传完整文档：
+
+```json
+{
+  "decisionSummary": "当前产品事实发生了什么变化",
+  "expectedRevision": 3,
+  "expectedDigest": "sha256:<修改前 context 返回的哈希>"
+}
+```
+
+脚本读取当前磁盘文件并计算新哈希；Codrive 再次读取并验证非空文档、旧版本、旧哈希和新哈希，随后记录决定摘要、推进规划修订、终止失效的项目选择并重新调度。版本或哈希冲突时重新读取项目，不覆盖磁盘内容，并根据当前事实重新整理修改。
+
+`productFacts.status` 为 `reconciliation_required` 时，旧 `contextNotes` 只保留在审计事件，尚未成为当前事实。结合用户决定把确定内容写入 `PROJECT.md`，再用同一命令完成一次明确归并；即使确认后的文件内容没有变化，这次归并也会推进产品事实版本并恢复任务选择。
 
 任务级问题直接在原开发或审查对话中回答。Codex 使用当前对话继续同一个执行阶段，并在完成后通过 `$codrive-task` 汇报，不把原始聊天内容复制到 Codrive。
 

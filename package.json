@@ -28,6 +28,7 @@
     "dist",
     "skills",
     "hooks",
+    "docs/architecture/product-facts.md",
     "docs/architecture/realtime-sync.md",
     "README.md",
     "README.zh-CN.md"

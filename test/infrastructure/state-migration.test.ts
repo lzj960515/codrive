@@ -126,7 +126,127 @@ describe("Codrive state migration", () => {
       "activity_report_2",
     ]);
   });
+
+  it("moves legacy context notes to audit history and requires explicit reconciliation", async () => {
+    const stateDirectory = await legacyProductFactsFixture();
+
+    await expect(migrateStateDirectory(stateDirectory)).resolves.toEqual({
+      migrated: true,
+      reportCount: 0,
+      activityCount: 0,
+    });
+
+    const store = new ProjectStore(stateDirectory);
+    const snapshot = await store.getProject("project_context");
+    expect(snapshot?.project).toMatchObject({
+      planning: { changeReason: "product_document_updated" },
+      productFacts: {
+        revision: 1,
+        status: "reconciliation_required",
+        reconciliationReason: "legacy_context_notes",
+      },
+      currentExecution: {
+        attemptId: "selection_context",
+        status: "interrupted",
+      },
+    });
+    expect(snapshot?.project).not.toHaveProperty("contextNotes");
+
+    const events = (await readFile(
+      join(
+        stateDirectory,
+        "projects",
+        "project_context",
+        "events.ndjson",
+      ),
+      "utf8",
+    ))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "project.product_facts_reconciliation_required",
+        data: {
+          reason: "legacy_context_notes",
+          legacyContextNotes: [
+            "Use keyboard controls.",
+            "Replace keyboard-only mode with controller support.",
+          ],
+        },
+      }),
+    );
+  });
 });
+
+async function legacyProductFactsFixture(): Promise<string> {
+  const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-state-v2-"));
+  const projectDirectory = join(
+    stateDirectory,
+    "projects",
+    "project_context",
+  );
+  const taskDirectory = join(projectDirectory, "tasks");
+  await mkdir(taskDirectory, { recursive: true });
+  const project = {
+    id: "project_context",
+    name: "Context Game",
+    repositoryPath: "/workspace/context-game",
+    defaultBranch: "main",
+    status: "active",
+    scheduling: "running",
+    requestedAction: "select_tasks",
+    planning: {
+      revision: 4,
+      changedAt: timestamp,
+      changeReason: "project_decision_recorded",
+      concurrencyLimit: 2,
+    },
+    contextNotes: [
+      "Use keyboard controls.",
+      "Replace keyboard-only mode with controller support.",
+    ],
+    currentExecution: {
+      attemptId: "selection_context",
+      action: "select_tasks",
+      status: "running",
+      threadId: "thread_context",
+      turnId: "turn_context",
+      startedAt: timestamp,
+      planningRevision: 4,
+      modelRouting: {
+        model: "gpt-5.6-sol",
+        route: "primary",
+        retryCount: 0,
+      },
+    },
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const task = {
+    id: "task_context",
+    projectId: "project_context",
+    title: "Loop",
+    description: "Build it",
+    acceptanceCriteria: [],
+    order: 1,
+    status: "backlog",
+    requestedAction: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  await Promise.all([
+    writeFile(
+      join(stateDirectory, "state-schema.json"),
+      JSON.stringify({ schemaVersion: 2, migratedAt: timestamp }),
+    ),
+    writeFile(join(projectDirectory, "project.json"), JSON.stringify(project)),
+    writeFile(join(projectDirectory, "PROJECT.md"), "# Context Game\n"),
+    writeFile(join(taskDirectory, "task_context.json"), JSON.stringify(task)),
+    writeFile(join(projectDirectory, "events.ndjson"), ""),
+  ]);
+  return stateDirectory;
+}
 
 async function legacyStateFixture(): Promise<string> {
   const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-state-v1-"));

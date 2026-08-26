@@ -36,7 +36,7 @@ compatibility: Requires Node.js 24+ and a running local Codrive service.
 }
 ```
 
-注册时默认把 `repositoryPath` 设为当前项目根目录的绝对路径。产品文档包含目标、用户、场景、范围、产品决策、非目标和完成标准。Codrive 会在每次需要开始工作时让 AI 根据最新项目、任务和仓库状态重新判断任务关系并选择工作。
+注册时默认把 `repositoryPath` 设为当前项目根目录的绝对路径。新项目尚无磁盘文档，因此注册请求携带初始 `productDocument`，Codrive 创建 `PROJECT.md`；注册完成后所有修改都使用本地文件工具和轻量变更通知。产品文档包含目标、用户、场景、范围、产品决策、非目标和完成标准。Codrive 会在每次需要开始工作时让 AI 根据最新项目、任务和仓库状态重新判断任务关系并选择工作。
 
 显式最终验收任务与其他任务使用相同结构。它的 `description` 写明需要基于哪些完整成果进行验证，`acceptanceCriteria` 写明可观察的产品结果；Codrive 会根据实际任务和仓库状态，在前序工作完成后选择它。
 

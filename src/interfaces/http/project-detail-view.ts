@@ -1,4 +1,5 @@
 import type { ProjectSnapshot } from "../../domain/types.js";
+import { productDocumentDigest } from "../../domain/product-facts.js";
 import { createBoardView } from "./board-view.js";
 
 export function createProjectDetailView(
@@ -14,8 +15,20 @@ export function createProjectDetailView(
       ...projectView,
       repositoryPath: project.repositoryPath,
       defaultBranch: project.defaultBranch,
-      contextNotes: project.contextNotes ?? [],
-      currentExecution: project.currentExecution ?? null,
+      productFacts: {
+        status:
+          project.productFacts.status === "reconciliation_required"
+            ? "reconciliation_required"
+            : productDocumentDigest(productDocument) === project.productFacts.digest
+              ? "current"
+              : "modified",
+        revision: project.productFacts.revision,
+        acceptedDigest: project.productFacts.digest,
+        documentDigest: productDocumentDigest(productDocument),
+        ...(project.productFacts.reconciliationReason
+          ? { reconciliationReason: project.productFacts.reconciliationReason }
+          : {}),
+      },
       createdAt: project.createdAt,
     },
     productDocument,

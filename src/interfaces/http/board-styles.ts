@@ -433,8 +433,6 @@ export const boardStyles = `
   .product-task { display: grid; grid-template-columns: 64px minmax(0,1fr) auto; gap: 14px; align-items: center; padding: 14px; background: var(--surface-soft); border: 1px solid #e5e8e3; border-radius: 11px; }
   .product-task h3 { margin: 0 0 4px; font-size: 13px; }
   .product-task p { margin: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-  .context-notes { display: grid; gap: 8px; margin: 0; padding-left: 18px; color: #46514b; font-size: 11px; line-height: 1.55; }
-  .empty-copy { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
   .project-model-form { display: grid; gap: 11px; }
   .project-model-inherit { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 9px; align-items: start; padding: 10px; background: #f2f5f1; border: 1px solid #e0e5df; border-radius: 10px; cursor: pointer; }
   .project-model-inherit input { margin-top: 2px; accent-color: var(--signal); }

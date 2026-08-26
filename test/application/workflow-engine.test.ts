@@ -1,4 +1,5 @@
-import { mkdtemp } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -30,6 +31,14 @@ const models = {
   fallback: "gpt-5.6-terra",
 };
 
+function digest(document: string): string {
+  return `sha256:${createHash("sha256").update(document).digest("hex")}`;
+}
+
+function readProjectEvents(store: ProjectStore, projectId: string) {
+  return store.listProjectEvents(projectId);
+}
+
 beforeEach(async () => {
   store = new ProjectStore(await mkdtemp(join(tmpdir(), "codrive-workflow-")));
   taskDispatcher = new RecordingTaskDispatcher();
@@ -60,6 +69,24 @@ async function registerProject(taskCount = 2) {
       description: `Build task ${index + 1}`,
       acceptanceCriteria: [],
     })),
+  });
+}
+
+async function addProjectWork(
+  projectId: string,
+  tasks: Parameters<WorkflowEngine["addProjectWork"]>[1],
+) {
+  const project = (await store.getProject(projectId))!.project;
+  const currentDocument = await store.readProductDocument(projectId);
+  const nextDocument =
+    `${currentDocument.trimEnd()}\n\n` +
+    `Work update ${project.productFacts.revision + 1}.\n`;
+  await writeFile(store.productDocumentPath(projectId), nextDocument);
+  return workflow.addProjectWork(projectId, tasks, {
+    decisionSummary: "Add the confirmed product work.",
+    expectedRevision: project.productFacts.revision,
+    expectedDigest: project.productFacts.digest,
+    documentDigest: digest(nextDocument),
   });
 }
 
@@ -374,7 +401,7 @@ describe("WorkflowEngine", () => {
     });
     const developing = (await store.findTask(created.tasks[0]!.id))!.task;
 
-    await workflow.addProjectWork(created.project.id, [
+    await addProjectWork(created.project.id, [
       {
         title: "Follow-up",
         description: "Needs a product decision",
@@ -1201,7 +1228,7 @@ describe("WorkflowEngine", () => {
     const paused = await workflow.controlProject(created.project.id, "pause");
     expect(paused).toMatchObject({ status: "active", scheduling: "paused" });
 
-    const withWork = await workflow.addProjectWork(created.project.id, [
+    const withWork = await addProjectWork(created.project.id, [
       { title: "More", description: "Add more", acceptanceCriteria: [] },
     ]);
     expect(withWork.project).toMatchObject({
@@ -1236,7 +1263,7 @@ describe("WorkflowEngine", () => {
     expect(projectExecutor.started).toHaveLength(0);
   });
 
-  it("clears a resolved project question when its decision is recorded", async () => {
+  it("accepts a locally edited product document and replaces stale task selection", async () => {
     const created = await store.createProject({
       name: "Tiny Game",
       repositoryPath: "/workspace/game",
@@ -1244,41 +1271,131 @@ describe("WorkflowEngine", () => {
       productDocument: "# Tiny Game\n",
       tasks: [{ title: "Task", description: "Build it", acceptanceCriteria: [] }],
     });
-    const report = {
-      projectId: created.project.id,
-      attemptId: "selection_1",
-      outcome: "needs_input" as const,
-      summary: "Need a product decision",
-      question: "Keyboard or controller?",
-    };
+    await workflow.reconcile();
+    const before = (await store.getProject(created.project.id))!.project;
+    const previousExecution = before.currentExecution!;
+    const productDocument = "# Tiny Game\n\nSupport keyboard and controller.\n";
+    await writeFile(store.productDocumentPath(created.project.id), productDocument);
+
+    const project = await workflow.updateProductDocument(created.project.id, {
+      decisionSummary: "Support keyboard and controller.",
+      expectedRevision: before.productFacts.revision,
+      expectedDigest: before.productFacts.digest,
+      documentDigest: digest(productDocument),
+    });
+
+    expect(project).toMatchObject({
+      status: "active",
+      productFacts: {
+        revision: 2,
+        digest: digest(productDocument),
+        status: "current",
+      },
+      planning: { revision: 2, changeReason: "product_document_updated" },
+      currentExecution: { action: "select_tasks", planningRevision: 2 },
+    });
+    expect(project.currentExecution?.attemptId).not.toBe(
+      previousExecution.attemptId,
+    );
+    expect(projectExecutor.interrupted).toHaveLength(1);
+
+    const events = await readProjectEvents(store, created.project.id);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "project.product_document_updated",
+        decision: "Support keyboard and controller.",
+      }),
+    );
+    expect(JSON.stringify(project)).not.toContain("Support keyboard and controller.");
+  });
+
+  it("rejects stale product document notifications without changing accepted facts", async () => {
+    const created = await registerProject(1);
+    const accepted = created.project.productFacts;
+    const firstDocument = "# Tiny Game\n\nFirst revision.\n";
+    await writeFile(store.productDocumentPath(created.project.id), firstDocument);
+    await workflow.updateProductDocument(created.project.id, {
+      decisionSummary: "Accept the first revision.",
+      expectedRevision: accepted.revision,
+      expectedDigest: accepted.digest,
+      documentDigest: digest(firstDocument),
+    });
+
+    const secondDocument = "# Tiny Game\n\nSecond revision.\n";
+    await writeFile(store.productDocumentPath(created.project.id), secondDocument);
+    await expect(
+      workflow.updateProductDocument(created.project.id, {
+        decisionSummary: "Attempt a stale second revision.",
+        expectedRevision: accepted.revision,
+        expectedDigest: accepted.digest,
+        documentDigest: digest(secondDocument),
+      }),
+    ).rejects.toThrow(/stale|superseded/i);
+
+    expect((await store.getProject(created.project.id))!.project.productFacts)
+      .toMatchObject({ revision: 2, digest: digest(firstDocument) });
+  });
+
+  it("rejects task selection after PROJECT.md changes but before notification", async () => {
+    const created = await registerProject(1);
+    const execution = created.project.currentExecution!;
+    await writeFile(
+      store.productDocumentPath(created.project.id),
+      "# Tiny Game\n\nUnrecorded local change.\n",
+    );
+
+    await expect(
+      workflow.submitProjectReport({
+        projectId: created.project.id,
+        attemptId: execution.attemptId,
+        outcome: "selected",
+        summary: "This selection used the earlier document.",
+        taskIds: [created.tasks[0]!.id],
+      }),
+    ).rejects.toThrow(/PROJECT\.md|product facts|document/i);
+    await expect(workflow.availableTaskSlots(created.project.id)).resolves.toBe(0);
+    expect((await store.findTask(created.tasks[0]!.id))!.task.requestedAction).toBe(
+      null,
+    );
+  });
+
+  it("resumes planning after an unchanged legacy document is explicitly reconciled", async () => {
+    const created = await store.createProject({
+      name: "Legacy Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Legacy Game\n",
+      tasks: [{ title: "Task", description: "Build", acceptanceCriteria: [] }],
+    });
     await store.saveProject({
       ...created.project,
-      status: "active",
-      currentExecution: {
-        attemptId: report.attemptId,
-        action: "select_tasks",
-        status: "completed",
-        startedAt: "2026-08-03T00:00:00.000Z",
-        modelRouting: testModelRouting(),
-        planningRevision: created.project.planning.revision,
-        result: report,
+      productFacts: {
+        ...created.project.productFacts,
+        status: "reconciliation_required",
+        reconciliationReason: "legacy_context_notes",
       },
     });
 
-    const project = await workflow.recordProjectDecision(
-      created.project.id,
-      "Use both keyboard and controller.",
-    );
+    const project = await workflow.updateProductDocument(created.project.id, {
+      decisionSummary: "Confirm PROJECT.md as the complete current product facts.",
+      expectedRevision: created.project.productFacts.revision,
+      expectedDigest: created.project.productFacts.digest,
+      documentDigest: created.project.productFacts.digest,
+    });
 
-    expect(project.status).toBe("active");
-    expect(project.currentExecution?.result).toBeUndefined();
+    expect(project).toMatchObject({
+      productFacts: { revision: 2, status: "current" },
+      planning: { revision: 2, changeReason: "product_facts_reconciled" },
+      currentExecution: { action: "select_tasks", planningRevision: 2 },
+    });
+    expect(project.productFacts).not.toHaveProperty("reconciliationReason");
   });
 
   it("restarts temporary project selection when new work changes its facts", async () => {
     const created = await registerProject(1);
     const firstExecution = created.project.currentExecution!;
 
-    const updated = await workflow.addProjectWork(created.project.id, [
+    const updated = await addProjectWork(created.project.id, [
       { title: "Audio", description: "Add audio", acceptanceCriteria: [] },
     ]);
 
@@ -1316,7 +1433,7 @@ describe("WorkflowEngine", () => {
     });
     await store.saveProject({ ...created.project, status: "idle" });
 
-    const active = await workflow.addProjectWork(created.project.id, [
+    const active = await addProjectWork(created.project.id, [
       { title: "Expansion", description: "Build more", acceptanceCriteria: [] },
     ]);
     expect(active.project.status).toBe("active");
@@ -1327,7 +1444,7 @@ describe("WorkflowEngine", () => {
       reason: "The idle project is being retired",
     });
     await expect(
-      workflow.addProjectWork(created.project.id, [
+      addProjectWork(created.project.id, [
         { title: "Too late", description: "No", acceptanceCriteria: [] },
       ]),
     ).rejects.toThrow(/cancelled/i);
@@ -1421,7 +1538,7 @@ describe("WorkflowEngine", () => {
       execution.attemptId,
       execution.turnId!,
     );
-    await workflow.addProjectWork(created.project.id, [
+    await addProjectWork(created.project.id, [
       {
         title: "Later task",
         description: "Added after the first selection",
@@ -2530,7 +2647,7 @@ describe("WorkflowEngine", () => {
       summary: "Start the first task",
       taskIds: [created.tasks[0]!.id],
     });
-    await workflow.addProjectWork(created.project.id, [
+    await addProjectWork(created.project.id, [
       { title: "Follow-up", description: "Build follow-up", acceptanceCriteria: [] },
     ]);
 

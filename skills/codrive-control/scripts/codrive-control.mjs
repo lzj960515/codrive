@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -21,10 +22,11 @@ else if (command === "project-control" && id && action) {
       : {};
   result = await sendCommand("task.control", { taskId: id, action, ...details });
 }
-else if (command === "record-decision" && id) {
+else if (command === "product-document-changed" && id) {
   const payload = JSON.parse(await readStdin());
-  result = await sendCommand("project.record_decision", { projectId: id, ...payload });
-} else fail("Usage: codrive-control <board|project|task|settings|update-settings|project-control|task-control|record-decision> ...");
+  const change = await productDocumentChange(id, payload);
+  result = await sendCommand("project.update_product_document", { projectId: id, ...change });
+} else fail("Usage: codrive-control <board|project|task|settings|update-settings|project-control|task-control|product-document-changed> ...");
 print(result);
 
 function sendCommand(type, payload) {
@@ -58,6 +60,25 @@ async function readResumeSchedule() {
     fail("Scheduled resumeAt is required");
   }
   return { resumeAt: payload.resumeAt.trim() };
+}
+async function productDocumentChange(projectId, payload) {
+  if (!Number.isInteger(payload.expectedRevision) || payload.expectedRevision < 1) {
+    fail("Product document expectedRevision must be a positive integer");
+  }
+  if (typeof payload.expectedDigest !== "string" || !payload.expectedDigest) {
+    fail("Product document expectedDigest is required");
+  }
+  if (typeof payload.decisionSummary !== "string" || !payload.decisionSummary.trim()) {
+    fail("Product document decisionSummary is required");
+  }
+  const context = await request(`/api/contexts/projects/${encodeURIComponent(projectId)}`);
+  const document = await readFile(context.projectDocument, "utf8");
+  return {
+    decisionSummary: payload.decisionSummary.trim(),
+    expectedRevision: payload.expectedRevision,
+    expectedDigest: payload.expectedDigest,
+    documentDigest: `sha256:${createHash("sha256").update(document).digest("hex")}`,
+  };
 }
 function print(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 function fail(message) { process.stderr.write(`${message}\n`); process.exit(1); }

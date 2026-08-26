@@ -11,11 +11,11 @@ compatibility: Requires Node.js 24+ and a running local Codrive service.
 ## 工作流
 
 1. 通过项目 ID读取项目，或先用 `$codrive-control` 查看当前仓库对应项目。
-2. 阅读 `PROJECT.md` 和现有任务状态。
+2. 阅读 `PROJECT.md`、`productFacts` 和现有任务状态，保存修改前的文档版本与哈希。
 3. 与用户确认新需求的结果、范围和完成标准。
 4. 结合现有任务避免复制已经完成的工作，并保持每个新增任务可以独立理解。新增需求直接形成需求任务；明确需要发布验证或端到端验收时，把对应验证作为显式任务加入本轮计划。
 5. 向用户展示产品文档变化和新增任务，等待明确确认。
-6. 通过脚本添加任务；`idle` 项目进入 `active`，项目原有的暂停状态继续保持。
+6. 使用普通文件编辑工具局部更新 `PROJECT.md`，再通过脚本提交轻量文档变更元数据与新增任务；`idle` 项目进入 `active`，项目原有的暂停状态继续保持。
 7. 根据脚本返回结果向用户完成交接，然后结束当前回合。
 
 ## 查询项目
@@ -30,7 +30,9 @@ node <skill-directory>/scripts/codrive-work.mjs show <project-id>
 
 ```json
 {
-  "productDocument": "可选的完整更新后 PROJECT.md",
+  "decisionSummary": "本轮确认的产品变化",
+  "expectedRevision": 3,
+  "expectedDigest": "sha256:<修改前 show 返回的哈希>",
   "tasks": [
     {
       "title": "任务名称",
@@ -40,6 +42,8 @@ node <skill-directory>/scripts/codrive-work.mjs show <project-id>
   ]
 }
 ```
+
+脚本直接读取修改后的 `PROJECT.md` 并计算新哈希，不通过 API 传输完整文档。Codrive 把文档确认和任务追加作为一次规划事实变化处理；版本或哈希陈旧时拒绝命令，不覆盖本地文件。
 
 ```text
 node <skill-directory>/scripts/codrive-work.mjs add <project-id>

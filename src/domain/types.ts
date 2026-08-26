@@ -39,7 +39,8 @@ export type PlanningChangeReason =
   | "work_added"
   | "task_completed"
   | "task_cancelled"
-  | "project_decision_recorded"
+  | "product_document_updated"
+  | "product_facts_reconciled"
   | "concurrency_changed"
   | "manual_replan";
 
@@ -49,6 +50,28 @@ export interface ProjectPlanningState {
   changedAt: string;
   changeReason: PlanningChangeReason;
   concurrencyLimit?: number;
+}
+
+export type ProductFactsStatus = "current" | "reconciliation_required";
+
+export type ProductFactsReconciliationReason =
+  | "legacy_context_notes"
+  | "empty_product_document"
+  | "uncommitted_document_change";
+
+export interface ProductFactsState {
+  revision: number;
+  digest: string;
+  status: ProductFactsStatus;
+  changedAt: string;
+  reconciliationReason?: ProductFactsReconciliationReason;
+}
+
+export interface ProductDocumentChange {
+  decisionSummary: string;
+  expectedRevision: number;
+  expectedDigest: string;
+  documentDigest: string;
 }
 
 export type LifecycleEventSource =
@@ -99,11 +122,11 @@ export interface Project {
   scheduling: SchedulingStatus;
   requestedAction: ProjectAction | null;
   planning: ProjectPlanningState;
+  productFacts: ProductFactsState;
   modelConfig?: ModelRoutingSettings;
   currentExecution?: ProjectExecution;
   modelRouting?: ExecutionModelRouting;
   cancellation?: Cancellation;
-  contextNotes?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -346,7 +369,7 @@ export type CodriveCommand =
       payload: {
         projectId: string;
         tasks: CreateTaskInput[];
-        productDocument?: string;
+        productDocumentChange: ProductDocumentChange;
       };
     }
   | {
@@ -364,8 +387,8 @@ export type CodriveCommand =
           };
     }
   | {
-      type: "project.record_decision";
-      payload: { projectId: string; decision: string; productDocument?: string };
+      type: "project.update_product_document";
+      payload: { projectId: string } & ProductDocumentChange;
     }
   | {
       type: "task.control";

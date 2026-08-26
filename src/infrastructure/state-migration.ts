@@ -16,11 +16,18 @@ import {
   createTaskReportActivity,
   taskReportFromActivity,
 } from "../domain/task-activity.js";
+import {
+  createProductFacts,
+  productDocumentDigest,
+  requireProductFactsReconciliation,
+} from "../domain/product-facts.js";
 import type {
   CodriveEvent,
   Project,
   ProjectExecution,
   ProjectPlanningState,
+  ProductFactsReconciliationReason,
+  ProductFactsState,
   ProjectReport,
   Task,
   TaskActivity,
@@ -28,7 +35,7 @@ import type {
   TaskReport,
 } from "../domain/types.js";
 
-const currentStateSchemaVersion = 2;
+const currentStateSchemaVersion = 3;
 
 interface StateSchema {
   schemaVersion: number;
@@ -66,7 +73,11 @@ export async function migrateStateDirectory(
     return { migrated: true, reportCount: 0, activityCount: 0 };
   }
 
-  await backupState(stateDirectory, projectsDirectory);
+  await backupState(
+    stateDirectory,
+    projectsDirectory,
+    schema?.schemaVersion ?? 1,
+  );
   let reportCount = 0;
   let activityCount = 0;
   for (const entry of projectEntries) {
@@ -175,7 +186,9 @@ async function migrateProject(
   }
 
   const rawProject = await readJson<Record<string, unknown>>(join(directory, "project.json"));
-  const project = migrateProjectRecord(rawProject);
+  const productDocument = await readFile(join(directory, "PROJECT.md"), "utf8");
+  const migratedProject = migrateProjectRecord(rawProject, productDocument, now);
+  const { project } = migratedProject;
   await atomicWriteJson(join(directory, "project.json"), project);
 
   for (const task of migratedTasks) {
@@ -194,6 +207,30 @@ async function migrateProject(
     }
   }
   const projectEventId = `migration_state_${project.id}`;
+  const reconciliationEventId = `migration_product_facts_${project.id}`;
+  if (
+    migratedProject.reconciliation &&
+    !eventIds.has(reconciliationEventId)
+  ) {
+    appended.push({
+      schemaVersion: 1,
+      eventId: reconciliationEventId,
+      type: "project.product_facts_reconciliation_required",
+      source: "system",
+      projectId,
+      occurredAt: now,
+      data: {
+        reason: migratedProject.reconciliation.reason,
+        ...(migratedProject.reconciliation.legacyContextNotes.length > 0
+          ? {
+              legacyContextNotes:
+                migratedProject.reconciliation.legacyContextNotes,
+            }
+          : {}),
+      },
+      state: { project },
+    });
+  }
   if (!eventIds.has(projectEventId)) {
     appended.push({
       schemaVersion: 1,
@@ -221,11 +258,21 @@ async function migrateProject(
   };
 }
 
-function migrateProjectRecord(raw: Record<string, unknown>): Project {
+function migrateProjectRecord(
+  raw: Record<string, unknown>,
+  productDocument: string,
+  now: string,
+): {
+  project: Project;
+  reconciliation?: {
+    reason: ProductFactsReconciliationReason;
+    legacyContextNotes: string[];
+  };
+} {
   const legacy = raw as unknown as LegacyProject;
   const record = { ...raw };
   const planning = { ...(legacy.planning ?? {}) } as LegacyPlanning;
-  const execution = legacy.currentExecution
+  let execution = legacy.currentExecution
     ? migrateProjectExecution(legacy.currentExecution, legacy.latestReport)
     : undefined;
   const evaluatedRevision =
@@ -237,11 +284,15 @@ function migrateProjectRecord(raw: Record<string, unknown>): Project {
           Boolean(execution.result)
         ? planning.revision
         : undefined);
+  const changeReason =
+    planning.changeReason === "project_decision_recorded"
+      ? "product_document_updated"
+      : planning.changeReason;
   delete planning.lastDecision;
   const migratedPlanning: ProjectPlanningState = {
     revision: planning.revision,
     changedAt: planning.changedAt,
-    changeReason: planning.changeReason,
+    changeReason,
     ...(evaluatedRevision === undefined ? {} : { evaluatedRevision }),
     ...(planning.concurrencyLimit === undefined
       ? {}
@@ -249,9 +300,50 @@ function migrateProjectRecord(raw: Record<string, unknown>): Project {
   };
 
   delete record.latestReport;
+  delete record.contextNotes;
   record.planning = migratedPlanning;
+  const legacyContextNotes = Array.isArray(legacy.contextNotes)
+    ? legacy.contextNotes.filter(
+        (note): note is string => typeof note === "string" && note.trim().length > 0,
+      )
+    : [];
+  const documentDigest = productDocumentDigest(productDocument);
+  const existingProductFacts = legacy.productFacts;
+  let productFacts: ProductFactsState =
+    existingProductFacts ??
+    createProductFacts(productDocument, legacy.updatedAt ?? now);
+  let reconciliationReason: ProductFactsReconciliationReason | undefined;
+  if (legacyContextNotes.length > 0) {
+    reconciliationReason = "legacy_context_notes";
+  } else if (!productDocument.trim()) {
+    reconciliationReason = "empty_product_document";
+  } else if (existingProductFacts && existingProductFacts.digest !== documentDigest) {
+    reconciliationReason = "uncommitted_document_change";
+  }
+  if (reconciliationReason) {
+    productFacts = requireProductFactsReconciliation(
+      productFacts,
+      reconciliationReason,
+      now,
+    );
+    if (execution && isActiveProjectExecution(execution)) {
+      execution = { ...execution, status: "interrupted", finishedAt: now };
+      record.requestedAction = null;
+    }
+  }
+  record.productFacts = productFacts;
   if (execution) record.currentExecution = execution;
-  return record as unknown as Project;
+  return {
+    project: record as unknown as Project,
+    ...(reconciliationReason
+      ? {
+          reconciliation: {
+            reason: reconciliationReason,
+            legacyContextNotes,
+          },
+        }
+      : {}),
+  };
 }
 
 function migrateProjectExecution(
@@ -334,8 +426,16 @@ function reportKey(report: TaskReport): string {
   return `${report.taskId}:${report.attemptId}:${JSON.stringify(report)}`;
 }
 
-async function backupState(stateDirectory: string, projectsDirectory: string) {
-  const backupDirectory = join(stateDirectory, "backups", "state-v1");
+async function backupState(
+  stateDirectory: string,
+  projectsDirectory: string,
+  schemaVersion: number,
+) {
+  const backupDirectory = join(
+    stateDirectory,
+    "backups",
+    `state-v${schemaVersion}`,
+  );
   if (await exists(backupDirectory)) return;
   await mkdir(join(stateDirectory, "backups"), { recursive: true });
   await cp(projectsDirectory, join(backupDirectory, "projects"), {
@@ -393,11 +493,16 @@ function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
 }
 
 type LegacyProjectExecution = ProjectExecution & { report?: ProjectReport };
-type LegacyPlanning = ProjectPlanningState & {
+type LegacyPlanning = Omit<ProjectPlanningState, "changeReason"> & {
+  changeReason:
+    | ProjectPlanningState["changeReason"]
+    | "project_decision_recorded";
   lastDecision?: { revision: number };
 };
 type LegacyProject = Project & {
   latestReport?: ProjectReport;
+  contextNotes?: string[];
+  productFacts?: ProductFactsState;
   planning: LegacyPlanning;
   currentExecution?: LegacyProjectExecution;
 };
@@ -406,3 +511,9 @@ type LegacyTask = Task & {
   latestReport?: TaskReport;
   currentExecution?: LegacyTaskExecution;
 };
+
+function isActiveProjectExecution(execution: ProjectExecution): boolean {
+  return ["pending", "running", "retry_scheduled", "awaiting_report"].includes(
+    execution.status,
+  );
+}

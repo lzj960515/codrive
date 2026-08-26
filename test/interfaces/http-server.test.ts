@@ -1,4 +1,5 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -33,6 +34,10 @@ import {
   testModelRouting,
   testModels,
 } from "../support/recording-executors.js";
+
+function digest(document: string): string {
+  return `sha256:${createHash("sha256").update(document).digest("hex")}`;
+}
 
 describe("HTTP API", () => {
   let store: ProjectStore;
@@ -335,7 +340,7 @@ describe("HTTP API", () => {
       availableTaskSlots: 2,
       planningRevision: 1,
       planning: { revision: 1 },
-      contextNotes: [],
+      productFacts: { status: "current", revision: 1 },
       cancellation: null,
     });
     expect(oldProjectRoute.statusCode).toBe(404);
@@ -1404,13 +1409,20 @@ describe("HTTP API", () => {
     });
   });
 
-  it("makes recorded product decisions available to task and project Skills", async () => {
+  it("uses PROJECT.md as the only current product facts in Skill contexts", async () => {
     const created = await registerProject();
     const firstAttempt = created.project.currentExecution!.attemptId;
-    const decision = "Use keyboard controls for the first playable version.";
+    const document = "# Game\n\nUse keyboard controls for the first playable version.\n";
+    await writeFile(store.productDocumentPath(created.project.id), document);
     const recorded = await command({
-      type: "project.record_decision",
-      payload: { projectId: created.project.id, decision },
+      type: "project.update_product_document",
+      payload: {
+        projectId: created.project.id,
+        decisionSummary: "Use keyboard controls for the first playable version.",
+        expectedRevision: created.project.productFacts.revision,
+        expectedDigest: created.project.productFacts.digest,
+        documentDigest: digest(document),
+      },
     });
 
     const projectContext = await server.inject({
@@ -1427,13 +1439,64 @@ describe("HTTP API", () => {
     expect(recorded.statusCode).toBe(200);
     expect(recorded.json()).toMatchObject({
       status: "active",
-      contextNotes: [decision],
-      planning: { revision: 2, changeReason: "project_decision_recorded" },
+      productFacts: {
+        status: "current",
+        revision: 2,
+        digest: digest(document),
+      },
+      planning: { revision: 2, changeReason: "product_document_updated" },
       currentExecution: { action: "select_tasks", planningRevision: 2 },
     });
     expect(recorded.json().currentExecution.attemptId).not.toBe(firstAttempt);
-    expect(projectContext.json().contextNotes).toEqual([decision]);
-    expect(taskContext.json().projectContextNotes).toEqual([decision]);
+    expect(projectContext.json()).toMatchObject({
+      productFacts: {
+        status: "current",
+        revision: 2,
+        acceptedDigest: digest(document),
+        documentDigest: digest(document),
+      },
+    });
+    expect(taskContext.json().productFacts).toEqual(
+      projectContext.json().productFacts,
+    );
+    expect(projectContext.json()).not.toHaveProperty("contextNotes");
+    expect(taskContext.json()).not.toHaveProperty("projectContextNotes");
+    expect(JSON.stringify(projectContext.json())).not.toContain(
+      "Use keyboard controls for the first playable version.",
+    );
+    expect(JSON.stringify(taskContext.json())).not.toContain(
+      "Use keyboard controls for the first playable version.",
+    );
+  });
+
+  it("rejects a stale or mismatched product document notification", async () => {
+    const created = await registerProject();
+    const document = "# Game\n\nChanged on disk.\n";
+    await writeFile(store.productDocumentPath(created.project.id), document);
+
+    const stale = await command({
+      type: "project.update_product_document",
+      payload: {
+        projectId: created.project.id,
+        decisionSummary: "Notify from an older document view.",
+        expectedRevision: created.project.productFacts.revision + 1,
+        expectedDigest: created.project.productFacts.digest,
+        documentDigest: digest(document),
+      },
+    });
+    const mismatched = await command({
+      type: "project.update_product_document",
+      payload: {
+        projectId: created.project.id,
+        decisionSummary: "Notify with the wrong disk digest.",
+        expectedRevision: created.project.productFacts.revision,
+        expectedDigest: created.project.productFacts.digest,
+        documentDigest: digest("different content"),
+      },
+    });
+
+    expect(stale.statusCode).toBe(409);
+    expect(mismatched.statusCode).toBe(409);
   });
 
   it("exposes manual replanning as an explicit planning revision", async () => {
@@ -1640,7 +1703,6 @@ describe("HTTP API", () => {
       "当前不新增任务：产品契约与评测基线任务仅因所选模型容量不足而失败，原任务工作树保留了未提交现场，仍应由原任务对话继续。";
     await store.saveProject({
       ...created.project,
-      contextNotes: ["地图数据由本地 fixture 提供"],
       planning: {
         ...created.project.planning,
         evaluatedRevision: 1,
@@ -1684,7 +1746,7 @@ describe("HTTP API", () => {
         name: "Semantic Atlas",
         repositoryPath: "/workspace/game",
         defaultBranch: "main",
-        contextNotes: ["地图数据由本地 fixture 提供"],
+        productFacts: { status: "current", revision: 1 },
       },
       productDocument: "# Semantic Atlas\n",
       attention: null,
@@ -1696,10 +1758,14 @@ describe("HTTP API", () => {
         }),
       ],
     });
+    expect(detail.json().project).not.toHaveProperty("currentExecution");
+    expect(detail.json().project).not.toHaveProperty("contextNotes");
     expect(missing.statusCode).toBe(404);
     expect(page.statusCode).toBe(200);
     expect(page.body).toContain("产品详情");
     expect(page.body).toContain("产品文档");
+    expect(page.body).not.toContain("<span>当前执行</span>");
+    expect(page.body).not.toContain("<span>产品上下文</span>");
     expect(page.body).not.toContain("调度说明");
   });
 

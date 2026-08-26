@@ -22,7 +22,9 @@ node <skill-directory>/scripts/codrive-task.mjs context <task-id>
 node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-directory>
 ```
 
-读取命令返回的 `projectDocument`、`taskDocument`、完整 `activities` 和仓库 `AGENTS.md`。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务定义、当前状态和已有证据恢复连续上下文。
+读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities` 和仓库 `AGENTS.md`。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务定义、当前状态和已有证据恢复连续上下文。
+
+`productFacts.status` 为 `modified` 时，磁盘文件尚未完成 Codrive 通知；负责这次修改的对话先用 `$codrive-control` 记录文档变更。状态为 `reconciliation_required` 时，旧产品上下文可能与文档冲突；项目选择停止，任务对话使用 `needs_input` 请求完成 `PROJECT.md` 归并，不自行采用旧文本。
 
 处理项目级任务选择时运行：
 
@@ -30,7 +32,7 @@ node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-
 node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 ```
 
-根据返回的 `requestedAction` 执行任务选择，并读取 `PROJECT.md`、全部任务文件、仓库规则和实际代码。
+根据返回的 `requestedAction` 执行任务选择，并读取 `PROJECT.md`、全部任务文件、仓库规则和实际代码。只有 `productFacts.status` 为 `current` 时才提交选择结果。
 
 ## 连续任务工作区
 

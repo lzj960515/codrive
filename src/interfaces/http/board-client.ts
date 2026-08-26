@@ -684,22 +684,23 @@ export function renderBoardClient(accessToken: string): string {
       const modelOptions = selected => availableModels.map(model =>
         '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
       ).join("");
-      const model = project.currentExecution?.modelRouting;
       const cancellationReason = project.cancellation?.reason || (project.status === "cancelled" ? "历史取消记录未保存理由。" : null);
       const notice = cancellationReason
         ? '<section id="planning" class="product-panel planning-panel cancellation"><div class="panel-heading"><span>取消理由</span><b>'+(project.cancellation ? escapeHtml(label(project.cancellation.decisionBasis)) : "历史记录")+'</b></div><p>'+escapeHtml(cancellationReason)+'</p>'+(project.cancellation ? '<div class="cancellation-meta">'+escapeHtml(label(project.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(project.cancellation.cancelledAt))+'</div>' : '<div class="cancellation-meta">该项目在取消理由成为必填项之前结束。</div>')+'</section>'
         : attention
         ? '<section id="attention" class="product-panel planning-panel '+escapeHtml(attention.kind)+'"><div class="panel-heading"><span>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</span><b>'+escapeHtml(formatTime(attention.occurredAt))+'</b></div><p>'+escapeHtml(attention.summary)+'</p>'+(attention.question ? '<div class="decision-question">'+escapeHtml(attention.question)+'</div>' : '')+'</section>'
         : '';
-      const notes = project.contextNotes.length
-        ? '<ul class="context-notes">'+project.contextNotes.map(note => '<li>'+escapeHtml(note)+'</li>').join("")+'</ul>'
-        : '<p class="empty-copy">尚未记录产品决定或补充上下文。</p>';
+      const productFactsLabel = project.productFacts.status === "current"
+        ? "已同步 · v"+project.productFacts.revision
+        : project.productFacts.status === "modified"
+          ? "磁盘有未记录修改 · v"+project.productFacts.revision
+          : "待归并 · v"+project.productFacts.revision;
       host.innerHTML =
         '<div class="page-screen product-screen">'+
           '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><a class="action-button" href="/settings">运行设置</a></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
           '<div class="product-grid">'+
             '<div class="product-main">'+notice+
-              '<section class="product-panel"><div class="panel-heading"><span>产品文档</span><b>PROJECT.md</b></div><article class="markdown-body">'+renderMarkdown(productDocument)+'</article></section>'+
+              '<section class="product-panel"><div class="panel-heading"><span>产品文档 · PROJECT.md</span><b>'+escapeHtml(productFactsLabel)+'</b></div><article class="markdown-body">'+renderMarkdown(productDocument)+'</article></section>'+
               '<section class="product-panel"><div class="panel-heading"><span>任务清单</span><b>'+tasks.length+'</b></div><div class="product-task-list">'+tasks.map(productTask).join("")+'</div></section>'+
             '</div>'+
             '<aside class="product-rail">'+
@@ -711,8 +712,6 @@ export function renderBoardClient(accessToken: string): string {
                   '<div class="project-model-actions"><button class="primary-button" type="submit">保存模型</button><span id="project-model-status" role="status"></span></div>'+
                 '</form></section>'+
               '<section class="product-panel compact"><div class="panel-heading"><span>注册信息</span></div><dl class="detail-meta"><dt>项目 ID</dt><dd>'+escapeHtml(project.id)+'</dd><dt>仓库</dt><dd>'+escapeHtml(project.repositoryPath)+'</dd><dt>默认分支</dt><dd>'+escapeHtml(project.defaultBranch)+'</dd><dt>注册时间</dt><dd>'+escapeHtml(formatTime(project.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(project.updatedAt))+'</dd></dl></section>'+
-              '<section class="product-panel compact"><div class="panel-heading"><span>当前执行</span><b>'+escapeHtml(label(project.executionStatus || "pending"))+'</b></div><dl class="detail-meta"><dt>动作</dt><dd>'+escapeHtml(label(project.requestedAction || "pending"))+'</dd>'+(model ? '<dt>模型</dt><dd>'+escapeHtml(model.model)+'</dd><dt>路由</dt><dd>'+escapeHtml(label(model.route))+'</dd>'+(model.circuitBreaker ? '<dt>主模型熔断</dt><dd>'+escapeHtml(label(model.circuitBreaker.state))+(model.circuitBreaker.primaryProbeAt ? ' · '+escapeHtml(formatTime(model.circuitBreaker.primaryProbeAt)) : '')+'</dd>' : '')+'<dt>容量重试</dt><dd>'+model.retryCount+'</dd>' : '')+'</dl></section>'+
-              '<section class="product-panel compact"><div class="panel-heading"><span>产品上下文</span><b>'+project.contextNotes.length+'</b></div>'+notes+'</section>'+
             '</aside>'+
           '</div>'+
         '</div>';
