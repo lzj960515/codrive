@@ -39,6 +39,12 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
             }
           : null,
         cancellation: task.cancellation ?? null,
+        terminalAt:
+          task.status === "done"
+            ? task.updatedAt
+            : task.status === "cancelled"
+              ? (task.cancellation?.cancelledAt ?? null)
+              : null,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
       })),

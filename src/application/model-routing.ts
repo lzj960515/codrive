@@ -146,6 +146,11 @@ export function prepareModelRoutingForTurn(
   now: Date,
   primaryProbeAfterMs: number,
 ): ExecutionModelRouting {
+  const configuredModel =
+    current.route === "primary" ? settings.primary : settings.fallback;
+  if (current.model !== configuredModel) {
+    return initialModelRouting(settings);
+  }
   if (
     current.route === "primary" &&
     current.circuitBreaker?.state === "half_open"

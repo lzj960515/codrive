@@ -60,6 +60,24 @@ describe("bundled Skill scripts", () => {
           runtimeSettings = settings;
           return { settings: runtimeSettings, availableModels: [] };
         },
+        readProject: async () => ({
+          settings: {
+            modelConfig: null,
+            effectiveModels: runtimeSettings.models,
+            source: "global" as const,
+          },
+          globalModels: runtimeSettings.models,
+          availableModels: [],
+        }),
+        updateProject: async () => ({
+          settings: {
+            modelConfig: null,
+            effectiveModels: runtimeSettings.models,
+            source: "global" as const,
+          },
+          globalModels: runtimeSettings.models,
+          availableModels: [],
+        }),
       },
       accessToken: "secret",
     });

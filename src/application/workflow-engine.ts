@@ -137,7 +137,7 @@ export class WorkflowEngine {
           now: this.now,
           createId: this.createId,
           leaseExpiration: () => this.leaseExpiration(),
-          modelSettings: () => this.models,
+          modelSettings: (project) => this.modelSettingsFor(project),
           modelCapacityRetryDelaysMs: this.modelCapacityRetryDelaysMs,
           modelCapacityRetryResetAfterMs: this.modelCapacityRetryResetAfterMs,
           modelPrimaryProbeAfterMs: this.modelPrimaryProbeAfterMs,
@@ -299,6 +299,53 @@ export class WorkflowEngine {
       this.maxConcurrentTasks = settings.maxConcurrentTasks;
       this.models = settings.models;
       await this.reconcileInternal();
+    });
+  }
+
+  async readProjectModelConfig(
+    projectId: string,
+  ): Promise<ModelRoutingSettings | null> {
+    const snapshot = await this.requireSnapshot(projectId);
+    return snapshot.project.modelConfig ?? null;
+  }
+
+  updateProjectModelConfig(
+    projectId: string,
+    modelConfig: ModelRoutingSettings | null,
+  ): Promise<Project> {
+    return this.enqueue(async () => {
+      const snapshot = await this.requireSnapshot(projectId);
+      const current = snapshot.project.modelConfig ?? null;
+      if (
+        current?.primary === modelConfig?.primary &&
+        current?.fallback === modelConfig?.fallback
+      ) {
+        return snapshot.project;
+      }
+
+      const updated: Project = {
+        ...snapshot.project,
+        ...(modelConfig ? { modelConfig } : {}),
+        updatedAt: this.now(),
+      };
+      if (!modelConfig) delete updated.modelConfig;
+      await this.store.saveProject(updated);
+      await this.recordEvent({
+        type: "project.model_config_updated",
+        projectId,
+        before: projectLifecycleState(snapshot.project),
+        after: projectLifecycleState(updated),
+        data: {
+          source: modelConfig ? "project" : "global",
+          ...(modelConfig
+            ? {
+                primaryModel: modelConfig.primary,
+                fallbackModel: modelConfig.fallback,
+              }
+            : {}),
+        },
+      });
+      return updated;
     });
   }
 
@@ -1097,7 +1144,7 @@ export class WorkflowEngine {
         const recovery = planModelCapacityRecovery(
           currentRouting,
           failure,
-          this.models,
+          this.modelSettingsFor(found.project),
           failureTime,
           this.modelCapacityRetryDelaysMs,
           this.modelPrimaryProbeAfterMs,
@@ -1361,7 +1408,7 @@ export class WorkflowEngine {
     const threadId = waitingExecution.threadId;
 
     try {
-      const taskForTurn = this.prepareTaskForTurn(task, {
+      const taskForTurn = this.prepareTaskForTurn(project, task, {
         rotateReportOpportunity:
           waitingExecution.submittedActivityId !== undefined ||
           waitingExecution.reportOpportunityId === undefined,
@@ -1674,7 +1721,7 @@ export class WorkflowEngine {
         task,
         attemptId,
         this.now(),
-        task.modelRouting ?? initialModelRouting(this.models),
+        task.modelRouting ?? initialModelRouting(this.modelSettingsFor(project)),
       );
     } catch (error) {
       await this.recordEvent({
@@ -1712,7 +1759,7 @@ export class WorkflowEngine {
     recovery?: TaskTurnRecovery,
   ): Promise<Task> {
     const execution = task.currentExecution!;
-    const taskForTurn = this.prepareTaskForTurn(task);
+    const taskForTurn = this.prepareTaskForTurn(project, task);
     if (taskForTurn !== task) {
       await this.store.saveTask(project.id, taskForTurn);
     }
@@ -1846,7 +1893,7 @@ export class WorkflowEngine {
   ): Promise<Task> {
     const execution = task.currentExecution!;
     try {
-      const taskForTurn = this.prepareTaskForTurn(task);
+      const taskForTurn = this.prepareTaskForTurn(project, task);
       if (taskForTurn !== task) {
         await this.store.saveTask(project.id, taskForTurn);
       }
@@ -2315,6 +2362,7 @@ export class WorkflowEngine {
   }
 
   private prepareTaskForTurn(
+    project: Project,
     task: Task,
     options: { rotateReportOpportunity?: boolean } = {},
   ): Task {
@@ -2322,7 +2370,7 @@ export class WorkflowEngine {
     const now = this.now();
     const modelRouting = prepareModelRoutingForTurn(
       execution.modelRouting,
-      this.models,
+      this.modelSettingsFor(project),
       new Date(now),
       this.modelPrimaryProbeAfterMs,
     );
@@ -2346,6 +2394,10 @@ export class WorkflowEngine {
       delete prepared.currentExecution?.submittedActivityId;
     }
     return prepared;
+  }
+
+  private modelSettingsFor(project: Project): ModelRoutingSettings {
+    return project.modelConfig ?? this.models;
   }
 
   private rotateReportOpportunity(task: Task): Task {

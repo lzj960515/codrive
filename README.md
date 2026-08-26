@@ -63,7 +63,7 @@ codrive upgrade
 
 Codex owns Hook review and trust. After setup or any release that changes the Hook definition, use `/hooks` in Codex to review and trust the new hash. Codex does not expose a public per-Hook API that lets Codrive persist that decision on the user's behalf; the process-wide bypass would also trust unrelated user and project Hooks, so Codrive does not use it. The update window shows an action prompt until all four Codrive definitions are enabled and trusted, and `codrive doctor` reports static installation and runtime trust as separate checks.
 
-The board also provides runtime settings for per-project concurrency, the primary model, and the fallback model.
+The board also provides runtime settings for per-project concurrency, the primary model, and the fallback model. Each project inherits those models by default and can override both from its product detail page; the override applies when the project's next Codex turn starts. The completed and cancelled board columns can be sorted by their terminal time, newest first or oldest first.
 
 An open board uses an authenticated Socket.IO connection to watch only the selected project, the open task, and system updates. Realtime events are small invalidation signals: the browser rereads the matching HTTP snapshot instead of accepting state over the socket. Switching projects or tasks changes rooms, while reconnecting restores the current rooms and scoped reads without reloading the page or discarding the current UI state. See [Realtime synchronization](./docs/architecture/realtime-sync.md) for the full contract.
 

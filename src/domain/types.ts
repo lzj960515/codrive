@@ -99,6 +99,7 @@ export interface Project {
   scheduling: SchedulingStatus;
   requestedAction: ProjectAction | null;
   planning: ProjectPlanningState;
+  modelConfig?: ModelRoutingSettings;
   currentExecution?: ProjectExecution;
   modelRouting?: ExecutionModelRouting;
   cancellation?: Cancellation;

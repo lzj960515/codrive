@@ -19,17 +19,21 @@ describe("SystemSettingsService", () => {
   let projectStore: ProjectStore;
   let workflow: WorkflowEngine;
   let service: SystemSettingsService;
+  let taskDispatcher: RecordingTaskDispatcher;
+  let projectExecutor: RecordingProjectExecutor;
 
   beforeEach(async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-settings-"));
     configStore = new ConfigStore(stateDirectory);
     await configStore.loadOrCreate();
     projectStore = new ProjectStore(stateDirectory);
+    taskDispatcher = new RecordingTaskDispatcher();
+    projectExecutor = new RecordingProjectExecutor();
     workflow = new WorkflowEngine(
       projectStore,
-      new RecordingTaskDispatcher(),
+      taskDispatcher,
       { maxConcurrentTasks: 4, models: testModels },
-      new RecordingProjectExecutor(),
+      projectExecutor,
     );
     service = new SystemSettingsService(configStore, workflow, {
       listModels: async () => [
@@ -129,6 +133,135 @@ describe("SystemSettingsService", () => {
 
     expect((await projectStore.getProject(created.project.id))!.project.planning)
       .toMatchObject({ revision: 1, concurrencyLimit: 4 });
+  });
+
+  it("inherits global models until a project-specific route is configured", async () => {
+    const created = await workflow.registerProject({
+      name: "Important Project",
+      repositoryPath: "/workspace/important",
+      defaultBranch: "main",
+      productDocument: "# Important Project\n",
+      tasks: [{ title: "A", description: "A", acceptanceCriteria: [] }],
+    });
+
+    await expect(service.readProject(created.project.id)).resolves.toMatchObject({
+      settings: {
+        modelConfig: null,
+        effectiveModels: testModels,
+        source: "global",
+      },
+    });
+
+    const configuredModels = {
+      primary: "gpt-5.6-terra",
+      fallback: "gpt-5.6-nano",
+    };
+    await service.updateProject(created.project.id, {
+      modelConfig: configuredModels,
+    });
+
+    await expect(service.readProject(created.project.id)).resolves.toMatchObject({
+      settings: {
+        modelConfig: configuredModels,
+        effectiveModels: configuredModels,
+        source: "project",
+      },
+    });
+    expect((await projectStore.getProject(created.project.id))!.project).toMatchObject({
+      modelConfig: configuredModels,
+      planning: { revision: 1 },
+    });
+  });
+
+  it("uses the project route for later task execution and restores global inheritance", async () => {
+    const created = await workflow.registerProject({
+      name: "Important Project",
+      repositoryPath: "/workspace/important",
+      defaultBranch: "main",
+      productDocument: "# Important Project\n",
+      tasks: [{ title: "A", description: "A", acceptanceCriteria: [] }],
+    });
+    const configuredModels = {
+      primary: "gpt-5.6-terra",
+      fallback: "gpt-5.6-nano",
+    };
+    await service.updateProject(created.project.id, {
+      modelConfig: configuredModels,
+    });
+
+    const selection = (await projectStore.getProject(created.project.id))!.project
+      .currentExecution!;
+    await workflow.submitProjectReport({
+      projectId: created.project.id,
+      attemptId: selection.attemptId,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    await workflow.completeProjectTurn(
+      created.project.id,
+      selection.attemptId,
+      selection.turnId!,
+    );
+
+    expect(taskDispatcher.started.at(-1)?.model).toBe(configuredModels.primary);
+
+    await service.updateProject(created.project.id, { modelConfig: null });
+    await expect(service.readProject(created.project.id)).resolves.toMatchObject({
+      settings: {
+        modelConfig: null,
+        effectiveModels: testModels,
+        source: "global",
+      },
+    });
+    expect((await projectStore.getProject(created.project.id))!.project).not.toHaveProperty(
+      "modelConfig",
+    );
+  });
+
+  it("uses the project route for project planning", async () => {
+    const created = await projectStore.createProject({
+      name: "Important Project",
+      repositoryPath: "/workspace/important",
+      defaultBranch: "main",
+      productDocument: "# Important Project\n",
+      tasks: [{ title: "A", description: "A", acceptanceCriteria: [] }],
+    });
+    const configuredModels = {
+      primary: "gpt-5.6-terra",
+      fallback: "gpt-5.6-nano",
+    };
+    await service.updateProject(created.project.id, {
+      modelConfig: configuredModels,
+    });
+
+    await workflow.reconcile();
+
+    expect(
+      projectExecutor.started.at(-1)?.project.currentExecution?.modelRouting.model,
+    ).toBe(configuredModels.primary);
+  });
+
+  it("rejects an unavailable project route without changing the project", async () => {
+    const created = await workflow.registerProject({
+      name: "Important Project",
+      repositoryPath: "/workspace/important",
+      defaultBranch: "main",
+      productDocument: "# Important Project\n",
+      tasks: [{ title: "A", description: "A", acceptanceCriteria: [] }],
+    });
+
+    await expect(
+      service.updateProject(created.project.id, {
+        modelConfig: {
+          primary: "missing-model",
+          fallback: "gpt-5.6-terra",
+        },
+      }),
+    ).rejects.toThrow("Model missing-model is not available");
+    expect((await projectStore.getProject(created.project.id))!.project).not.toHaveProperty(
+      "modelConfig",
+    );
   });
 
   it("rejects unavailable or identical model routes before saving", async () => {

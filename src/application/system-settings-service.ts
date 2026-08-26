@@ -9,6 +9,10 @@ export interface RuntimeSettingsInput {
   models: ModelRoutingSettings;
 }
 
+export interface ProjectModelSettingsInput {
+  modelConfig: ModelRoutingSettings | null;
+}
+
 export interface ModelCatalog {
   listModels(): Promise<CodexModelOption[]>;
 }
@@ -42,6 +46,29 @@ export class SystemSettingsService {
     await this.workflow.updateRuntimeSettings(input);
     return { settings: input, availableModels };
   }
+
+  async readProject(projectId: string) {
+    const [config, availableModels, modelConfig] = await Promise.all([
+      this.configStore.read(),
+      this.modelCatalog.listModels(),
+      this.workflow.readProjectModelConfig(projectId),
+    ]);
+    return projectSettingsResponse(config.models, availableModels, modelConfig);
+  }
+
+  async updateProject(projectId: string, input: ProjectModelSettingsInput) {
+    const [config, availableModels] = await Promise.all([
+      this.configStore.read(),
+      this.modelCatalog.listModels(),
+    ]);
+    if (input.modelConfig) validateModels(input.modelConfig, availableModels);
+    await this.workflow.updateProjectModelConfig(projectId, input.modelConfig);
+    return projectSettingsResponse(
+      config.models,
+      availableModels,
+      input.modelConfig,
+    );
+  }
 }
 
 function validateSettings(
@@ -51,15 +78,38 @@ function validateSettings(
   if (!Number.isInteger(input.maxConcurrentTasks) || input.maxConcurrentTasks < 1) {
     throw new WorkflowConflictError("Concurrent tasks must be a positive integer");
   }
-  if (input.models.primary === input.models.fallback) {
+  validateModels(input.models, availableModels);
+}
+
+function validateModels(
+  models: ModelRoutingSettings,
+  availableModels: CodexModelOption[],
+): void {
+  if (models.primary === models.fallback) {
     throw new WorkflowConflictError(
       "Fallback model must differ from the primary model",
     );
   }
   const availableModelIds = new Set(availableModels.map(({ id }) => id));
-  for (const model of [input.models.primary, input.models.fallback]) {
+  for (const model of [models.primary, models.fallback]) {
     if (!availableModelIds.has(model)) {
       throw new WorkflowConflictError(`Model ${model} is not available`);
     }
   }
+}
+
+function projectSettingsResponse(
+  globalModels: ModelRoutingSettings,
+  availableModels: CodexModelOption[],
+  modelConfig: ModelRoutingSettings | null,
+) {
+  return {
+    settings: {
+      modelConfig,
+      effectiveModels: modelConfig ?? globalModels,
+      source: modelConfig ? ("project" as const) : ("global" as const),
+    },
+    globalModels,
+    availableModels,
+  };
 }

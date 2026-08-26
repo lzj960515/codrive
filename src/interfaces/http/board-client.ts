@@ -7,6 +7,7 @@ import {
   reconcileProjectOrder,
 } from "./project-ordering.js";
 import { taskBoardLayout } from "./task-board-layout.js";
+import { sortTerminalTasks } from "./task-terminal-ordering.js";
 
 export function renderBoardClient(accessToken: string): string {
   const token = JSON.stringify(accessToken).replaceAll("<", "\\u003c");
@@ -17,6 +18,7 @@ export function renderBoardClient(accessToken: string): string {
   const systemUpdateRenderer = createSystemUpdateRenderer.toString();
   const reorderProjects = moveProjectInOrder.toString();
   const reconcileProjects = reconcileProjectOrder.toString();
+  const orderTerminalTasks = sortTerminalTasks.toString();
   return `<script>
     const TOKEN = ${token};
     const boardLayout = ${layout};
@@ -58,15 +60,18 @@ export function renderBoardClient(accessToken: string): string {
     let taskDetail = null;
     let currentActivity = null;
     let systemSettings = null;
+    let projectSettings = null;
     let updateActionError = null;
     let draggedProjectId = null;
     let projectReadRevision = 0;
     let taskReadRevision = 0;
+    const terminalTaskSort = { done: null, cancelled: null };
     const socket = io({ auth: { token: TOKEN }, autoConnect: false });
     const createWatchCoordinator = ${watchCoordinator};
     const projectOrderStorageKey = ${JSON.stringify(projectOrderStorageKey)};
     const moveProjectInOrder = ${reorderProjects};
     const reconcileProjectOrder = ${reconcileProjects};
+    const sortTerminalTasks = ${orderTerminalTasks};
     const headers = { "x-codrive-token": TOKEN, "content-type": "application/json" };
     const escapeHtml = value => String(value ?? "").replace(/[&<>\"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[character]));
     const bucket = status => boardLayout.statusColumns[status] || status;
@@ -186,11 +191,15 @@ export function renderBoardClient(accessToken: string): string {
     async function refresh() {
       try {
         const requests = [api("/api/board")];
-        if (route.type === "project") requests.push(api("/api/projects/"+encodeURIComponent(route.projectId)));
+        if (route.type === "project") {
+          const projectPath = "/api/projects/"+encodeURIComponent(route.projectId);
+          requests.push(api(projectPath), api(projectPath+"/settings"));
+        }
         if (route.type === "settings") requests.push(api("/api/system/settings"));
         const results = await Promise.all(requests);
         snapshots = results[0];
         productDetail = route.type === "project" ? results[1] : null;
+        projectSettings = route.type === "project" ? results[2] : null;
         systemSettings = route.type === "settings" ? results[1] : null;
         document.getElementById("offline").style.display = "none";
         if (route.type === "project") selectedProjectId = route.projectId;
@@ -221,14 +230,18 @@ export function renderBoardClient(accessToken: string): string {
       try {
         const requests = [api("/api/board/projects/"+encodeURIComponent(projectId))];
         if (route.type === "project" && route.projectId === projectId) {
-          requests.push(api("/api/projects/"+encodeURIComponent(projectId)));
+          const projectPath = "/api/projects/"+encodeURIComponent(projectId);
+          requests.push(api(projectPath), api(projectPath+"/settings"));
         }
         const results = await Promise.all(requests);
         if (revision !== projectReadRevision || selectedProjectId !== projectId) return;
         const snapshotIndex = snapshots.findIndex(snapshot => snapshot.project.id === projectId);
         if (snapshotIndex >= 0) snapshots.splice(snapshotIndex, 1, results[0]);
         else snapshots.push(results[0]);
-        if (route.type === "project") productDetail = results[1];
+        if (route.type === "project") {
+          productDetail = results[1];
+          projectSettings = results[2];
+        }
         if (selectedTaskId && !results[0].tasks.some(task => task.id === selectedTaskId)) {
           selectedTaskId = null;
           taskDetail = null;
@@ -282,6 +295,8 @@ export function renderBoardClient(accessToken: string): string {
         .map(element => ({
           identity: elementIdentity(element),
           value: element.value,
+          checked: "checked" in element ? element.checked : null,
+          disabled: "disabled" in element ? element.disabled : null,
           selectionStart: typeof element.selectionStart === "number" ? element.selectionStart : null,
           selectionEnd: typeof element.selectionEnd === "number" ? element.selectionEnd : null
         }))
@@ -302,6 +317,8 @@ export function renderBoardClient(accessToken: string): string {
         const element = findIdentifiedElement(entry.identity);
         if (!element || !("value" in element)) continue;
         element.value = entry.value;
+        if (entry.checked !== null && "checked" in element) element.checked = entry.checked;
+        if (entry.disabled !== null && "disabled" in element) element.disabled = entry.disabled;
         if (entry.selectionStart !== null && typeof element.setSelectionRange === "function") {
           element.setSelectionRange(entry.selectionStart, entry.selectionEnd);
         }
@@ -324,6 +341,7 @@ export function renderBoardClient(accessToken: string): string {
       if (element.id) return { attribute: "id", value: element.id };
       const attributes = [
         "data-task", "data-project", "data-project-action", "data-copy-task-id",
+        "data-task-sort",
         "data-retry", "data-continue-now", "data-reschedule", "data-reschedule-at",
         "data-activity-thread", "name"
       ];
@@ -571,8 +589,17 @@ export function renderBoardClient(accessToken: string): string {
         '</header>'+
         '<div class="board-wrap"><div class="board">'+columns.map(([key, columnLabel]) => {
           const cards = tasks.filter(task => bucket(task.status) === key);
-          return '<section class="column" data-column="'+key+'"><div class="column-head"><span><i></i>'+columnLabel+'</span><b>'+cards.length+'</b></div><div class="column-body">'+
-            (cards.length ? cards.map(taskCard).join("") : '<div class="column-empty">暂无任务</div>')+
+          const direction = terminalTaskSort[key] || null;
+          const visibleCards = key === "done" || key === "cancelled"
+            ? sortTerminalTasks(cards, direction)
+            : cards;
+          const timeLabel = key === "done" ? "完成时间" : "取消时间";
+          const nextDirection = direction === "desc" ? "正序" : "倒序";
+          const sortButton = key === "done" || key === "cancelled"
+            ? '<button class="column-sort '+(direction ? 'active' : '')+'" type="button" data-task-sort="'+key+'" aria-label="按'+timeLabel+nextDirection+'排列" title="按'+timeLabel+nextDirection+'排列"><span aria-hidden="true">'+(direction === "desc" ? "↓" : direction === "asc" ? "↑" : "⇅")+'</span></button>'
+            : '';
+          return '<section class="column" data-column="'+key+'"><div class="column-head"><span class="column-title"><i></i>'+columnLabel+sortButton+'</span><b>'+cards.length+'</b></div><div class="column-body">'+
+            (visibleCards.length ? visibleCards.map(taskCard).join("") : '<div class="column-empty">暂无任务</div>')+
           '</div></section>';
         }).join("")+'</div></div>';
 
@@ -585,6 +612,15 @@ export function renderBoardClient(accessToken: string): string {
       });
       host.querySelectorAll("[data-task]").forEach(button => {
         button.onclick = () => { void openTask(button.dataset.task); };
+      });
+      host.querySelectorAll("[data-task-sort]").forEach(button => {
+        button.onclick = () => {
+          const column = button.dataset.taskSort;
+          terminalTaskSort[column] = terminalTaskSort[column] === "desc" ? "asc" : "desc";
+          const viewState = captureViewState();
+          renderWorkspace();
+          restoreViewState(viewState);
+        };
       });
     }
 
@@ -640,8 +676,14 @@ export function renderBoardClient(accessToken: string): string {
 
     function renderProductDetail() {
       const host = document.getElementById("project");
-      if (!productDetail) return;
+      if (!productDetail || !projectSettings) return;
       const { project, productDocument, attention, tasks } = productDetail;
+      const { settings: scopedModels, globalModels, availableModels } = projectSettings;
+      const inheritsGlobalModels = scopedModels.source === "global";
+      const selectedModels = scopedModels.modelConfig || scopedModels.effectiveModels;
+      const modelOptions = selected => availableModels.map(model =>
+        '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
+      ).join("");
       const model = project.currentExecution?.modelRouting;
       const cancellationReason = project.cancellation?.reason || (project.status === "cancelled" ? "历史取消记录未保存理由。" : null);
       const notice = cancellationReason
@@ -661,12 +703,47 @@ export function renderBoardClient(accessToken: string): string {
               '<section class="product-panel"><div class="panel-heading"><span>任务清单</span><b>'+tasks.length+'</b></div><div class="product-task-list">'+tasks.map(productTask).join("")+'</div></section>'+
             '</div>'+
             '<aside class="product-rail">'+
+              '<section class="product-panel compact project-model-panel"><div class="panel-heading"><span>项目模型</span><b>'+escapeHtml(inheritsGlobalModels ? "继承全局" : "项目专用")+'</b></div>'+
+                '<form id="project-model-form" class="project-model-form">'+
+                  '<label class="project-model-inherit"><input name="inheritGlobal" type="checkbox" '+(inheritsGlobalModels ? 'checked' : '')+'><span><b>继承全局设置</b><small>'+escapeHtml(globalModels.primary)+' / '+escapeHtml(globalModels.fallback)+'</small></span></label>'+
+                  '<label class="project-model-field"><span>默认模型</span><select name="primary" '+(inheritsGlobalModels ? 'disabled' : '')+'>'+modelOptions(selectedModels.primary)+'</select></label>'+
+                  '<label class="project-model-field"><span>备用模型</span><select name="fallback" '+(inheritsGlobalModels ? 'disabled' : '')+'>'+modelOptions(selectedModels.fallback)+'</select></label>'+
+                  '<div class="project-model-actions"><button class="primary-button" type="submit">保存模型</button><span id="project-model-status" role="status"></span></div>'+
+                '</form></section>'+
               '<section class="product-panel compact"><div class="panel-heading"><span>注册信息</span></div><dl class="detail-meta"><dt>项目 ID</dt><dd>'+escapeHtml(project.id)+'</dd><dt>仓库</dt><dd>'+escapeHtml(project.repositoryPath)+'</dd><dt>默认分支</dt><dd>'+escapeHtml(project.defaultBranch)+'</dd><dt>注册时间</dt><dd>'+escapeHtml(formatTime(project.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(project.updatedAt))+'</dd></dl></section>'+
               '<section class="product-panel compact"><div class="panel-heading"><span>当前执行</span><b>'+escapeHtml(label(project.executionStatus || "pending"))+'</b></div><dl class="detail-meta"><dt>动作</dt><dd>'+escapeHtml(label(project.requestedAction || "pending"))+'</dd>'+(model ? '<dt>模型</dt><dd>'+escapeHtml(model.model)+'</dd><dt>路由</dt><dd>'+escapeHtml(label(model.route))+'</dd>'+(model.circuitBreaker ? '<dt>主模型熔断</dt><dd>'+escapeHtml(label(model.circuitBreaker.state))+(model.circuitBreaker.primaryProbeAt ? ' · '+escapeHtml(formatTime(model.circuitBreaker.primaryProbeAt)) : '')+'</dd>' : '')+'<dt>容量重试</dt><dd>'+model.retryCount+'</dd>' : '')+'</dl></section>'+
               '<section class="product-panel compact"><div class="panel-heading"><span>产品上下文</span><b>'+project.contextNotes.length+'</b></div>'+notes+'</section>'+
             '</aside>'+
           '</div>'+
         '</div>';
+
+      const projectModelForm = document.getElementById("project-model-form");
+      const inheritGlobal = projectModelForm.elements.inheritGlobal;
+      const modelSelects = [projectModelForm.elements.primary, projectModelForm.elements.fallback];
+      inheritGlobal.onchange = () => {
+        for (const select of modelSelects) select.disabled = inheritGlobal.checked;
+      };
+      projectModelForm.onsubmit = async event => {
+        event.preventDefault();
+        const status = document.getElementById("project-model-status");
+        status.textContent = "正在保存...";
+        try {
+          const modelConfig = inheritGlobal.checked
+            ? null
+            : {
+                primary: String(projectModelForm.elements.primary.value),
+                fallback: String(projectModelForm.elements.fallback.value)
+              };
+          projectSettings = await command("project.update_settings", {
+            projectId: project.id,
+            modelConfig
+          });
+          renderProductDetail();
+          document.getElementById("project-model-status").textContent = "已应用到后续执行。";
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      };
     }
 
     function productTask(task) {

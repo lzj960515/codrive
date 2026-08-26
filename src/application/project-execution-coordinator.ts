@@ -35,7 +35,7 @@ export interface ProjectExecutionCoordinatorOptions {
   now: () => string;
   createId: (prefix: string) => string;
   leaseExpiration: () => string;
-  modelSettings: () => ModelRoutingSettings;
+  modelSettings: (project: Project) => ModelRoutingSettings;
   modelCapacityRetryDelaysMs: readonly number[];
   modelCapacityRetryResetAfterMs: number;
   modelPrimaryProbeAfterMs: number;
@@ -88,7 +88,8 @@ export class ProjectExecutionCoordinator {
         status: "pending",
         startedAt: now,
         modelRouting:
-          project.modelRouting ?? initialModelRouting(this.options.modelSettings()),
+          project.modelRouting ??
+          initialModelRouting(this.options.modelSettings(project)),
         leaseExpiresAt: this.options.leaseExpiration(),
         ...context,
       },
@@ -238,7 +239,7 @@ export class ProjectExecutionCoordinator {
     });
     const reminderRouting = prepareModelRoutingForTurn(
       awaitingReport.currentExecution!.modelRouting,
-      this.options.modelSettings(),
+      this.options.modelSettings(awaitingReport),
       new Date(this.options.now()),
       this.options.modelPrimaryProbeAfterMs,
     );
@@ -402,7 +403,7 @@ export class ProjectExecutionCoordinator {
     const recovery = planModelCapacityRecovery(
       currentRouting,
       failure,
-      this.options.modelSettings(),
+      this.options.modelSettings(project),
       failureTime,
       this.options.modelCapacityRetryDelaysMs,
       this.options.modelPrimaryProbeAfterMs,
@@ -468,7 +469,7 @@ export class ProjectExecutionCoordinator {
     const execution = project.currentExecution!;
     const modelRouting = prepareModelRoutingForTurn(
       execution.modelRouting,
-      this.options.modelSettings(),
+      this.options.modelSettings(project),
       new Date(this.options.now()),
       this.options.modelPrimaryProbeAfterMs,
     );

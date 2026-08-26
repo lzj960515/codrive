@@ -22,7 +22,7 @@ Each connection has at most one project watch and one task watch. A task watch m
 
 | Browser scope | Server-owned room | Published signal | Authoritative reread |
 | --- | --- | --- | --- |
-| Selected project | `project:<projectId>` | `project:changed` | `GET /api/board/projects/:projectId` |
+| Selected project | `project:<projectId>` | `project:changed` | `GET /api/board/projects/:projectId`; product routes also read `GET /api/projects/:projectId` and `GET /api/projects/:projectId/settings` |
 | Open task | `task:<taskId>` | `task:changed` | `GET /api/tasks/:taskId` |
 | Update status | `system` | `system:changed` | `GET /api/system` |
 
@@ -35,7 +35,7 @@ The server accepts only typed `watch:*` and `unwatch:*` requests containing a pr
 Initial navigation uses HTTP:
 
 1. `/api/board` loads the project list and initial board projections.
-2. A product route also reads `/api/projects/:projectId`; settings reads `/api/system/settings`.
+2. A product route also reads `/api/projects/:projectId` and `/api/projects/:projectId/settings`; runtime settings reads `/api/system/settings`.
 3. `/api/system` loads update status.
 4. After the initial view is available, the Socket.IO client connects and watches system plus the current project and optional task.
 

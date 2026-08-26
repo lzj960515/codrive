@@ -32,7 +32,10 @@ export interface HttpServerDependencies {
   >;
   skillInstaller: SkillInstaller;
   resourceInstaller?: ManagedResourceInstaller;
-  settingsService: Pick<SystemSettingsService, "read" | "update">;
+  settingsService: Pick<
+    SystemSettingsService,
+    "read" | "update" | "readProject" | "updateProject"
+  >;
   systemUpdateService?: Pick<
     SystemUpdateService,
     "read" | "refresh" | "start" | "installResources" | "installSkills"
@@ -146,6 +149,18 @@ const commandSchema = z.discriminatedUnion("type", [
         primary: z.string().min(1),
         fallback: z.string().min(1),
       }),
+    }),
+  }),
+  z.object({
+    type: z.literal("project.update_settings"),
+    payload: z.object({
+      projectId: z.string().min(1),
+      modelConfig: z
+        .object({
+          primary: z.string().min(1),
+          fallback: z.string().min(1),
+        })
+        .nullable(),
     }),
   }),
   z.object({ type: z.literal("project.register"), payload: projectInputSchema }),
@@ -308,6 +323,15 @@ export function createHttpServer(
       );
     },
   );
+  server.get<{ Params: { projectId: string } }>(
+    "/api/projects/:projectId/settings",
+    async (request, reply) => {
+      if (!(await dependencies.store.getProject(request.params.projectId))) {
+        return reply.code(404).send({ error: "Project not found" });
+      }
+      return dependencies.settingsService.readProject(request.params.projectId);
+    },
+  );
 
   server.get("/api/system", async () =>
     dependencies.systemUpdateService
@@ -430,6 +454,12 @@ export function createHttpServer(
     }
     if (command.type === "system.update_settings") {
       return dependencies.settingsService.update(command.payload);
+    }
+    if (command.type === "project.update_settings") {
+      return dependencies.settingsService.updateProject(
+        command.payload.projectId,
+        { modelConfig: command.payload.modelConfig },
+      );
     }
     return dependencies.workflow.execute(
       command as CodriveCommand,

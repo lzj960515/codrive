@@ -682,6 +682,103 @@ describe("HTTP API", () => {
     expect(() => new Function(clientScript!)).not.toThrow();
   });
 
+  it("reads, updates, and clears a project's model override", async () => {
+    const created = await registerProject("Important Project");
+    const settingsUrl = `/api/projects/${created.project.id}/settings`;
+    const inherited = await server.inject({
+      method: "GET",
+      url: settingsUrl,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const configured = await command({
+      type: "project.update_settings",
+      payload: {
+        projectId: created.project.id,
+        modelConfig: {
+          primary: "gpt-5.6-terra",
+          fallback: "gpt-5.6-sol",
+        },
+      },
+    });
+    const cleared = await command({
+      type: "project.update_settings",
+      payload: { projectId: created.project.id, modelConfig: null },
+    });
+    const page = await server.inject({
+      method: "GET",
+      url: `/projects/${created.project.id}`,
+    });
+
+    expect(inherited.statusCode).toBe(200);
+    expect(inherited.json()).toMatchObject({
+      settings: {
+        modelConfig: null,
+        effectiveModels: testModels,
+        source: "global",
+      },
+    });
+    expect(configured.statusCode).toBe(200);
+    expect(configured.json()).toMatchObject({
+      settings: {
+        modelConfig: {
+          primary: "gpt-5.6-terra",
+          fallback: "gpt-5.6-sol",
+        },
+        source: "project",
+      },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json()).toMatchObject({
+      settings: { modelConfig: null, source: "global" },
+    });
+    expect(page.body).toContain('id="project-model-form"');
+    expect(page.body).toContain("继承全局设置");
+    expect(page.body).toContain('command("project.update_settings"');
+  });
+
+  it("projects exact terminal timestamps for completed and cancelled sorting", async () => {
+    const created = await store.createProject({
+      name: "Terminal Tasks",
+      repositoryPath: "/workspace/terminal",
+      defaultBranch: "main",
+      productDocument: "# Terminal Tasks\n",
+      tasks: [
+        { title: "Done", description: "Done", acceptanceCriteria: [] },
+        { title: "Cancelled", description: "Cancelled", acceptanceCriteria: [] },
+      ],
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "done",
+      updatedAt: "2026-08-22T08:00:00.000Z",
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[1]!,
+      status: "cancelled",
+      cancellation: {
+        cancelledBy: "user",
+        decisionBasis: "user_confirmed",
+        reason: "No longer needed",
+        cancelledAt: "2026-08-23T08:00:00.000Z",
+      },
+      updatedAt: "2026-08-24T08:00:00.000Z",
+    });
+
+    const board = await server.inject({
+      method: "GET",
+      url: `/api/board/projects/${created.project.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const tasks = board.json().tasks as Array<{ title: string; terminalAt: string }>;
+
+    expect(tasks.find(({ title }) => title === "Done")?.terminalAt).toBe(
+      "2026-08-22T08:00:00.000Z",
+    );
+    expect(tasks.find(({ title }) => title === "Cancelled")?.terminalAt).toBe(
+      "2026-08-23T08:00:00.000Z",
+    );
+  });
+
   it("resolves a unique project from its repository path", async () => {
     const created = await registerProject();
 
@@ -1751,6 +1848,8 @@ describe("HTTP API", () => {
     expect(page.body).not.toContain("当前进展");
     expect(page.body).toContain("selectedTaskId");
     expect(page.body).toContain("data-task");
+    expect(page.body).toContain("data-task-sort");
+    expect(page.body).toContain("sortTerminalTasks");
     expect(page.body).toContain('id="update-dialog"');
     expect(page.body).toContain('id="update-primary"');
     expect(page.body).toContain('id="update-trigger"');
