@@ -44,6 +44,6 @@ After validation, Codrive:
 
 Registration is the only operation that carries a complete `productDocument`, because the project has no Codrive-owned `PROJECT.md` yet. Codrive writes the initial file and creates product-facts revision 1.
 
-State schema v3 is the first state contract for this lifecycle. Codrive creates it for an empty state directory and accepts only that exact version. A directory containing projects without the current marker, or carrying any other schema version, fails startup without backup, conversion, or file changes.
+State schema v3 is the current state contract for this lifecycle. Codrive creates it for an empty state directory. A published schema-v2 installation upgrades once: Codrive validates every `PROJECT.md`, creates a durable `backups/state-v2` copy, derives the accepted document digest, assigns a report-opportunity identity to any legacy task execution that still lacks one, records migration state, and writes the v3 marker last. The upgrade is safe to retry after interruption. A directory containing projects without a version marker, or carrying any schema other than v2 or v3, fails startup without conversion.
 
 Startup compares every accepted digest with its local file. A changed or empty document is exposed as `modified`; any active project-selection execution is marked interrupted before recovery. The editor must make the file non-empty and send the normal lightweight notification. Notifications for unchanged content are rejected.

@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { upgradeStateV2ToV3 } from "./state-v2-upgrade.js";
+
 const currentStateSchemaVersion = 3;
 
 interface StateSchema {
   schemaVersion: number;
-  createdAt: string;
+  createdAt?: string;
+  migratedAt?: string;
 }
 
 export async function initializeStateDirectory(
@@ -15,18 +18,22 @@ export async function initializeStateDirectory(
   const schemaPath = join(stateDirectory, "state-schema.json");
   const schema = await readSchema(schemaPath);
   if (schema) {
+    if (schema.schemaVersion === 2) {
+      const createdAt = validTimestamp(schema.migratedAt, "Codrive state marker");
+      await upgradeStateV2ToV3(stateDirectory, new Date().toISOString());
+      await atomicWriteJson(schemaPath, {
+        schemaVersion: currentStateSchemaVersion,
+        createdAt,
+      } satisfies StateSchema);
+      return;
+    }
     if (schema.schemaVersion !== currentStateSchemaVersion) {
       throw new Error(
         `Unsupported Codrive state version ${schema.schemaVersion}; ` +
           `this release requires version ${currentStateSchemaVersion}`,
       );
     }
-    if (
-      typeof schema.createdAt !== "string" ||
-      !Number.isFinite(Date.parse(schema.createdAt))
-    ) {
-      throw new Error("Codrive state marker is invalid");
-    }
+    validTimestamp(schema.createdAt, "Codrive state marker");
     return;
   }
 
@@ -60,6 +67,7 @@ async function readSchema(path: string): Promise<StateSchema | undefined> {
     const value = JSON.parse(await readFile(path, "utf8")) as {
       schemaVersion?: unknown;
       createdAt?: unknown;
+      migratedAt?: unknown;
     };
     if (!Number.isInteger(value.schemaVersion)) {
       throw new Error("Codrive state version is missing or invalid");
@@ -69,6 +77,13 @@ async function readSchema(path: string): Promise<StateSchema | undefined> {
     if (isMissingFile(error)) return undefined;
     throw error;
   }
+}
+
+function validTimestamp(value: unknown, label: string): string {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) {
+    throw new Error(`${label} is invalid`);
+  }
+  return value;
 }
 
 async function atomicWriteJson(path: string, value: unknown): Promise<void> {
