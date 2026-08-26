@@ -776,6 +776,11 @@ describe("HTTP API", () => {
       tasks: [
         { title: "Done", description: "Done", acceptanceCriteria: [] },
         { title: "Cancelled", description: "Cancelled", acceptanceCriteria: [] },
+        {
+          title: "Legacy cancelled",
+          description: "Cancelled before structured metadata existed",
+          acceptanceCriteria: [],
+        },
       ],
     });
     await store.saveTask(created.project.id, {
@@ -794,6 +799,11 @@ describe("HTTP API", () => {
       },
       updatedAt: "2026-08-24T08:00:00.000Z",
     });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[2]!,
+      status: "cancelled",
+      updatedAt: "2026-08-21T08:00:00.000Z",
+    });
 
     const board = await server.inject({
       method: "GET",
@@ -808,6 +818,9 @@ describe("HTTP API", () => {
     expect(tasks.find(({ title }) => title === "Cancelled")?.terminalAt).toBe(
       "2026-08-23T08:00:00.000Z",
     );
+    expect(
+      tasks.find(({ title }) => title === "Legacy cancelled")?.terminalAt,
+    ).toBe("2026-08-21T08:00:00.000Z");
   });
 
   it("resolves a unique project from its repository path", async () => {

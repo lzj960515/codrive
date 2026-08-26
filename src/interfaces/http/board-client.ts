@@ -569,7 +569,7 @@ export function renderBoardClient(accessToken: string): string {
       if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
       const attention = project.attention;
       const attentionCopy = attention?.question || attention?.summary;
-      const cancellationReason = project.status === "cancelled" ? project.cancellation.reason : null;
+      const cancellationReason = project.status === "cancelled" && project.cancellation ? project.cancellation.reason : null;
       const planningBanner = cancellationReason
         ? '<div class="planning-notice cancellation"><b>取消理由</b><span title="'+escapeHtml(cancellationReason)+'">'+escapeHtml(cancellationReason)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'">查看详情</a></div>'
         : attentionCopy
@@ -786,8 +786,10 @@ export function renderBoardClient(accessToken: string): string {
       const criteria = task.acceptanceCriteria.length
         ? '<ul class="criteria-list '+(task.status === "done" ? "complete" : "")+'">'+task.acceptanceCriteria.map(item => '<li><i>'+(task.status === "done" ? "✓" : "")+'</i><span>'+escapeHtml(item)+'</span></li>').join("")+'</ul>'
         : '<div class="criteria-empty">未设置验收标准。</div>';
-      const cancellation = task.status === "cancelled"
+      const cancellation = task.status === "cancelled" && task.cancellation
         ? '<div class="cancellation-card"><b>取消理由</b><p>'+escapeHtml(task.cancellation.reason)+'</p><small>'+escapeHtml(label(task.cancellation.decisionBasis))+' · '+escapeHtml(label(task.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(task.cancellation.cancelledAt))+'</small></div>'
+        : task.status === "cancelled"
+        ? '<div class="cancellation-card"><b>任务已取消</b><p>此任务来自旧版本，未保存结构化取消理由。</p><small>'+escapeHtml(formatTime(task.updatedAt))+'</small></div>'
         : '';
       const scheduledResume = task.currentExecution?.scheduledResume
         ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="action-button" type="button" data-continue-now>提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at></label><button class="action-button" type="button" data-reschedule>保存时间</button></div></section>'
