@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { WorkflowConflictError } from "../domain/errors.js";
 import { advancePlanning, markPlanningEvaluated } from "../domain/planning.js";
+import { hasProductFacts } from "../domain/product-facts.js";
 import {
   createTaskLifecycleActivity,
   createTaskReportActivity,
@@ -2432,7 +2433,7 @@ export class WorkflowEngine {
   private async productDocumentIsCurrent(project: Project): Promise<boolean> {
     const document = await this.store.readProductDocumentSnapshot(project.id);
     return (
-      document.document.trim().length > 0 &&
+      hasProductFacts(document.document) &&
       document.digest === project.productFacts.digest
     );
   }
@@ -2458,7 +2459,7 @@ export class WorkflowEngine {
     }
 
     const document = await this.store.readProductDocumentSnapshot(project.id);
-    if (!document.document.trim()) {
+    if (!hasProductFacts(document.document)) {
       throw new WorkflowConflictError("PROJECT.md must not be empty");
     }
     if (document.digest !== change.documentDigest) {

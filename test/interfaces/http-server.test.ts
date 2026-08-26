@@ -300,6 +300,28 @@ describe("HTTP API", () => {
     });
   }
 
+  it("rejects a blank product document before registering a project", async () => {
+    const response = await command({
+      type: "project.register",
+      payload: {
+        name: "Blank facts",
+        repositoryPath: "/workspace/blank-facts",
+        defaultBranch: "main",
+        productDocument: " \n\t",
+        tasks: [
+          {
+            title: "First task",
+            description: "Must not be registered without product facts",
+            acceptanceCriteria: [],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    await expect(store.listProjects()).resolves.toEqual([]);
+  });
+
   it("exposes only the board, context, and command surfaces", async () => {
     const created = await registerProject();
     const taskId = created.tasks[0]!.id;

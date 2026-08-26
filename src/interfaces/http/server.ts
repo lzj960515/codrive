@@ -11,6 +11,7 @@ import {
   SystemUpdateConflictError,
   WorkflowConflictError,
 } from "../../domain/errors.js";
+import { hasProductFacts } from "../../domain/product-facts.js";
 import type { CodriveCommand, Project, Task } from "../../domain/types.js";
 import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
@@ -56,7 +57,9 @@ const projectInputSchema = z.object({
   name: z.string().min(1),
   repositoryPath: z.string().min(1),
   defaultBranch: z.string().min(1).default("main"),
-  productDocument: z.string().min(1),
+  productDocument: z
+    .string()
+    .refine(hasProductFacts, "PROJECT.md must contain product facts"),
   tasks: z.array(taskInputSchema).min(1),
 });
 
@@ -500,7 +503,10 @@ async function productFactsContext(store: ProjectStore, project: Project) {
   const document = await store.readProductDocumentSnapshot(project.id);
   return {
     status:
-      document.digest === project.productFacts.digest ? "current" : "modified",
+      hasProductFacts(document.document) &&
+      document.digest === project.productFacts.digest
+        ? "current"
+        : "modified",
     revision: project.productFacts.revision,
     acceptedDigest: project.productFacts.digest,
     documentDigest: document.digest,

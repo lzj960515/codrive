@@ -1,5 +1,8 @@
 import type { ProjectSnapshot } from "../../domain/types.js";
-import { productDocumentDigest } from "../../domain/product-facts.js";
+import {
+  hasProductFacts,
+  productDocumentDigest,
+} from "../../domain/product-facts.js";
 import { createBoardView } from "./board-view.js";
 
 export function createProjectDetailView(
@@ -17,7 +20,11 @@ export function createProjectDetailView(
       repositoryPath: project.repositoryPath,
       defaultBranch: project.defaultBranch,
       productFacts: {
-        status: documentDigest === project.productFacts.digest ? "current" : "modified",
+        status:
+          hasProductFacts(productDocument) &&
+          documentDigest === project.productFacts.digest
+            ? "current"
+            : "modified",
         revision: project.productFacts.revision,
         acceptedDigest: project.productFacts.digest,
         documentDigest,
