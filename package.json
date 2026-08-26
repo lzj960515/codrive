@@ -1,6 +1,6 @@
 {
   "name": "codrive",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "A local Codex co-driving service for autonomous product development.",
   "keywords": [
     "codex",
