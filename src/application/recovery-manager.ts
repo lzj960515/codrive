@@ -316,6 +316,7 @@ export class RecoveryManager {
   }
 
   private async scheduleRetryWakeup(now = this.now()): Promise<void> {
+    if (this.stopped) return;
     const generation = ++this.retryScheduleGeneration;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;

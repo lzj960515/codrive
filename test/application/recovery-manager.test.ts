@@ -530,6 +530,81 @@ describe("RecoveryManager", () => {
     }
   });
 
+  it("does not schedule another wakeup when an in-flight scan finishes after stop", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-03T00:00:00.000Z"));
+    const timedStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-stopped-recovery-scan-")),
+    );
+    const created = await timedStore.createProject({
+      name: "Stopped Recovery Game",
+      repositoryPath: "/workspace/stopped-recovery-game",
+      defaultBranch: "main",
+      productDocument: "# Stopped Recovery Game\n",
+      tasks: [{ title: "Loop", description: "Wait", acceptanceCriteria: [] }],
+    });
+    await timedStore.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "blocked",
+      requestedAction: "work",
+      currentExecution: {
+        attemptId: "waiting_attempt",
+        reportOpportunityId: "report_opportunity_waiting",
+        action: "work",
+        status: "waiting_for_resume",
+        startedAt: "2026-08-02T23:00:00.000Z",
+        threadId: "waiting_thread",
+        modelRouting: testModelRouting(),
+        scheduledResume: {
+          reason: "Wait for the release window",
+          resumeAt: "2026-08-03T00:01:00.000Z",
+          resumePrompt: "Continue when the release window opens.",
+        },
+      },
+    });
+    const timedWorkflow = new WorkflowEngine(
+      timedStore,
+      new RecordingTaskDispatcher(),
+      {
+        maxConcurrentTasks: 1,
+        models: testModels,
+        now: () => new Date(Date.now()).toISOString(),
+      },
+    );
+    let releaseScan!: () => void;
+    let markScanStarted!: () => void;
+    const scanStarted = new Promise<void>((resolve) => {
+      markScanStarted = resolve;
+    });
+    const resetCapacityFailures = vi
+      .spyOn(timedWorkflow, "resetStableModelCapacityFailures")
+      .mockImplementation(async () => {
+        markScanStarted();
+        await new Promise<void>((resolve) => {
+          releaseScan = resolve;
+        });
+      });
+    const stoppedRecovery = new RecoveryManager(
+      timedStore,
+      timedWorkflow,
+      new StubNotifications(),
+    );
+
+    try {
+      const scan = stoppedRecovery.recoverUnattendedWork(new Date());
+      await scanStarted;
+      stoppedRecovery.stop();
+      releaseScan();
+      await scan;
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      stoppedRecovery.stop();
+      resetCapacityFailures.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not spin a zero-delay timer when a due resume is waiting for capacity", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-03T00:00:00.000Z"));
