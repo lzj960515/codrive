@@ -53,6 +53,32 @@ describe("ProjectStore", () => {
     ).toEqual(["project.created", "project.activated", "task.created"]);
   });
 
+  it("reads existing schema-v3 project snapshots without archive metadata", async () => {
+    const { stateDirectory, store } = await createStore();
+    const created = await store.createProject(projectInput);
+    const projectPath = join(
+      stateDirectory,
+      "projects",
+      created.project.id,
+      "project.json",
+    );
+
+    expect(JSON.parse(await readFile(projectPath, "utf8"))).not.toHaveProperty(
+      "archivedAt",
+    );
+
+    const restartedStore = new ProjectStore(stateDirectory);
+    await restartedStore.initialize();
+
+    const loaded = await restartedStore.getProject(created.project.id);
+    expect(loaded?.project).toMatchObject({
+      id: created.project.id,
+      status: "active",
+      scheduling: "running",
+    });
+    expect(loaded?.project).not.toHaveProperty("archivedAt");
+  });
+
   it("updates one task without losing other project state", async () => {
     const { store } = await createStore();
     const created = await store.createProject({

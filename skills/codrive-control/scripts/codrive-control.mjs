@@ -7,6 +7,7 @@ import { join } from "node:path";
 const [command, id, action] = process.argv.slice(2);
 let result;
 if (command === "board") result = await request("/api/board");
+else if (command === "archived") result = await request("/api/board/archived");
 else if (command === "project" && id) result = await request(`/api/projects/${encodeURIComponent(id)}`);
 else if (command === "task" && id) result = await request(`/api/tasks/${encodeURIComponent(id)}`);
 else if (command === "settings") result = await request("/api/system/settings");
@@ -26,7 +27,7 @@ else if (command === "product-document-changed" && id) {
   const payload = JSON.parse(await readStdin());
   const change = await productDocumentChange(id, payload);
   result = await sendCommand("project.update_product_document", { projectId: id, ...change });
-} else fail("Usage: codrive-control <board|project|task|settings|update-settings|project-control|task-control|product-document-changed> ...");
+} else fail("Usage: codrive-control <board|archived|project|task|settings|update-settings|project-control|task-control|product-document-changed> ...");
 print(result);
 
 function sendCommand(type, payload) {

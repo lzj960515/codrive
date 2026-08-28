@@ -1,6 +1,6 @@
 ---
 name: codrive-control
-description: 查询和控制本地 Codrive 项目、任务与运行设置，包括产品详情、产品文档事实、看板状态、暂停、恢复、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、产品事实更新、模型容量恢复或要求干预自动流程时使用。
+description: 查询和控制本地 Codrive 项目、任务与运行设置，包括产品详情、产品文档事实、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、产品事实更新、模型容量恢复或要求干预自动流程时使用。
 compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
@@ -12,11 +12,12 @@ compatibility: Requires Node.js 24+ and a running local Codrive service.
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs board
+node <skill-directory>/scripts/codrive-control.mjs archived
 node <skill-directory>/scripts/codrive-control.mjs project <project-id>
 node <skill-directory>/scripts/codrive-control.mjs task <task-id>
 ```
 
-`project` 返回注册信息、完整 `PROJECT.md`、产品事实同步状态、最小规划状态、任务与当前执行信息。`task` 返回任务定义、当前状态、完整进展记录和推导后的 Codex 对话链接。
+`board` 返回默认看板中的未归档项目；`archived` 返回已归档项目及其数量。`project` 返回注册信息、完整 `PROJECT.md`、产品事实同步状态、最小规划状态、归档时间、任务与当前执行信息。`task` 返回任务定义、当前状态、完整进展记录和推导后的 Codex 对话链接。
 
 项目的 `attention` 只表达需要处理的异常状态：`decision_requested` 表示需要在对应 Codex App 对话中作出决定，`blocked` 表示项目存在确定阻塞。没有 `attention` 时，项目按当前任务和规划状态正常推进。
 
@@ -43,13 +44,15 @@ node <skill-directory>/scripts/codrive-control.mjs update-settings
 
 ## 控制项目
 
-动作是 `pause`、`resume`、`retry`、`replan` 或 `cancel`：
+动作是 `pause`、`resume`、`retry`、`replan`、`archive`、`unarchive` 或 `cancel`：
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> <action>
 ```
 
 暂停和恢复只控制后续调度；已经运行的 turn 可以结束，所以看板可能显示“执行中 · 后续已暂停”。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 在同一规划版本创建新的执行 attempt。确认产品、仓库或外部 Gate 已变化时，使用 `replan` 创建新的规划版本并重新判断 backlog。
+
+归档前先读取项目和任务执行状态。项目或任一任务正在启动、运行、等待重试、等待汇报、等待输入或计划等待时，保留当前项目并报告 Codrive 返回的可操作原因。`archive` 会暂停后续调度并从默认看板隐藏项目，同时保留本地数据、`PROJECT.md`、任务、活动历史、执行证据和 Codex 对话引用。`unarchive` 恢复项目可见性；恢复后仍保持暂停，需要用户明确执行 `resume` 才会重新调度。归档与取消的语义独立，第一版不永久删除项目，也不联动归档 Codex 对话。
 
 ## 控制任务
 

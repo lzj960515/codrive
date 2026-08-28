@@ -21,6 +21,15 @@ export function renderBoardPage(accessToken: string): string {
       <div class="local-status"><span></span> 运行中</div>
       <div class="sidebar-heading"><span>项目</span><span id="project-count">0</span></div>
       <nav id="projects" class="project-list" aria-label="Codrive 项目"></nav>
+      <section class="archived-projects">
+        <button id="archived-projects-trigger" class="archived-projects-trigger" type="button" aria-expanded="false" aria-controls="archived-projects-panel">
+          <span><b>已归档</b><small>可恢复并保留本地数据</small></span><strong id="archived-project-count">0</strong>
+        </button>
+        <div id="archived-projects-panel" class="archived-projects-panel" hidden>
+          <nav id="archived-project-list" aria-label="已归档项目"></nav>
+          <p id="archived-projects-status" class="archived-projects-status" role="status" aria-live="polite"></p>
+        </div>
+      </section>
       <div class="sidebar-footer">
         <a class="sidebar-settings" href="/settings">
           <span>⚙</span><span>运行设置<small>并发与模型路由</small></span>
@@ -44,6 +53,22 @@ export function renderBoardPage(accessToken: string): string {
   </div>
 
   <button id="nav-backdrop" class="nav-backdrop" type="button" aria-label="关闭项目列表"></button>
+
+  <div id="project-archive-dialog" class="archive-backdrop" role="dialog" aria-modal="true" aria-labelledby="project-archive-title" hidden>
+    <section class="archive-panel" tabindex="-1">
+      <div class="archive-symbol" aria-hidden="true">A</div>
+      <div>
+        <div class="archive-kicker">LOCAL PROJECT VAULT</div>
+        <h2 id="project-archive-title">归档项目</h2>
+        <p id="project-archive-copy">归档会暂停后续调度并从默认列表隐藏项目。PROJECT.md、任务、活动记录和 Codex 对话引用都会保留在本机。</p>
+        <p id="project-archive-status" class="archive-status" role="status" aria-live="polite"></p>
+        <div class="archive-actions">
+          <button id="project-archive-confirm" class="primary-button" type="button">确认归档</button>
+          <button id="project-archive-cancel" class="quiet-button" type="button">返回</button>
+        </div>
+      </div>
+    </section>
+  </div>
 
   <div id="update-dialog" class="update-backdrop" role="dialog" aria-modal="true" aria-labelledby="update-title" hidden>
     <section class="update-panel" tabindex="-1">

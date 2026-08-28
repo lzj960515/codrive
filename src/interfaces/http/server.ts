@@ -12,6 +12,7 @@ import {
   WorkflowConflictError,
 } from "../../domain/errors.js";
 import { hasProductFacts } from "../../domain/product-facts.js";
+import { isProjectArchived } from "../../domain/project.js";
 import type { CodriveCommand, Project, Task } from "../../domain/types.js";
 import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
@@ -179,7 +180,14 @@ const commandSchema = z.discriminatedUnion("type", [
     payload: z.discriminatedUnion("action", [
       z.object({
         projectId: z.string().min(1),
-        action: z.enum(["pause", "resume", "retry", "replan"]),
+        action: z.enum([
+          "pause",
+          "resume",
+          "retry",
+          "replan",
+          "archive",
+          "unarchive",
+        ]),
       }),
       z.object({
         projectId: z.string().min(1),
@@ -302,8 +310,20 @@ export function createHttpServer(
   );
 
   server.get("/api/board", async () =>
-    createBoardView(await dependencies.store.listProjects()),
+    createBoardView(
+      (await dependencies.store.listProjects()).filter(
+        ({ project }) => !isProjectArchived(project),
+      ),
+    ),
   );
+  server.get("/api/board/archived", async () => {
+    const projects = createBoardView(
+      (await dependencies.store.listProjects()).filter(({ project }) =>
+        isProjectArchived(project),
+      ),
+    );
+    return { count: projects.length, projects };
+  });
   server.get<{ Params: { projectId: string } }>(
     "/api/board/projects/:projectId",
     async (request, reply) => {
@@ -380,6 +400,7 @@ export function createHttpServer(
           snapshot.project,
         ),
         cancellation: snapshot.project.cancellation ?? null,
+        archivedAt: snapshot.project.archivedAt ?? null,
         planning: snapshot.project.planning,
         taskDocuments: snapshot.tasks.map((task) =>
           dependencies.store.taskPath(snapshot.project.id, task.id),
@@ -483,6 +504,7 @@ async function taskContext(
     requestedAction: task.requestedAction,
     cancellation: task.cancellation ?? null,
     projectCancellation: project.cancellation ?? null,
+    projectArchivedAt: project.archivedAt ?? null,
     projectDirectory: store.projectDirectory(project.id),
     projectDocument: store.productDocumentPath(project.id),
     taskDocument: store.taskPath(project.id, task.id),

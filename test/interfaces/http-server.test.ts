@@ -514,13 +514,17 @@ describe("HTTP API", () => {
     const alphaProjectEvents: unknown[] = [];
     const alphaTaskEvents: unknown[] = [];
     const alphaSystemEvents: unknown[] = [];
+    const alphaProjectListEvents: unknown[] = [];
     const betaProjectEvents: unknown[] = [];
     const betaTaskEvents: unknown[] = [];
+    const betaProjectListEvents: unknown[] = [];
     alphaClient.on("project:changed", (event) => alphaProjectEvents.push(event));
     alphaClient.on("task:changed", (event) => alphaTaskEvents.push(event));
     alphaClient.on("system:changed", (event) => alphaSystemEvents.push(event));
+    alphaClient.on("projects:changed", (event) => alphaProjectListEvents.push(event));
     betaClient.on("project:changed", (event) => betaProjectEvents.push(event));
     betaClient.on("task:changed", (event) => betaTaskEvents.push(event));
+    betaClient.on("projects:changed", (event) => betaProjectListEvents.push(event));
 
     await realtimeRequest(alphaClient, "watch:project", {
       projectId: alpha.project.id,
@@ -573,13 +577,28 @@ describe("HTTP API", () => {
 
     await store.appendEvent({
       schemaVersion: 1,
+      eventId: "alpha-archived",
+      type: "project.archived",
+      projectId: alpha.project.id,
+      occurredAt: new Date().toISOString(),
+    });
+    await vi.waitFor(() => {
+      expect(alphaProjectListEvents).toEqual([{ projectId: alpha.project.id }]);
+      expect(betaProjectListEvents).toEqual([{ projectId: alpha.project.id }]);
+      expect(alphaProjectEvents).toHaveLength(2);
+    });
+    expect(alphaTaskEvents).toHaveLength(1);
+    expect(betaTaskEvents).toEqual([]);
+
+    await store.appendEvent({
+      schemaVersion: 1,
       eventId: "alpha-other-task-change",
       type: "task.changed",
       projectId: alpha.project.id,
       taskId: alphaSecondTask!.id,
       occurredAt: new Date().toISOString(),
     });
-    await vi.waitFor(() => expect(alphaProjectEvents).toHaveLength(2));
+    await vi.waitFor(() => expect(alphaProjectEvents).toHaveLength(3));
     expect(alphaTaskEvents).toHaveLength(1);
 
     publishSystemUpdate({ type: "system.version_status_changed" });
@@ -608,7 +627,7 @@ describe("HTTP API", () => {
       occurredAt: new Date().toISOString(),
     });
     await settleRealtime();
-    expect(alphaProjectEvents).toHaveLength(2);
+    expect(alphaProjectEvents).toHaveLength(3);
     expect(alphaTaskEvents).toHaveLength(1);
   });
 
@@ -641,6 +660,7 @@ describe("HTTP API", () => {
     expect(page.body).toContain('socket.on("project:changed"');
     expect(page.body).toContain('socket.on("task:changed"');
     expect(page.body).toContain('socket.on("system:changed"');
+    expect(page.body).toContain('socket.on("projects:changed"');
     expect(page.body).toContain('"/api/board/projects/"');
     expect(page.body).toContain("captureViewState");
     expect(page.body).toContain("refreshRealtimeScopes");
@@ -649,6 +669,123 @@ describe("HTTP API", () => {
     expect(page.body).not.toContain("window.location.reload");
     const inlineScript = page.body.match(/<script>([\s\S]*)<\/script>/)?.[1];
     expect(() => new Function(inlineScript ?? "")).not.toThrow();
+  });
+
+  it("archives projects behind an explicit board boundary and restores them paused", async () => {
+    const visible = await store.createProject({
+      name: "Visible",
+      repositoryPath: "/workspace/visible",
+      defaultBranch: "main",
+      productDocument: "# Visible\n",
+      tasks: [{ title: "Visible task", description: "Backlog", acceptanceCriteria: [] }],
+    });
+    const hidden = await store.createProject({
+      name: "Hidden",
+      repositoryPath: "/workspace/hidden",
+      defaultBranch: "main",
+      productDocument: "# Hidden\n",
+      tasks: [{ title: "Hidden task", description: "Backlog", acceptanceCriteria: [] }],
+    });
+
+    const archived = await command({
+      type: "project.control",
+      payload: { projectId: hidden.project.id, action: "archive" },
+    });
+    const repeated = await command({
+      type: "project.control",
+      payload: { projectId: hidden.project.id, action: "archive" },
+    });
+    const board = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const archivedBoard = await server.inject({
+      method: "GET",
+      url: "/api/board/archived",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const detail = await server.inject({
+      method: "GET",
+      url: `/api/projects/${hidden.project.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const resumeWhileArchived = await command({
+      type: "project.control",
+      payload: { projectId: hidden.project.id, action: "resume" },
+    });
+
+    expect(archived.statusCode).toBe(200);
+    expect(repeated.statusCode).toBe(200);
+    expect(archived.json()).toMatchObject({
+      id: hidden.project.id,
+      status: "active",
+      scheduling: "paused",
+      archivedAt: expect.stringMatching(/^2026-/),
+    });
+    expect(repeated.json().archivedAt).toBe(archived.json().archivedAt);
+    expect(board.json().map(({ project }: ProjectSnapshot) => project.id)).toEqual([
+      visible.project.id,
+    ]);
+    expect(archivedBoard.json()).toMatchObject({
+      count: 1,
+      projects: [
+        {
+          project: {
+            id: hidden.project.id,
+            archivedAt: archived.json().archivedAt,
+            displayStatus: "archived",
+          },
+          tasks: [{ id: hidden.tasks[0]!.id }],
+        },
+      ],
+    });
+    expect(detail.json()).toMatchObject({
+      project: { id: hidden.project.id, archivedAt: archived.json().archivedAt },
+      tasks: [{ id: hidden.tasks[0]!.id }],
+    });
+    expect(resumeWhileArchived.statusCode).toBe(409);
+    expect(resumeWhileArchived.json().error).toMatch(/restore|unarchive/i);
+
+    const restored = await command({
+      type: "project.control",
+      payload: { projectId: hidden.project.id, action: "unarchive" },
+    });
+    const restoredAgain = await command({
+      type: "project.control",
+      payload: { projectId: hidden.project.id, action: "unarchive" },
+    });
+    const currentBoard = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const emptyArchive = await server.inject({
+      method: "GET",
+      url: "/api/board/archived",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const page = await server.inject({ method: "GET", url: "/" });
+
+    expect(restored.json()).toMatchObject({
+      id: hidden.project.id,
+      scheduling: "paused",
+    });
+    expect(restored.json()).not.toHaveProperty("archivedAt");
+    expect(restoredAgain.json()).toEqual(restored.json());
+    expect(currentBoard.json()).toHaveLength(2);
+    expect(emptyArchive.json()).toEqual({ count: 0, projects: [] });
+    expect(page.body).toContain('id="archived-projects-trigger"');
+    expect(page.body).toContain('id="project-archive-dialog"');
+    expect(page.body).toContain('api("/api/board/archived")');
+    expect(page.body).toContain('action: "archive"');
+    expect(page.body).toContain('action: "unarchive"');
+    expect(page.body).toContain("可恢复并保留本地数据");
+    expect(
+      (await store.listProjectEvents(hidden.project.id))
+        .filter(({ type }) => ["project.archived", "project.unarchived"].includes(type))
+        .map(({ type }) => type),
+    ).toEqual(["project.archived", "project.unarchived"]);
   });
 
   it("unsubscribes realtime event sources when the server stops", async () => {

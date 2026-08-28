@@ -2,6 +2,13 @@ export type ProjectStatus = "active" | "idle" | "cancelled";
 
 export type SchedulingStatus = "running" | "paused";
 export type ProjectAction = "select_tasks";
+export type ProjectControlAction =
+  | "pause"
+  | "resume"
+  | "retry"
+  | "replan"
+  | "archive"
+  | "unarchive";
 
 export interface ModelRoutingSettings {
   primary: string;
@@ -95,6 +102,7 @@ export interface Cancellation extends CancellationInput {
 export interface LifecycleState {
   status: string;
   scheduling?: SchedulingStatus;
+  archivedAt?: string;
   requestedAction?: ProjectAction | TaskAction | null;
   attemptId?: string;
   action?: ProjectAction | TaskAction;
@@ -117,6 +125,7 @@ export interface Project {
   currentExecution?: ProjectExecution;
   modelRouting?: ExecutionModelRouting;
   cancellation?: Cancellation;
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -367,7 +376,7 @@ export type CodriveCommand =
       payload:
         | {
             projectId: string;
-            action: "pause" | "resume" | "retry" | "replan";
+            action: ProjectControlAction;
           }
         | {
             projectId: string;

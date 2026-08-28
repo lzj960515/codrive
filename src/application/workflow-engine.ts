@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
 import { WorkflowConflictError } from "../domain/errors.js";
+import {
+  findProjectArchiveBlocker,
+  isProjectArchived,
+  projectCanSchedule,
+  type ProjectArchiveBlocker,
+} from "../domain/project.js";
 import { advancePlanning, markPlanningEvaluated } from "../domain/planning.js";
 import { hasProductFacts } from "../domain/product-facts.js";
 import {
@@ -17,7 +23,9 @@ import type {
   CodriveEvent,
   CreateProjectInput,
   CreateTaskInput,
+  ExecutionStatus,
   Project,
+  ProjectControlAction,
   ProductDocumentChange,
   ProjectReport,
   ProjectSnapshot,
@@ -284,6 +292,7 @@ export class WorkflowEngine {
     const snapshot = await this.store.getProject(projectId);
     if (
       !snapshot ||
+      !projectCanSchedule(snapshot.project) ||
       !(await this.productDocumentIsCurrent(snapshot.project))
     ) {
       return 0;
@@ -708,6 +717,11 @@ export class WorkflowEngine {
   retryTask(taskId: string): Promise<Task> {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
+      if (!projectCanSchedule(found.project)) {
+        throw new WorkflowConflictError(
+          `Project ${found.project.id} must be restored and resumed before task ${taskId} can retry`,
+        );
+      }
       if (!found.task.requestedAction) {
         throw new WorkflowConflictError(`Task ${taskId} has no action to retry`);
       }
@@ -802,17 +816,16 @@ export class WorkflowEngine {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
       if (!found.task.requestedAction) return found.task;
-      if (
-        found.project.status !== "active" ||
-        found.project.scheduling !== "running"
-      ) {
+      if (!projectCanSchedule(found.project)) {
         await this.recordRecoverySuppressed(
           found.project.id,
           found.task,
           expectedAttemptId,
-          found.project.scheduling !== "running"
-            ? "project_paused"
-            : "project_not_active",
+          isProjectArchived(found.project)
+            ? "project_archived"
+            : found.project.scheduling !== "running"
+              ? "project_paused"
+              : "project_not_active",
         );
         return found.task;
       }
@@ -874,8 +887,7 @@ export class WorkflowEngine {
         return found.task;
       }
       if (
-        found.project.status !== "active" ||
-        found.project.scheduling !== "running" ||
+        !projectCanSchedule(found.project) ||
         found.task.status === "blocked" ||
         !found.task.requestedAction
       ) {
@@ -883,9 +895,11 @@ export class WorkflowEngine {
           found.project.id,
           found.task,
           target.attemptId,
-          found.project.scheduling !== "running"
-            ? "project_paused"
-            : "task_no_longer_active",
+          isProjectArchived(found.project)
+            ? "project_archived"
+            : found.project.scheduling !== "running"
+              ? "project_paused"
+              : "task_no_longer_active",
         );
         return found.task;
       }
@@ -1011,6 +1025,11 @@ export class WorkflowEngine {
   retryProject(projectId: string): Promise<Project> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
+      if (isProjectArchived(snapshot.project)) {
+        throw new WorkflowConflictError(
+          `Project ${projectId} must be restored before its execution can retry`,
+        );
+      }
       if (snapshot.project.status === "cancelled") {
         throw new WorkflowConflictError(`Cancelled project ${projectId} is terminal`);
       }
@@ -1036,10 +1055,53 @@ export class WorkflowEngine {
 
   controlProject(
     projectId: string,
-    action: "pause" | "resume" | "replan",
+    action: Exclude<ProjectControlAction, "retry">,
   ): Promise<Project> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
+
+      if (action === "archive") {
+        if (isProjectArchived(snapshot.project)) return snapshot.project;
+        const blocker = findProjectArchiveBlocker(snapshot);
+        if (blocker) {
+          throw new WorkflowConflictError(projectArchiveConflict(blocker));
+        }
+        const archivedAt = this.now();
+        const project: Project = {
+          ...snapshot.project,
+          scheduling: "paused",
+          archivedAt,
+          updatedAt: archivedAt,
+        };
+        await this.store.saveProject(project);
+        await this.recordEvent({
+          type: "project.archived",
+          projectId,
+          before: projectLifecycleState(snapshot.project),
+          after: projectLifecycleState(project),
+        });
+        return project;
+      }
+
+      if (action === "unarchive") {
+        if (!isProjectArchived(snapshot.project)) return snapshot.project;
+        const { archivedAt, ...projectWithoutArchive } = snapshot.project;
+        const project: Project = {
+          ...projectWithoutArchive,
+          scheduling: "paused",
+          updatedAt: this.now(),
+        };
+        await this.store.saveProject(project);
+        await this.recordEvent({
+          type: "project.unarchived",
+          projectId,
+          before: projectLifecycleState(snapshot.project),
+          after: projectLifecycleState(project),
+          data: { archivedAt },
+        });
+        return project;
+      }
+
       if (snapshot.project.status === "cancelled") {
         throw new WorkflowConflictError(`Cancelled project ${projectId} is terminal`);
       }
@@ -1051,6 +1113,11 @@ export class WorkflowEngine {
       }
 
       if (action === "pause" || action === "resume") {
+        if (action === "resume" && isProjectArchived(snapshot.project)) {
+          throw new WorkflowConflictError(
+            `Project ${projectId} must be restored before scheduling can resume`,
+          );
+        }
         const scheduling = action === "pause" ? "paused" : "running";
         const project: Project = {
           ...snapshot.project,
@@ -1365,7 +1432,7 @@ export class WorkflowEngine {
     const candidates = snapshots
       .filter(
         ({ project }) =>
-          project.status === "active" && project.scheduling === "running",
+          projectCanSchedule(project),
       )
       .flatMap(({ project, tasks }) =>
         tasks
@@ -1387,8 +1454,7 @@ export class WorkflowEngine {
       const current = await this.store.findTask(candidate.task.id);
       if (
         !current ||
-        current.project.status !== "active" ||
-        current.project.scheduling !== "running" ||
+        !projectCanSchedule(current.project) ||
         !isScheduledTaskResumeDue(current.task, now, threadId, includeDeferred)
       ) {
         continue;
@@ -1516,8 +1582,7 @@ export class WorkflowEngine {
   private async dispatchScheduledModelRetries(now: Date): Promise<void> {
     for (const snapshot of await this.store.listProjects()) {
       if (
-        snapshot.project.scheduling !== "running" ||
-        snapshot.project.status === "cancelled"
+        !projectCanSchedule(snapshot.project)
       ) {
         continue;
       }
@@ -1591,10 +1656,7 @@ export class WorkflowEngine {
     );
     const integrationLeases = activeIntegrationRepositories(snapshots);
     const candidates = snapshots
-      .filter(({ project }) =>
-        project.scheduling === "running" &&
-        project.status === "active",
-      )
+      .filter(({ project }) => projectCanSchedule(project))
       .flatMap(({ project, tasks }) =>
         tasks.filter(canDispatchTask).map((task) => ({ project, task })),
       )
@@ -1610,8 +1672,7 @@ export class WorkflowEngine {
       const current = await this.store.findTask(candidate.task.id);
       if (!current || !canDispatchTask(current.task)) continue;
       if (
-        current.project.scheduling !== "running" ||
-        current.project.status !== "active"
+        !projectCanSchedule(current.project)
       ) {
         continue;
       }
@@ -1635,8 +1696,7 @@ export class WorkflowEngine {
     if (!this.projectExecutions) return;
     const candidates = (await this.store.listProjects())
       .filter(({ project, tasks }) =>
-        project.status === "active" &&
-        project.scheduling === "running" &&
+        projectCanSchedule(project) &&
         !hasActiveProjectExecution(project) &&
         project.planning.evaluatedRevision !== project.planning.revision &&
         tasks.some(
@@ -1671,6 +1731,7 @@ export class WorkflowEngine {
     for (const snapshot of await this.store.listProjects()) {
       const { project, tasks } = snapshot;
       if (
+        isProjectArchived(project) ||
         project.status === "cancelled" ||
         project.status === "idle" ||
         hasActiveProjectExecution(project) ||
@@ -1707,8 +1768,7 @@ export class WorkflowEngine {
         ({ status, requestedAction }) => status === "backlog" && !requestedAction,
       );
       if (
-        project.status !== "active" ||
-        project.scheduling !== "running" ||
+        !projectCanSchedule(project) ||
         hasActiveProjectExecution(project) ||
         tasks.some(hasActiveTaskExecution) ||
         !hasUnevaluatedBacklog ||
@@ -2832,6 +2892,35 @@ function availableProjectPlanningCapacity(
 
 function projectConcurrencyLimit(project: Project, fallback: number): number {
   return project.planning.concurrencyLimit ?? fallback;
+}
+
+function projectArchiveConflict(
+  blocker: ProjectArchiveBlocker,
+): string {
+  const status = archiveExecutionStatusLabel(blocker.status);
+  if (blocker.scope === "project") {
+    return `项目规划执行仍处于“${status}”，请先完成或取消该执行后再归档。`;
+  }
+  return `任务“${blocker.taskTitle}”的执行仍处于“${status}”，请先完成或取消该执行后再归档。`;
+}
+
+function archiveExecutionStatusLabel(status: ExecutionStatus): string {
+  switch (status) {
+    case "pending":
+      return "正在启动";
+    case "running":
+      return "正在运行";
+    case "retry_scheduled":
+      return "等待重试";
+    case "awaiting_report":
+      return "等待汇报";
+    case "waiting_for_input":
+      return "等待输入";
+    case "waiting_for_resume":
+      return "计划等待";
+    default:
+      return status;
+  }
 }
 
 function compareTaskDispatchCandidates(

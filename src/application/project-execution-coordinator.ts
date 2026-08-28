@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { WorkflowConflictError } from "../domain/errors.js";
 import { markPlanningEvaluated } from "../domain/planning.js";
+import { isProjectArchived } from "../domain/project.js";
 import type {
   CodriveEvent,
   Project,
@@ -61,6 +62,11 @@ export class ProjectExecutionCoordinator {
     context: ProjectExecutionStartContext = {},
     previous: Project = project,
   ): Promise<Project> {
+    if (isProjectArchived(project)) {
+      throw new WorkflowConflictError(
+        `Archived project ${project.id} cannot start a project execution`,
+      );
+    }
     if (
       project.currentExecution &&
       activeStatuses.has(project.currentExecution.status)
@@ -286,6 +292,14 @@ export class ProjectExecutionCoordinator {
   }
 
   async resume(project: Project, expectedAttemptId: string): Promise<Project> {
+    if (isProjectArchived(project)) {
+      await this.recordRecoverySuppressed(
+        project,
+        expectedAttemptId,
+        "project_archived",
+      );
+      return project;
+    }
     const execution = project.currentExecution;
     if (!execution || execution.attemptId !== expectedAttemptId) {
       await this.recordRecoverySuppressed(
@@ -308,6 +322,11 @@ export class ProjectExecutionCoordinator {
     project: Project,
     expectedAttemptId?: string,
   ): Promise<Project> {
+    if (isProjectArchived(project)) {
+      throw new WorkflowConflictError(
+        `Archived project ${project.id} cannot restart a project execution`,
+      );
+    }
     if (
       expectedAttemptId &&
       project.currentExecution?.attemptId !== expectedAttemptId
@@ -443,6 +462,7 @@ export class ProjectExecutionCoordinator {
   }
 
   async retryScheduled(project: Project, now: Date): Promise<Project> {
+    if (isProjectArchived(project)) return project;
     const execution = project.currentExecution;
     if (
       !execution ||

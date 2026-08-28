@@ -17,6 +17,7 @@ import {
 
 describe("bundled Skill scripts", () => {
   let stateDirectory: string;
+  let store: ProjectStore;
   let server: ReturnType<typeof createHttpServer>;
   let runtimeSettings: {
     maxConcurrentTasks: number;
@@ -32,7 +33,7 @@ describe("bundled Skill scripts", () => {
         fallback: "gpt-5.6-terra",
       },
     };
-    const store = new ProjectStore(stateDirectory);
+    store = new ProjectStore(stateDirectory);
     const workflow = new WorkflowEngine(
       store,
       new RecordingTaskDispatcher(),
@@ -90,6 +91,45 @@ describe("bundled Skill scripts", () => {
 
   afterEach(async () => {
     await server.close();
+  });
+
+  it("archives, lists, and restores a project through codrive-control", async () => {
+    const created = await store.createProject({
+      name: "Quiet project",
+      repositoryPath: "/workspace/quiet",
+      defaultBranch: "main",
+      productDocument: "# Quiet project\n",
+      tasks: [{ title: "Later", description: "Backlog", acceptanceCriteria: [] }],
+    });
+
+    const archived = JSON.parse(
+      await runSkill("codrive-control", [
+        "project-control",
+        created.project.id,
+        "archive",
+      ]),
+    ) as { archivedAt: string; scheduling: string };
+    const archivedProjects = JSON.parse(
+      await runSkill("codrive-control", ["archived"]),
+    ) as { count: number; projects: Array<{ project: { id: string } }> };
+    const restored = JSON.parse(
+      await runSkill("codrive-control", [
+        "project-control",
+        created.project.id,
+        "unarchive",
+      ]),
+    ) as { archivedAt?: string; scheduling: string };
+
+    expect(archived).toMatchObject({
+      archivedAt: expect.stringMatching(/^\d{4}-/),
+      scheduling: "paused",
+    });
+    expect(archivedProjects).toMatchObject({
+      count: 1,
+      projects: [{ project: { id: created.project.id } }],
+    });
+    expect(restored).toMatchObject({ scheduling: "paused" });
+    expect(restored).not.toHaveProperty("archivedAt");
   });
 
   it("uses the context and command APIs across all four Skills", async () => {

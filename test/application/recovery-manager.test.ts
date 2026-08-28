@@ -154,6 +154,29 @@ describe("RecoveryManager", () => {
     expect(taskDispatcher.resumed).toHaveLength(1);
   });
 
+  it("does not inspect or resume persisted executions for an archived project", async () => {
+    const found = (await store.findTask(taskId))!;
+    await store.saveProject({
+      ...found.project,
+      scheduling: "running",
+      archivedAt: "2026-08-03T00:01:00.000Z",
+    });
+    notifications.turnStatus = "interrupted";
+    const resumedBefore = taskDispatcher.resumed.length;
+
+    await recovery.recoverInterruptedExecutions();
+    await recovery.recoverExpiredExecutions(new Date("2026-08-04T00:00:00.000Z"));
+    await recovery.recoverDeferredTaskTurns();
+
+    expect(notifications.snapshotReads).toEqual([]);
+    expect(taskDispatcher.resumed).toHaveLength(resumedBefore);
+    expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+      attemptId: found.task.currentExecution!.attemptId,
+      turnId: found.task.currentExecution!.turnId,
+      status: "running",
+    });
+  });
+
   it("ignores the interrupted notification produced by task cancellation", async () => {
     const execution = (await store.findTask(taskId))!.task.currentExecution!;
     await workflow.cancelTask(taskId, {

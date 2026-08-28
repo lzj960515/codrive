@@ -22,11 +22,12 @@ Each connection has at most one project watch and one task watch. A task watch m
 
 | Browser scope | Server-owned room | Published signal | Authoritative reread |
 | --- | --- | --- | --- |
+| Default and archived project collections | Authenticated connection | `projects:changed` | `GET /api/board` and `GET /api/board/archived` |
 | Selected project | `project:<projectId>` | `project:changed` | `GET /api/board/projects/:projectId`; product routes also read `GET /api/projects/:projectId` and `GET /api/projects/:projectId/settings` |
 | Open task | `task:<taskId>` | `task:changed` | `GET /api/tasks/:taskId` |
 | Update status | `system` | `system:changed` | `GET /api/system` |
 
-A projection-changing project event publishes only to its project room. A task event publishes both `project:changed` to the owning project room and `task:changed` to that task's room. Audit-only `command.*`, `recovery.*`, `app_server.*`, and `workflow.*` events remain in the lifecycle log without invalidating an unchanged HTTP projection. System version and update status signals publish only to the `system` room. Payloads identify the affected scope; they do not contain project, task, or system state.
+A projection-changing project event publishes only to its project room. `project.archived` and `project.unarchived` also publish `projects:changed` to authenticated connections because those two transitions move an item between the default and archived collections. A task event publishes both `project:changed` to the owning project room and `task:changed` to that task's room. Audit-only `command.*`, `recovery.*`, `app_server.*`, and `workflow.*` events remain in the lifecycle log without invalidating an unchanged HTTP projection. System version and update status signals publish only to the `system` room. Payloads identify the affected scope; they do not contain project, task, or system state.
 
 The server accepts only typed `watch:*` and `unwatch:*` requests containing a project ID, task ID, or the empty system request. Clients never submit room names.
 
@@ -34,7 +35,7 @@ The server accepts only typed `watch:*` and `unwatch:*` requests containing a pr
 
 Initial navigation uses HTTP:
 
-1. `/api/board` loads the project list and initial board projections.
+1. `/api/board` loads unarchived projects and their initial board projections; `/api/board/archived` loads the separate archived collection and count.
 2. A product route also reads `/api/projects/:projectId` and `/api/projects/:projectId/settings`; runtime settings reads `/api/system/settings`.
 3. `/api/system` loads update status.
 4. After the initial view is available, the Socket.IO client connects and watches system plus the current project and optional task.
@@ -44,6 +45,7 @@ Later changes are scoped:
 - Selecting a project leaves the old task and project rooms, joins the new project room, and reads only the new project snapshot.
 - Opening, switching, or closing task details changes only the task room and task-detail read.
 - A task-two change updates the current project's task list, but it does not read task two while task one is open.
+- Archive and restore reread only the two project collections. If the selected board project was archived, the browser closes its task detail and selects the next unarchived project or the empty state; a product detail route can still read the archived project by ID.
 - Product detail routes watch their project but never join a task room.
 - Settings and system invalidations do not request board, product, or task data.
 
@@ -86,6 +88,6 @@ The App Server gateway returns only the thread status, in-progress turn IDs, the
 
 A persisted thread can be `notLoaded` after an App Server restart or unload even though `thread/read(includeTurns: true)` returns its turns. That status is conclusive only when the exact saved turn is terminal and no turn is active; `active`, `systemError`, missing turns, and any active-turn conflict remain uncertain.
 
-Recovery is serialized by `WorkflowEngine`. Immediately before resuming, it compares the project, task, action, attempt, execution status, thread, and turn, then verifies that the project is active and running, its concurrency limit still covers the execution, and no other task owns the repository integration lease. A failed check leaves the current execution untouched. A successful check reuses the persisted conversation, attempt, action, and model route, starts at most one new turn, and records the existing `execution_recovered` lifecycle activity.
+Recovery is serialized by `WorkflowEngine`. Immediately before resuming, it compares the project, task, action, attempt, execution status, thread, and turn, then verifies that the project is unarchived, active, and running, its concurrency limit still covers the execution, and no other task owns the repository integration lease. A failed check leaves the current execution untouched. A successful check reuses the persisted conversation, attempt, action, and model route, starts at most one new turn, and records the existing `execution_recovered` lifecycle activity.
 
-Planned waits, model retry waits, user decisions, blocked or cancelled tasks, terminal executions, and paused projects never enter silence recovery. Stopping the service removes lifecycle, Store, and timer subscriptions; the next service start creates fresh observation windows.
+Planned waits, model retry waits, user decisions, blocked or cancelled tasks, terminal executions, paused projects, and archived projects never enter silence recovery. Stopping the service removes lifecycle, Store, and timer subscriptions; the next service start creates fresh observation windows.

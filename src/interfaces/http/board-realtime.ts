@@ -14,6 +14,7 @@ import type { ExecutionActivityBridge } from "../../application/execution-activi
 import type { ProjectStore } from "../../infrastructure/project-store.js";
 
 interface ServerToClientEvents {
+  "projects:changed": (event: { projectId: string }) => void;
   "project:changed": (event: { projectId: string }) => void;
   "task:changed": (event: { projectId: string; taskId: string }) => void;
   "task:activity": (event: ExecutionActivityUpdate) => void;
@@ -77,6 +78,7 @@ type BoardSocket = Socket<
 const projectRequestSchema = z.object({ projectId: z.string().min(1) }).strict();
 const taskRequestSchema = z.object({ taskId: z.string().min(1) }).strict();
 const emptyRequestSchema = z.object({}).strict();
+const projectListEventTypes = new Set(["project.archived", "project.unarchived"]);
 
 export class BoardRealtimeGateway {
   private readonly io: Server<
@@ -239,6 +241,9 @@ export class BoardRealtimeGateway {
 
   private publishProjectChange(event: CodriveEvent): void {
     if (!changesProjectProjection(event.type)) return;
+    if (projectListEventTypes.has(event.type)) {
+      this.io.emit("projects:changed", { projectId: event.projectId });
+    }
     this.io.to(projectRoom(event.projectId)).emit("project:changed", {
       projectId: event.projectId,
     });

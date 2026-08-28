@@ -81,6 +81,7 @@ export function projectLifecycleState(project: Project): LifecycleState {
   return {
     status: project.status,
     scheduling: project.scheduling,
+    ...(project.archivedAt ? { archivedAt: project.archivedAt } : {}),
     requestedAction: project.requestedAction,
     ...(project.currentExecution
       ? {

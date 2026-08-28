@@ -9,12 +9,14 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
         name: project.name,
         status: project.status,
         displayStatus: projectDisplayStatus(
+          project.archivedAt,
           project.status,
           project.scheduling,
           planning.status,
           tasks,
         ),
         scheduling: project.scheduling,
+        archivedAt: project.archivedAt ?? null,
         requestedAction: project.requestedAction,
         executionStatus: project.currentExecution?.status ?? null,
         cancellation: project.cancellation ?? null,
@@ -113,11 +115,13 @@ function projectAttention(project: ProjectSnapshot["project"]) {
 }
 
 function projectDisplayStatus(
+  archivedAt: string | undefined,
   projectStatus: ProjectSnapshot["project"]["status"],
   scheduling: ProjectSnapshot["project"]["scheduling"],
   planningStatus: string,
   tasks: ProjectSnapshot["tasks"],
 ): string {
+  if (archivedAt) return "archived";
   if (projectStatus !== "active") return projectStatus;
   const activeTasks = tasks.some(
     ({ status, currentExecution }) =>

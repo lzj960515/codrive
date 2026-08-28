@@ -49,6 +49,15 @@ describe("non-execution Skill handoff", () => {
     expect(task).toContain("不可变活动");
   });
 
+  it("documents project archive as reversible retention with paused restore", async () => {
+    const control = await readFile(resolve("skills/codrive-control/SKILL.md"), "utf8");
+
+    expect(control).toContain("`archive`");
+    expect(control).toContain("`unarchive`");
+    expect(control).toContain("保留本地数据");
+    expect(control).toContain("恢复后仍保持暂停");
+  });
+
   it("expresses trustworthy review and rework decisions in the stage contract", async () => {
     const task = await readFile(resolve("skills/codrive-task/SKILL.md"), "utf8");
 

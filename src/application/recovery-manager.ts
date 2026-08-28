@@ -12,6 +12,7 @@ import type {
   TaskExecution,
   TaskExecutionIdentity,
 } from "../domain/types.js";
+import { projectCanSchedule } from "../domain/project.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
 import type { JsonRpcNotification } from "../infrastructure/json-rpc-connection.js";
 
@@ -64,6 +65,8 @@ const retryScheduleEventTypes = new Set([
   "project.cancelled",
   "project.paused",
   "project.resumed",
+  "project.archived",
+  "project.unarchived",
 ]);
 const workflowNotificationMethods = new Set([
   "transport/disconnected",
@@ -198,10 +201,7 @@ export class RecoveryManager {
         });
         const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
         for (const snapshot of await this.store.listProjects()) {
-          if (
-            snapshot.project.status !== "active" ||
-            snapshot.project.scheduling !== "running"
-          ) {
+          if (!projectCanSchedule(snapshot.project)) {
             continue;
           }
           const projectExecution = snapshot.project.currentExecution;
@@ -246,10 +246,7 @@ export class RecoveryManager {
       async () => {
         const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
         for (const snapshot of await this.store.listProjects()) {
-          if (
-            snapshot.project.status !== "active" ||
-            snapshot.project.scheduling !== "running"
-          ) {
+          if (!projectCanSchedule(snapshot.project)) {
             continue;
           }
           const projectExecution = snapshot.project.currentExecution;
@@ -326,7 +323,7 @@ export class RecoveryManager {
     if (generation !== this.retryScheduleGeneration) return;
     const nextRetryAt = Math.min(
       ...snapshots.flatMap(({ project, tasks }) => {
-        if (project.scheduling !== "running" || project.status === "cancelled") {
+        if (!projectCanSchedule(project)) {
           return [];
         }
         const modelRetries = [
@@ -371,10 +368,7 @@ export class RecoveryManager {
       { source: "recovery", component: "recovery", correlationId },
       async () => {
         for (const snapshot of await this.store.listProjects()) {
-          if (
-            snapshot.project.status !== "active" ||
-            snapshot.project.scheduling !== "running"
-          ) {
+          if (!projectCanSchedule(snapshot.project)) {
             continue;
           }
           for (const task of snapshot.tasks) {

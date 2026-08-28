@@ -25,6 +25,7 @@ export function renderBoardClient(accessToken: string): string {
     const columns = boardLayout.columns;
     const statusLabels = {
       active: "进行中", selecting_tasks: "安排任务中", idle: "当前无待办",
+      archived: "已归档",
       waiting_for_input: "等待决定",
       waiting_for_resume: "计划等待",
       blocked: "已阻塞", cancelled: "已取消", backlog: "待安排", developing: "开发中",
@@ -52,6 +53,7 @@ export function renderBoardClient(accessToken: string): string {
         ? { type: "project", projectId: decodeURIComponent(path.slice("/projects/".length)) }
         : { type: "board" };
     let snapshots = [];
+    let archivedSnapshots = [];
     let selectedProjectId = null;
     let selectedTaskId = null;
     let systemUpdate = null;
@@ -63,6 +65,9 @@ export function renderBoardClient(accessToken: string): string {
     let projectSettings = null;
     let updateActionError = null;
     let draggedProjectId = null;
+    let archivedProjectsExpanded = false;
+    let archiveProjectId = null;
+    let archiveReturnFocus = null;
     let projectReadRevision = 0;
     let taskReadRevision = 0;
     const terminalTaskSort = { done: null, cancelled: null };
@@ -190,7 +195,7 @@ export function renderBoardClient(accessToken: string): string {
 
     async function refresh() {
       try {
-        const requests = [api("/api/board")];
+        const requests = [api("/api/board"), api("/api/board/archived")];
         if (route.type === "project") {
           const projectPath = "/api/projects/"+encodeURIComponent(route.projectId);
           requests.push(api(projectPath), api(projectPath+"/settings"));
@@ -198,14 +203,18 @@ export function renderBoardClient(accessToken: string): string {
         if (route.type === "settings") requests.push(api("/api/system/settings"));
         const results = await Promise.all(requests);
         snapshots = results[0];
-        productDetail = route.type === "project" ? results[1] : null;
-        projectSettings = route.type === "project" ? results[2] : null;
-        systemSettings = route.type === "settings" ? results[1] : null;
+        archivedSnapshots = results[1].projects;
+        productDetail = route.type === "project" ? results[2] : null;
+        projectSettings = route.type === "project" ? results[3] : null;
+        systemSettings = route.type === "settings" ? results[2] : null;
         document.getElementById("offline").style.display = "none";
         if (route.type === "project") selectedProjectId = route.projectId;
-        if (!selectedProjectId || !snapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
+        if (route.type === "board" && (!selectedProjectId || !snapshots.some(snapshot => snapshot.project.id === selectedProjectId))) {
           selectedProjectId = snapshots[0]?.project.id ?? null;
           selectedTaskId = null;
+        }
+        if (route.type === "project" && archivedSnapshots.some(snapshot => snapshot.project.id === route.projectId)) {
+          archivedProjectsExpanded = true;
         }
         const snapshot = currentSnapshot();
         if (selectedTaskId && !snapshot?.tasks.some(task => task.id === selectedTaskId)) {
@@ -224,6 +233,31 @@ export function renderBoardClient(accessToken: string): string {
       }
     }
 
+    async function refreshProjectLists() {
+      const [activeProjects, archivedProjects] = await Promise.all([
+        api("/api/board"),
+        api("/api/board/archived")
+      ]);
+      snapshots = activeProjects;
+      archivedSnapshots = archivedProjects.projects;
+      if (route.type === "board" && !snapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
+        selectedProjectId = snapshots[0]?.project.id ?? null;
+        selectedTaskId = null;
+        taskDetail = null;
+        currentActivity = null;
+        taskReadRevision += 1;
+        document.body.classList.remove("detail-open");
+        document.getElementById("task-detail").setAttribute("aria-hidden", "true");
+        document.getElementById("task-detail-content").innerHTML = "";
+        await syncCurrentWatches();
+      }
+      if (route.type === "project" && archivedSnapshots.some(snapshot => snapshot.project.id === route.projectId)) {
+        archivedProjectsExpanded = true;
+      }
+      renderProjects();
+      if (route.type === "board") renderWorkspace();
+    }
+
     async function refreshSelectedProject(projectId = selectedProjectId) {
       if (!projectId || route.type === "settings") return;
       const revision = ++projectReadRevision;
@@ -236,13 +270,27 @@ export function renderBoardClient(accessToken: string): string {
         const results = await Promise.all(requests);
         if (revision !== projectReadRevision || selectedProjectId !== projectId) return;
         const snapshotIndex = snapshots.findIndex(snapshot => snapshot.project.id === projectId);
-        if (snapshotIndex >= 0) snapshots.splice(snapshotIndex, 1, results[0]);
+        const archivedIndex = archivedSnapshots.findIndex(snapshot => snapshot.project.id === projectId);
+        if (snapshotIndex >= 0) snapshots.splice(snapshotIndex, 1);
+        if (archivedIndex >= 0) archivedSnapshots.splice(archivedIndex, 1);
+        if (results[0].project.archivedAt) archivedSnapshots.push(results[0]);
+        else if (snapshotIndex >= 0) snapshots.splice(snapshotIndex, 0, results[0]);
         else snapshots.push(results[0]);
         if (route.type === "project") {
           productDetail = results[1];
           projectSettings = results[2];
         }
-        if (selectedTaskId && !results[0].tasks.some(task => task.id === selectedTaskId)) {
+        if (route.type === "board" && results[0].project.archivedAt) {
+          selectedProjectId = snapshots[0]?.project.id ?? null;
+          selectedTaskId = null;
+          taskDetail = null;
+          currentActivity = null;
+          taskReadRevision += 1;
+          document.body.classList.remove("detail-open");
+          document.getElementById("task-detail").setAttribute("aria-hidden", "true");
+          document.getElementById("task-detail-content").innerHTML = "";
+          await syncCurrentWatches();
+        } else if (selectedTaskId && !results[0].tasks.some(task => task.id === selectedTaskId)) {
           selectedTaskId = null;
           taskDetail = null;
           void syncCurrentWatches();
@@ -471,6 +519,7 @@ export function renderBoardClient(accessToken: string): string {
     const syncCurrentWatches = () => realtimeWatches.sync();
 
     async function refreshRealtimeScopes() {
+      await refreshProjectLists();
       const requests = [refreshSystem()];
       if (route.type !== "settings" && selectedProjectId) {
         requests.push(refreshSelectedProject());
@@ -523,6 +572,7 @@ export function renderBoardClient(accessToken: string): string {
 
     function renderProjects() {
       document.getElementById("project-count").textContent = snapshots.length;
+      document.getElementById("archived-project-count").textContent = archivedSnapshots.length;
       const host = document.getElementById("projects");
       const orderedSnapshots = getOrderedProjectSnapshots();
       host.innerHTML = snapshots.length
@@ -547,6 +597,90 @@ export function renderBoardClient(accessToken: string): string {
         };
       });
       enableProjectSorting(host);
+
+      const archivedTrigger = document.getElementById("archived-projects-trigger");
+      const archivedPanel = document.getElementById("archived-projects-panel");
+      const archivedHost = document.getElementById("archived-project-list");
+      archivedTrigger.setAttribute("aria-expanded", String(archivedProjectsExpanded));
+      archivedPanel.hidden = !archivedProjectsExpanded;
+      archivedHost.innerHTML = archivedSnapshots.length
+        ? archivedSnapshots.map(({ project, tasks }) =>
+            '<div class="archived-project-row">'+
+              '<a class="archived-project-link" href="/projects/'+encodeURIComponent(project.id)+'"><b>'+escapeHtml(project.name)+'</b><small>'+tasks.length+' 个任务 · '+escapeHtml(formatTime(project.archivedAt))+'</small></a>'+
+              '<button class="archived-project-restore" type="button" data-unarchive-project="'+escapeHtml(project.id)+'">恢复</button>'+
+            '</div>'
+          ).join("")
+        : '<div class="archived-empty">没有已归档项目。</div>';
+      archivedTrigger.onclick = () => {
+        archivedProjectsExpanded = !archivedProjectsExpanded;
+        archivedTrigger.setAttribute("aria-expanded", String(archivedProjectsExpanded));
+        archivedPanel.hidden = !archivedProjectsExpanded;
+        if (archivedProjectsExpanded) archivedHost.querySelector("a, button")?.focus();
+      };
+      archivedHost.querySelectorAll("[data-unarchive-project]").forEach(button => {
+        button.onclick = () => { void restoreArchivedProject(button.dataset.unarchiveProject, button); };
+      });
+    }
+
+    function openProjectArchiveDialog(project, trigger) {
+      archiveProjectId = project.id;
+      archiveReturnFocus = trigger;
+      const dialog = document.getElementById("project-archive-dialog");
+      document.getElementById("project-archive-title").textContent = "归档 · "+project.name;
+      document.getElementById("project-archive-status").textContent = "";
+      document.getElementById("project-archive-confirm").disabled = false;
+      dialog.hidden = false;
+      dialog.querySelector(".archive-panel").focus();
+    }
+
+    function closeProjectArchiveDialog() {
+      document.getElementById("project-archive-dialog").hidden = true;
+      archiveProjectId = null;
+      const focusTarget = archiveReturnFocus?.isConnected
+        ? archiveReturnFocus
+        : document.getElementById("archived-projects-trigger");
+      archiveReturnFocus = null;
+      focusTarget?.focus();
+    }
+
+    async function confirmProjectArchive() {
+      if (!archiveProjectId) return;
+      const status = document.getElementById("project-archive-status");
+      const confirm = document.getElementById("project-archive-confirm");
+      confirm.disabled = true;
+      status.textContent = "正在检查执行状态并归档...";
+      try {
+        await command("project.control", { projectId: archiveProjectId, action: "archive" });
+        if (route.type === "project") {
+          window.location.assign("/");
+          return;
+        }
+        closeProjectArchiveDialog();
+        await refreshProjectLists();
+      } catch (error) {
+        status.textContent = error.message;
+        confirm.disabled = false;
+        confirm.focus();
+      }
+    }
+
+    async function restoreArchivedProject(projectId, trigger) {
+      const status = document.getElementById("archived-projects-status");
+      status.textContent = "正在恢复项目...";
+      trigger.disabled = true;
+      try {
+        await command("project.control", { projectId, action: "unarchive" });
+        await refreshProjectLists();
+        if (route.type === "project" && route.projectId === projectId) {
+          await refreshSelectedProject(projectId);
+        }
+        document.getElementById("archived-projects-status").textContent = "项目已恢复；调度仍保持暂停。";
+        document.querySelector('[data-project="'+CSS.escape(projectId)+'"]')?.focus();
+      } catch (error) {
+        status.textContent = error.message;
+        trigger.disabled = false;
+        trigger.focus();
+      }
     }
 
     function renderWorkspace() {
@@ -564,6 +698,7 @@ export function renderBoardClient(accessToken: string): string {
       const actions = terminal ? [] : [project.scheduling === "paused"
         ? '<button class="action-button" data-project-action="resume">继续</button>'
         : '<button class="action-button" data-project-action="pause">暂停</button>'];
+      actions.push('<button class="action-button danger" data-project-action="archive">归档</button>');
       actions.unshift('<a class="action-button" href="/projects/'+encodeURIComponent(project.id)+'">产品详情</a>');
       if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
       if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
@@ -583,7 +718,7 @@ export function renderBoardClient(accessToken: string): string {
               '<span class="project-status-dot"></span>'+
               '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1><a href="/projects/'+encodeURIComponent(project.id)+'">'+escapeHtml(project.name)+'</a></h1>'+planningBanner+'</div>'+
             '</div>'+
-            '<div class="project-actions">'+actions.join("")+'</div>'+
+            '<div class="project-controls"><div class="project-actions">'+actions.join("")+'</div><div id="project-action-status" class="project-action-status" role="status" aria-live="polite"></div></div>'+
           '</div>'+
           '<div class="project-stats"><span><b>'+tasks.length+'</b>总任务</span><span><b>'+active+'</b>进行中</span><span><b>'+waiting+'</b>等待</span><span><b>'+done+'</b>已完成</span></div>'+
         '</header>'+
@@ -606,8 +741,19 @@ export function renderBoardClient(accessToken: string): string {
       document.getElementById("mobile-projects").onclick = () => document.body.classList.add("nav-open");
       host.querySelectorAll("[data-project-action]").forEach(button => {
         button.onclick = async () => {
-          await command("project.control", { projectId: project.id, action: button.dataset.projectAction });
-          await refreshSelectedProject(project.id);
+          if (button.dataset.projectAction === "archive") {
+            openProjectArchiveDialog(project, button);
+            return;
+          }
+          const status = document.getElementById("project-action-status");
+          status.textContent = "";
+          try {
+            await command("project.control", { projectId: project.id, action: button.dataset.projectAction });
+            await refreshSelectedProject(project.id);
+          } catch (error) {
+            status.textContent = error.message;
+            button.focus();
+          }
         };
       });
       host.querySelectorAll("[data-task]").forEach(button => {
@@ -685,17 +831,24 @@ export function renderBoardClient(accessToken: string): string {
         '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
       ).join("");
       const cancellationReason = project.status === "cancelled" ? project.cancellation.reason : null;
-      const notice = cancellationReason
+      const archiveNotice = project.archivedAt
+        ? '<section class="product-panel archive-notice"><div><span>已归档</span><h2>本地资料完整保留</h2><p>项目已从默认列表隐藏，PROJECT.md、任务、活动记录、执行证据和 Codex 对话引用仍保留。恢复后调度继续保持暂停。</p></div><time>'+escapeHtml(formatTime(project.archivedAt))+'</time></section>'
+        : '';
+      const workflowNotice = cancellationReason
         ? '<section id="planning" class="product-panel planning-panel cancellation"><div class="panel-heading"><span>取消理由</span><b>'+escapeHtml(label(project.cancellation.decisionBasis))+'</b></div><p>'+escapeHtml(cancellationReason)+'</p><div class="cancellation-meta">'+escapeHtml(label(project.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(project.cancellation.cancelledAt))+'</div></section>'
         : attention
         ? '<section id="attention" class="product-panel planning-panel '+escapeHtml(attention.kind)+'"><div class="panel-heading"><span>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</span><b>'+escapeHtml(formatTime(attention.occurredAt))+'</b></div><p>'+escapeHtml(attention.summary)+'</p>'+(attention.question ? '<div class="decision-question">'+escapeHtml(attention.question)+'</div>' : '')+'</section>'
         : '';
+      const notice = archiveNotice+workflowNotice;
+      const projectControls = project.archivedAt
+        ? '<button class="action-button" type="button" data-product-unarchive>恢复项目</button>'
+        : '<button class="action-button danger" type="button" data-product-archive>归档项目</button>';
       const productFactsLabel = project.productFacts.status === "current"
         ? "已同步 · v"+project.productFacts.revision
         : "磁盘有未记录修改 · v"+project.productFacts.revision;
       host.innerHTML =
         '<div class="page-screen product-screen">'+
-          '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><a class="action-button" href="/settings">运行设置</a></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
+          '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><div class="product-hero-actions">'+projectControls+'<a class="action-button" href="/settings">运行设置</a></div></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
           '<div class="product-grid">'+
             '<div class="product-main">'+notice+
               '<section class="product-panel"><div class="panel-heading"><span>产品文档 · PROJECT.md</span><b>'+escapeHtml(productFactsLabel)+'</b></div><article class="markdown-body">'+renderMarkdown(productDocument)+'</article></section>'+
@@ -709,12 +862,18 @@ export function renderBoardClient(accessToken: string): string {
                   '<label class="project-model-field"><span>备用模型</span><select name="fallback" '+(inheritsGlobalModels ? 'disabled' : '')+'>'+modelOptions(selectedModels.fallback)+'</select></label>'+
                   '<div class="project-model-actions"><button class="primary-button" type="submit">保存模型</button><span id="project-model-status" role="status"></span></div>'+
                 '</form></section>'+
-              '<section class="product-panel compact"><div class="panel-heading"><span>注册信息</span></div><dl class="detail-meta"><dt>项目 ID</dt><dd>'+escapeHtml(project.id)+'</dd><dt>仓库</dt><dd>'+escapeHtml(project.repositoryPath)+'</dd><dt>默认分支</dt><dd>'+escapeHtml(project.defaultBranch)+'</dd><dt>注册时间</dt><dd>'+escapeHtml(formatTime(project.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(project.updatedAt))+'</dd></dl></section>'+
+              '<section class="product-panel compact"><div class="panel-heading"><span>注册信息</span></div><dl class="detail-meta"><dt>项目 ID</dt><dd>'+escapeHtml(project.id)+'</dd><dt>仓库</dt><dd>'+escapeHtml(project.repositoryPath)+'</dd><dt>默认分支</dt><dd>'+escapeHtml(project.defaultBranch)+'</dd>'+(project.archivedAt ? '<dt>归档时间</dt><dd>'+escapeHtml(formatTime(project.archivedAt))+'</dd>' : '')+'<dt>注册时间</dt><dd>'+escapeHtml(formatTime(project.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(project.updatedAt))+'</dd></dl></section>'+
             '</aside>'+
           '</div>'+
         '</div>';
 
       const projectModelForm = document.getElementById("project-model-form");
+      host.querySelector("[data-product-archive]")?.addEventListener("click", event => {
+        openProjectArchiveDialog(project, event.currentTarget);
+      });
+      host.querySelector("[data-product-unarchive]")?.addEventListener("click", event => {
+        void restoreArchivedProject(project.id, event.currentTarget);
+      });
       const inheritGlobal = projectModelForm.elements.inheritGlobal;
       const modelSelects = [projectModelForm.elements.primary, projectModelForm.elements.fallback];
       inheritGlobal.onchange = () => {
@@ -934,6 +1093,8 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     document.getElementById("update-trigger").onclick = openUpdateDialog;
+    document.getElementById("project-archive-confirm").onclick = () => { void confirmProjectArchive(); };
+    document.getElementById("project-archive-cancel").onclick = closeProjectArchiveDialog;
     document.getElementById("update-close").onclick = closeUpdateDialog;
     document.getElementById("update-check").onclick = checkForUpdates;
     document.getElementById("update-primary").onclick = runPrimaryUpdateAction;
@@ -947,13 +1108,31 @@ export function renderBoardClient(accessToken: string): string {
     };
     document.getElementById("nav-backdrop").onclick = () => document.body.classList.remove("nav-open");
     document.addEventListener("keydown", event => {
+      const archiveDialog = document.getElementById("project-archive-dialog");
+      if (event.key === "Tab" && !archiveDialog.hidden) {
+        const focusable = Array.from(archiveDialog.querySelectorAll("button:not([disabled])"));
+        if (!focusable.length) return;
+        const currentIndex = focusable.indexOf(document.activeElement);
+        const target = event.shiftKey
+          ? currentIndex <= 0 ? focusable.at(-1) : null
+          : currentIndex < 0 || currentIndex === focusable.length - 1 ? focusable[0] : null;
+        if (target) {
+          event.preventDefault();
+          target.focus();
+        }
+        return;
+      }
       if (event.key !== "Escape") return;
-      if (selectedTaskId) closeDetail();
+      if (!archiveDialog.hidden) closeProjectArchiveDialog();
+      else if (selectedTaskId) closeDetail();
       else if (document.body.classList.contains("nav-open")) document.body.classList.remove("nav-open");
       else if (!document.getElementById("update-dialog").hidden) closeUpdateDialog();
     });
     socket.on("project:changed", event => {
       if (event.projectId === selectedProjectId) void refreshSelectedProject(event.projectId);
+    });
+    socket.on("projects:changed", () => {
+      void refreshProjectLists().catch(showOffline);
     });
     socket.on("task:changed", event => {
       if (event.taskId === selectedTaskId) void refreshSelectedTask(event.taskId);

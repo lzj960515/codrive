@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
 import type {
+  ExecutionStatus,
   Project,
   ProjectReport,
   Task,
@@ -1197,6 +1198,140 @@ describe("WorkflowEngine", () => {
     const resumed = await workflow.controlProject(created.project.id, "resume");
     expect(resumed.scheduling).toBe("running");
     expect(projectExecutor.started).toHaveLength(1);
+  });
+
+  it("archives and restores a project without changing its lifecycle status", async () => {
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [{ title: "Task", description: "Build it", acceptanceCriteria: [] }],
+    });
+    await store.saveTask(created.project.id, {
+      ...created.tasks[0]!,
+      status: "blocked",
+      requestedAction: "develop",
+    });
+
+    const archived = await workflow.controlProject(created.project.id, "archive");
+    expect(archived).toMatchObject({
+      status: "active",
+      scheduling: "paused",
+      archivedAt: "2026-08-03T00:00:00.000Z",
+    });
+    await workflow.controlProject(created.project.id, "archive");
+    await workflow.reconcile();
+    expect(projectExecutor.started).toHaveLength(0);
+
+    now = new Date("2026-08-03T00:05:00.000Z");
+    const restored = await workflow.controlProject(created.project.id, "unarchive");
+    expect(restored).toMatchObject({ status: "active", scheduling: "paused" });
+    expect(restored).not.toHaveProperty("archivedAt");
+    await workflow.controlProject(created.project.id, "unarchive");
+    expect(projectExecutor.started).toHaveLength(0);
+
+    expect(
+      (await readProjectEvents(store, created.project.id))
+        .filter(({ type }) => ["project.archived", "project.unarchived"].includes(type))
+        .map(({ type }) => type),
+    ).toEqual(["project.archived", "project.unarchived"]);
+  });
+
+  it("archives idle and cancelled projects while preserving their status", async () => {
+    for (const status of ["idle", "cancelled"] as const) {
+      const created = await store.createProject({
+        name: `Project ${status}`,
+        repositoryPath: `/workspace/${status}`,
+        defaultBranch: "main",
+        productDocument: `# ${status}\n`,
+        tasks: [{ title: "Task", description: "Done", acceptanceCriteria: [] }],
+      });
+      await store.saveProject({
+        ...created.project,
+        status,
+        scheduling: status === "cancelled" ? "paused" : "running",
+      });
+
+      const archived = await workflow.controlProject(created.project.id, "archive");
+
+      expect(archived).toMatchObject({ status, scheduling: "paused" });
+      expect(archived.archivedAt).toBe("2026-08-03T00:00:00.000Z");
+    }
+  });
+
+  it("rejects archiving while the project or one of its tasks has active execution state", async () => {
+    const blockingStatuses = [
+      "pending",
+      "running",
+      "retry_scheduled",
+      "awaiting_report",
+      "waiting_for_input",
+      "waiting_for_resume",
+    ] as const satisfies readonly ExecutionStatus[];
+    const statusLabels: Record<(typeof blockingStatuses)[number], string> = {
+      pending: "正在启动",
+      running: "正在运行",
+      retry_scheduled: "等待重试",
+      awaiting_report: "等待汇报",
+      waiting_for_input: "等待输入",
+      waiting_for_resume: "计划等待",
+    };
+
+    for (const status of blockingStatuses) {
+      const created = await store.createProject({
+        name: `Project ${status}`,
+        repositoryPath: `/workspace/${status}`,
+        defaultBranch: "main",
+        productDocument: `# ${status}\n`,
+        tasks: [{ title: "Task", description: "In progress", acceptanceCriteria: [] }],
+      });
+      await store.saveTask(created.project.id, {
+        ...created.tasks[0]!,
+        status: status === "waiting_for_input" ? "waiting_for_input" : "developing",
+        requestedAction: "develop",
+        currentExecution: {
+          attemptId: `attempt_${status}`,
+          reportOpportunityId: `report_${status}`,
+          action: "develop",
+          status,
+          startedAt: now.toISOString(),
+          modelRouting: testModelRouting(),
+        },
+      });
+
+      await expect(
+        workflow.controlProject(created.project.id, "archive"),
+      ).rejects.toThrow(
+        new RegExp(`任务.*${statusLabels[status]}.*完成或取消.*归档`),
+      );
+      expect((await store.getProject(created.project.id))!.project).not.toHaveProperty(
+        "archivedAt",
+      );
+    }
+
+    const planning = await store.createProject({
+      name: "Planning",
+      repositoryPath: "/workspace/planning",
+      defaultBranch: "main",
+      productDocument: "# Planning\n",
+      tasks: [{ title: "Task", description: "Backlog", acceptanceCriteria: [] }],
+    });
+    await store.saveProject({
+      ...planning.project,
+      requestedAction: "select_tasks",
+      currentExecution: {
+        attemptId: "planning_attempt",
+        action: "select_tasks",
+        status: "running",
+        startedAt: now.toISOString(),
+        modelRouting: testModelRouting(),
+      },
+    });
+
+    await expect(
+      workflow.controlProject(planning.project.id, "archive"),
+    ).rejects.toThrow(/项目规划执行.*正在运行.*完成或取消.*归档/);
   });
 
   it("preserves idle while project scheduling is paused and resumed", async () => {
