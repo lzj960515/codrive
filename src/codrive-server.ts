@@ -18,12 +18,13 @@ import { CodriveLog } from "./infrastructure/codrive-log.js";
 import { ConfigStore, type CodriveConfig } from "./infrastructure/config-store.js";
 import { InstanceLock } from "./infrastructure/instance-lock.js";
 import { DetachedUpgradeLauncher } from "./infrastructure/detached-upgrade-launcher.js";
-import { HookInstaller } from "./infrastructure/hook-installer.js";
-import { ManagedResourceInstaller } from "./infrastructure/managed-resource-installer.js";
+import {
+  isManagedResourceInstallationComplete,
+  ManagedResourceInstaller,
+} from "./infrastructure/managed-resource-installer.js";
 import { PackageVersionService } from "./infrastructure/package-version-service.js";
 import { readPackageVersion } from "./infrastructure/package-metadata.js";
 import { ProjectStore } from "./infrastructure/project-store.js";
-import { SkillInstaller } from "./infrastructure/skill-installer.js";
 import { UpgradeStateStore } from "./infrastructure/upgrade-state-store.js";
 import { createHttpServer } from "./interfaces/http/server.js";
 
@@ -66,6 +67,14 @@ export class CodriveServer {
       const store = new ProjectStore(this.config.stateDirectory);
       await store.initialize();
       const version = await readPackageVersion();
+      const resourceInstaller = new ManagedResourceInstaller();
+      const resourceStatus = await resourceInstaller.getStatus();
+      if (!isManagedResourceInstallationComplete(resourceStatus.state)) {
+        throw new Error(
+          `Codrive managed resources are ${resourceStatus.state}; ` +
+            `run codrive setup or codrive upgrade while the service is stopped`,
+        );
+      }
       this.codex = new CodexAppServerClient({
         ...(this.config.codexExecutable
           ? { executable: this.config.codexExecutable }
@@ -96,11 +105,6 @@ export class CodriveServer {
         this.configStore,
         workflow,
         this.codex,
-      );
-      const skillInstaller = new SkillInstaller();
-      const resourceInstaller = new ManagedResourceInstaller(
-        skillInstaller,
-        new HookInstaller(),
       );
       const versions = new PackageVersionService({
         currentVersion: version,

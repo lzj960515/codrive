@@ -117,6 +117,7 @@ export class HookInstaller {
     const bundledFingerprint = await fingerprintDirectory(this.sourceDirectory);
     const installedFingerprint = await fingerprintDirectory(this.targetDirectory);
     if (
+      marker?.version !== bundledVersion ||
       marker?.fingerprint !== bundledFingerprint ||
       installedFingerprint !== bundledFingerprint
     ) {

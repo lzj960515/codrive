@@ -39,15 +39,15 @@ You need Node.js 24 or newer, Git, and a Codex login available in `~/.codex`.
 
 ```bash
 npm install --global codrive@latest
+codrive setup
 codrive
 ```
 
-Codrive prints the local board URL and log location. Open the board, then:
+`setup` initializes an empty state directory at schema v4 and installs the exact package's managed Skills and Hook. Codrive then prints the local board URL and log location. After setup:
 
-1. Click **Complete managed resources** in the **Codrive update** window.
-2. In Codex, run `/hooks`, review the four Codrive activity Hook definitions, and trust their current hashes.
-3. Open the target project directory in Codex App.
-4. Describe the product work and ask Codex to use Codrive.
+1. In Codex, run `/hooks`, review the four Codrive activity Hook definitions, and trust their current hashes.
+2. Open the target project directory in Codex App.
+3. Describe the product work and ask Codex to use Codrive.
 
 ```text
 Use Codrive to add a leaderboard to this project, then start development after I confirm the plan.
@@ -60,6 +60,8 @@ The update window shows the installed version, the latest stable release, the la
 ```bash
 codrive upgrade
 ```
+
+Ordinary startup never performs a historical state migration. It creates schema v4 only for an empty state directory, then requires both current v4 state and exact-version managed resource markers before starting App Server or Recovery. A manual package replacement or failed resource synchronization therefore remains stopped; use `codrive upgrade` for an existing installation, or `codrive setup` to initialize a fresh installation or repair resources whose state is already current.
 
 Codex owns Hook review and trust. After setup or any release that changes the Hook definition, use `/hooks` in Codex to review and trust the new hash. Codex does not expose a public per-Hook API that lets Codrive persist that decision on the user's behalf; the process-wide bypass would also trust unrelated user and project Hooks, so Codrive does not use it. The update window shows an action prompt until all four Codrive definitions are enabled and trusted, and `codrive doctor` reports static installation and runtime trust as separate checks.
 
@@ -88,7 +90,7 @@ Codrive persists lifecycle state and enforces scheduling boundaries; Codex handl
 
 Task state has three distinct layers: the board-visible business status, the next `work | review | integrate` action, and the attempt's runtime status. Every completed work result owns one immutable activity and an optional `candidateCommit`; Review and integration bind that exact activity instead of scanning older candidates. Integration completion is a separate decision from Git merge completion, so one task can continue into release, migration, or verification work after code is merged.
 
-State schema v4 persists that model. Before recovery, Codrive backs up v3, migrates task snapshots and recovery events in a temporary tree, reconstructs work-activity bindings, validates counts and open execution identities, then atomically switches projects and the marker. Migration failure leaves v3 authoritative. A schema-v2 installation first performs the existing v3 upgrade and then this v4 migration. See [Product facts lifecycle](./docs/architecture/product-facts.md).
+State schema v4 persists that model. Only the stopped upgrade command performs historical migration: Codrive backs up v3, migrates task snapshots and recovery events in a temporary tree, reconstructs work-activity bindings, validates counts and open execution identities, then atomically switches projects and the marker. Migration failure leaves v3 authoritative. A schema-v2 installation first performs the existing v3 upgrade and then this v4 migration. Ordinary startup only validates current state and managed-resource markers before recovery. See [Product facts lifecycle](./docs/architecture/product-facts.md).
 
 Review findings represent real delivery blockers in supported product and operational paths, not unconditional instructions. The work conversation fixes valid issues or records evidence for findings that do not apply; the same independent Review conversation then reevaluates the newly recorded work result.
 
@@ -125,7 +127,7 @@ codrive stop                    Stop Codrive
 codrive restart                 Restart Codrive
 codrive upgrade                 Install the latest release through the stopped-state migration barrier
 codrive status                  Show local service status
-codrive setup                   Install or complete managed Skills and Hook
+codrive setup                   Initialize fresh v4 state and install or repair managed resources
 codrive doctor                  Check runtime, Codex, login, and managed resources
 codrive import <project.json>   Import a product
 codrive serve                   Run in the foreground

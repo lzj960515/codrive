@@ -19,6 +19,25 @@ export async function initializeStateDirectory(
   const schemaPath = join(stateDirectory, "state-schema.json");
   const schema = await readSchema(schemaPath);
   if (schema) {
+    if (schema.schemaVersion === 2 || schema.schemaVersion === 3) {
+      throw new Error(
+        `Codrive state version ${schema.schemaVersion} requires offline migration ` +
+          `before service startup; run codrive upgrade while the service is stopped`,
+      );
+    }
+    assertCurrentSchema(schema);
+    return;
+  }
+
+  await initializeEmptyStateDirectory(stateDirectory, schemaPath);
+}
+
+export async function migrateStateDirectory(
+  stateDirectory: string,
+): Promise<void> {
+  const schemaPath = join(stateDirectory, "state-schema.json");
+  const schema = await readSchema(schemaPath);
+  if (schema) {
     if (schema.schemaVersion === 2) {
       const createdAt = validTimestamp(schema.migratedAt, "Codrive state marker");
       const migratedAt = new Date().toISOString();
@@ -39,16 +58,17 @@ export async function initializeStateDirectory(
       );
       return;
     }
-    if (schema.schemaVersion !== currentStateSchemaVersion) {
-      throw new Error(
-        `Unsupported Codrive state version ${schema.schemaVersion}; ` +
-          `this release requires version ${currentStateSchemaVersion}`,
-      );
-    }
-    validTimestamp(schema.createdAt, "Codrive state marker");
+    assertCurrentSchema(schema);
     return;
   }
 
+  await initializeEmptyStateDirectory(stateDirectory, schemaPath);
+}
+
+async function initializeEmptyStateDirectory(
+  stateDirectory: string,
+  schemaPath: string,
+): Promise<void> {
   if (await hasPersistedProjects(stateDirectory)) {
     throw new Error(
       `Unversioned Codrive state is unsupported; ` +
@@ -60,6 +80,16 @@ export async function initializeStateDirectory(
     schemaVersion: currentStateSchemaVersion,
     createdAt: new Date().toISOString(),
   } satisfies StateSchema);
+}
+
+function assertCurrentSchema(schema: StateSchema): void {
+  if (schema.schemaVersion !== currentStateSchemaVersion) {
+    throw new Error(
+      `Unsupported Codrive state version ${schema.schemaVersion}; ` +
+        `this release requires version ${currentStateSchemaVersion}`,
+    );
+  }
+  validTimestamp(schema.createdAt, "Codrive state marker");
 }
 
 async function hasPersistedProjects(stateDirectory: string): Promise<boolean> {

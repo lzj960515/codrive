@@ -61,6 +61,27 @@ describe("ManagedResourceInstaller", () => {
     });
   });
 
+  it("reports unchanged resources as outdated when their package version is old", async () => {
+    const fixture = await createFixture();
+    await fixture.installer.install();
+    const newerPackage = new ManagedResourceInstaller(
+      new SkillInstaller(fixture.skillSource, fixture.skillTarget, "0.8.0"),
+      new HookInstaller({
+        sourceDirectory: fixture.hookSource,
+        targetDirectory: fixture.hookTarget,
+        configPath: fixture.hookConfig,
+        version: "0.8.0",
+      }),
+    );
+
+    await expect(newerPackage.getStatus()).resolves.toMatchObject({
+      state: "outdated",
+      bundledVersion: "0.8.0",
+      skills: { state: "outdated", installedVersion: "0.7.0" },
+      hook: { state: "outdated", installedVersion: "0.7.0" },
+    });
+  });
+
   it("coalesces concurrent repair requests into one installation transaction", async () => {
     const fixture = await createFixture();
 
@@ -101,9 +122,11 @@ async function createFixture() {
     "utf8",
   );
   return {
+    skillSource,
     skillTarget,
     hookSource,
     hookTarget,
+    hookConfig,
     installer: new ManagedResourceInstaller(
       new SkillInstaller(skillSource, skillTarget, "0.7.0"),
       new HookInstaller({

@@ -39,15 +39,15 @@ Codex 仍然负责理解仓库、编写和审查代码、运行测试、解决�
 
 ```bash
 npm install --global codrive@latest
+codrive setup
 codrive
 ```
 
-Codrive 会输出本地看板地址和日志位置。打开看板后：
+`setup` 会把空状态目录初始化为 schema v4，并安装与当前包精确一致的托管 Skills 和 Hook。随后 Codrive 会输出本地看板地址和日志位置。`setup` 完成后：
 
-1. 在 **Codrive 更新**窗口中点击**补齐托管资源**。
-2. 在 Codex 中运行 `/hooks`，审核四条 Codrive activity Hook 定义，并信任它们的当前 hash。
-3. 用 Codex App 打开目标项目目录。
-4. 描述产品工作，并让 Codex 使用 Codrive 推进。
+1. 在 Codex 中运行 `/hooks`，审核四条 Codrive activity Hook 定义，并信任它们的当前 hash。
+2. 用 Codex App 打开目标项目目录。
+3. 描述产品工作，并让 Codex 使用 Codrive 推进。
 
 ```text
 用 Codrive 的方式给这个项目增加排行榜功能，我确认计划后开始开发。
@@ -60,6 +60,8 @@ Codrive 常驻运行时会约每小时检查一次 npm latest 稳定版。已经
 ```bash
 codrive upgrade
 ```
+
+普通启动不会执行历史状态迁移。它只会为空状态目录创建 schema v4，然后在启动 App Server 或 `RecoveryManager` 前，要求状态已经是当前 v4，并且托管资源 marker 与当前包版本精确一致。因此手工替换 npm 包或资源同步失败后，服务会继续保持停止；已有安装使用 `codrive upgrade` 恢复，新安装或状态已经是当前版本时使用 `codrive setup` 初始化或修复资源。
 
 Hook 的审核和信任由 Codex 管理。首次 setup 后，或新版本改变 Hook 定义后，请在 Codex 中运行 `/hooks`，审核并信任新的 hash。Codex 没有提供让 Codrive 代替用户持久化单条 Hook 信任的公共 API；进程级绕过还会同时信任无关的用户和项目 Hook，因此 Codrive 不使用它。更新窗口会持续提示，直到四条 Codrive 定义都已启用并信任；`codrive doctor` 会分别报告静态安装状态和运行时信任状态。
 
@@ -88,7 +90,7 @@ Codrive 持久化生命周期状态并执行调度边界，Codex 负责需要判
 
 任务状态分为三层：看板展示的业务状态、下一步 `work | review | integrate` 动作，以及 attempt 的运行状态。每份完成的 work 结果拥有一条不可变活动和可选的 `candidateCommit`；Review 与合入绑定这条准确活动，不再从旧历史中寻找最近候选。代码已经合入和整个任务完成是两个判断，所以同一任务可以在合入后继续发布、迁移或验证。
 
-持久化状态 schema v4 保存这套模型。恢复执行前，Codrive 会备份 v3，在临时目录迁移任务快照与恢复事件，重建 work 活动引用，校验计数和开放执行身份，再替换 projects 与 marker；迁移失败时 v3 仍然是权威数据。schema v2 安装会先完成原有 v3 升级，再进入同一套 v4 迁移。完整契约见 [产品事实生命周期](./docs/architecture/product-facts.md)。
+持久化状态 schema v4 保存这套模型。只有停服升级命令执行历史迁移：Codrive 会备份 v3，在临时目录迁移任务快照与恢复事件，重建 work 活动引用，校验计数和开放执行身份，再替换 projects 与 marker；迁移失败时 v3 仍然是权威数据。schema v2 安装会先完成原有 v3 升级，再进入同一套 v4 迁移。普通启动只校验当前状态和托管资源 marker，全部满足后才恢复执行。完整契约见 [产品事实生命周期](./docs/architecture/product-facts.md)。
 
 Review finding 表达受支持产品与运维路径中的真实交付阻塞，不是无条件执行指令。工作对话会修复成立的问题，或为不适用的 finding 记录反证；同一个独立 Review 对话随后结合新记录的 work 结果重新判断。
 
@@ -125,7 +127,7 @@ codrive stop                    停止 Codrive
 codrive restart                 重启 Codrive
 codrive upgrade                 停服迁移本地状态并安装最新版本
 codrive status                  查看本地服务状态
-codrive setup                   安装或补齐托管 Skills 与 Hook
+codrive setup                   初始化全新 v4 状态并安装或修复托管资源
 codrive doctor                  检查运行环境、Codex、登录和托管资源
 codrive import <project.json>   导入产品
 codrive serve                   在前台运行

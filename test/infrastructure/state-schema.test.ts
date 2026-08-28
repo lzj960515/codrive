@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
+import { migrateStateDirectory } from "../../src/infrastructure/state-schema.js";
 
 describe("Codrive state schema", () => {
   it("initializes an empty directory with the current state contract", async () => {
@@ -34,6 +35,25 @@ describe("Codrive state schema", () => {
     ).resolves.toBe(marker);
   });
 
+  it("requires an offline migration before runtime opens schema v3 state", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-state-"));
+    const markerPath = join(stateDirectory, "state-schema.json");
+    const marker =
+      '{"schemaVersion":3,"createdAt":"2026-08-26T00:00:00.000Z"}\n';
+    await writeFile(markerPath, marker, "utf8");
+
+    await expect(new ProjectStore(stateDirectory).initialize()).rejects.toThrow(
+      /offline migration/i,
+    );
+
+    await expect(readFile(markerPath, "utf8")).resolves.toBe(marker);
+
+    await migrateStateDirectory(stateDirectory);
+    await expect(readFile(markerPath, "utf8")).resolves.toContain(
+      '"schemaVersion": 4',
+    );
+  });
+
   it("upgrades schema v2 projects and active task executions exactly once", async () => {
     const stateDirectory = await persistedV2State();
     const projectDirectory = join(
@@ -43,6 +63,7 @@ describe("Codrive state schema", () => {
     );
     const taskPath = join(projectDirectory, "tasks", "task_old.json");
 
+    await migrateStateDirectory(stateDirectory);
     const store = new ProjectStore(stateDirectory);
     await store.initialize();
 
