@@ -788,6 +788,43 @@ describe("HTTP API", () => {
     ).toEqual(["project.archived", "project.unarchived"]);
   });
 
+  it("rejects project retry after archive restore until scheduling resumes", async () => {
+    const created = await registerProject("Failed project");
+    const failedExecution = created.project.currentExecution!;
+    await engine.failProjectTurn(
+      created.project.id,
+      failedExecution.attemptId,
+      {
+        turnId: failedExecution.turnId!,
+        message: "Planner process failed",
+      },
+    );
+    await command({
+      type: "project.control",
+      payload: { projectId: created.project.id, action: "archive" },
+    });
+    await command({
+      type: "project.control",
+      payload: { projectId: created.project.id, action: "unarchive" },
+    });
+
+    const retried = await command({
+      type: "project.control",
+      payload: { projectId: created.project.id, action: "retry" },
+    });
+    const current = await store.getProject(created.project.id);
+
+    expect(retried.statusCode).toBe(409);
+    expect(retried.json().error).toMatch(/resumed.*retry/i);
+    expect(current?.project).toMatchObject({
+      scheduling: "paused",
+      currentExecution: {
+        attemptId: failedExecution.attemptId,
+        status: "failed",
+      },
+    });
+  });
+
   it("unsubscribes realtime event sources when the server stops", async () => {
     const url = await listenForRealtime();
     await openSocket(url);

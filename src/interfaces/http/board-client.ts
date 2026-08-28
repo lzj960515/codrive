@@ -68,6 +68,7 @@ export function renderBoardClient(accessToken: string): string {
     let archivedProjectsExpanded = false;
     let archiveProjectId = null;
     let archiveReturnFocus = null;
+    let projectListRefreshQueue = Promise.resolve();
     let projectReadRevision = 0;
     let taskReadRevision = 0;
     const terminalTaskSort = { done: null, cancelled: null };
@@ -233,29 +234,60 @@ export function renderBoardClient(accessToken: string): string {
       }
     }
 
-    async function refreshProjectLists() {
-      const [activeProjects, archivedProjects] = await Promise.all([
-        api("/api/board"),
-        api("/api/board/archived")
-      ]);
-      snapshots = activeProjects;
-      archivedSnapshots = archivedProjects.projects;
-      if (route.type === "board" && !snapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
-        selectedProjectId = snapshots[0]?.project.id ?? null;
-        selectedTaskId = null;
-        taskDetail = null;
-        currentActivity = null;
-        taskReadRevision += 1;
-        document.body.classList.remove("detail-open");
-        document.getElementById("task-detail").setAttribute("aria-hidden", "true");
-        document.getElementById("task-detail-content").innerHTML = "";
-        await syncCurrentWatches();
-      }
-      if (route.type === "project" && archivedSnapshots.some(snapshot => snapshot.project.id === route.projectId)) {
-        archivedProjectsExpanded = true;
-      }
-      renderProjects();
-      if (route.type === "board") renderWorkspace();
+    function refreshProjectLists(options = {}) {
+      const refresh = async () => {
+        const previousFocus = captureProjectListFocus();
+        const [activeProjects, archivedProjects] = await Promise.all([
+          api("/api/board"),
+          api("/api/board/archived")
+        ]);
+        snapshots = activeProjects;
+        archivedSnapshots = archivedProjects.projects;
+        if (route.type === "board" && !snapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
+          selectedProjectId = snapshots[0]?.project.id ?? null;
+          selectedTaskId = null;
+          taskDetail = null;
+          currentActivity = null;
+          taskReadRevision += 1;
+          document.body.classList.remove("detail-open");
+          document.getElementById("task-detail").setAttribute("aria-hidden", "true");
+          document.getElementById("task-detail-content").innerHTML = "";
+          await syncCurrentWatches();
+        }
+        if (route.type === "project" && archivedSnapshots.some(snapshot => snapshot.project.id === route.projectId)) {
+          archivedProjectsExpanded = true;
+        }
+        renderProjects();
+        if (route.type === "board") renderWorkspace();
+        if (options.focusAfterArchive) focusCurrentProjectOrArchive();
+        else if (options.focusProjectId) {
+          restoreProjectListFocus({ projectId: options.focusProjectId });
+        } else restoreProjectListFocus(previousFocus);
+      };
+      const requestedRefresh = projectListRefreshQueue.then(refresh, refresh);
+      projectListRefreshQueue = requestedRefresh.catch(() => undefined);
+      return requestedRefresh;
+    }
+
+    function captureProjectListFocus() {
+      const activeElement = document.activeElement;
+      if (activeElement?.id === "archived-projects-trigger") return { archived: true };
+      const projectId = activeElement?.dataset?.project;
+      return projectId ? { projectId } : null;
+    }
+
+    function restoreProjectListFocus(target) {
+      if (!target) return;
+      const element = target.projectId
+        ? document.querySelector('[data-project="'+CSS.escape(target.projectId)+'"]')
+        : document.getElementById("archived-projects-trigger");
+      element?.focus();
+    }
+
+    function focusCurrentProjectOrArchive() {
+      restoreProjectListFocus(selectedProjectId
+        ? { projectId: selectedProjectId }
+        : { archived: true });
     }
 
     async function refreshSelectedProject(projectId = selectedProjectId) {
@@ -633,12 +665,15 @@ export function renderBoardClient(accessToken: string): string {
       dialog.querySelector(".archive-panel").focus();
     }
 
-    function closeProjectArchiveDialog() {
+    function closeProjectArchiveDialog({ restoreFocus = true } = {}) {
       document.getElementById("project-archive-dialog").hidden = true;
       archiveProjectId = null;
-      const focusTarget = archiveReturnFocus?.isConnected
-        ? archiveReturnFocus
-        : document.getElementById("archived-projects-trigger");
+      let focusTarget = null;
+      if (restoreFocus) {
+        focusTarget = archiveReturnFocus?.isConnected
+          ? archiveReturnFocus
+          : document.getElementById("archived-projects-trigger");
+      }
       archiveReturnFocus = null;
       focusTarget?.focus();
     }
@@ -655,8 +690,8 @@ export function renderBoardClient(accessToken: string): string {
           window.location.assign("/");
           return;
         }
-        closeProjectArchiveDialog();
-        await refreshProjectLists();
+        await refreshProjectLists({ focusAfterArchive: true });
+        closeProjectArchiveDialog({ restoreFocus: false });
       } catch (error) {
         status.textContent = error.message;
         confirm.disabled = false;
@@ -670,12 +705,11 @@ export function renderBoardClient(accessToken: string): string {
       trigger.disabled = true;
       try {
         await command("project.control", { projectId, action: "unarchive" });
-        await refreshProjectLists();
+        await refreshProjectLists({ focusProjectId: projectId });
         if (route.type === "project" && route.projectId === projectId) {
           await refreshSelectedProject(projectId);
         }
         document.getElementById("archived-projects-status").textContent = "项目已恢复；调度仍保持暂停。";
-        document.querySelector('[data-project="'+CSS.escape(projectId)+'"]')?.focus();
       } catch (error) {
         status.textContent = error.message;
         trigger.disabled = false;

@@ -1025,13 +1025,13 @@ export class WorkflowEngine {
   retryProject(projectId: string): Promise<Project> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
-      if (isProjectArchived(snapshot.project)) {
-        throw new WorkflowConflictError(
-          `Project ${projectId} must be restored before its execution can retry`,
-        );
-      }
       if (snapshot.project.status === "cancelled") {
         throw new WorkflowConflictError(`Cancelled project ${projectId} is terminal`);
+      }
+      if (!projectCanSchedule(snapshot.project)) {
+        throw new WorkflowConflictError(
+          `Project ${projectId} must be active, restored, and resumed before its execution can retry`,
+        );
       }
       if (!snapshot.project.requestedAction) {
         throw new WorkflowConflictError(

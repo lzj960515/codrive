@@ -1238,6 +1238,37 @@ describe("WorkflowEngine", () => {
     ).toEqual(["project.archived", "project.unarchived"]);
   });
 
+  it("keeps a restored failed project paused until scheduling is resumed", async () => {
+    const created = await registerProject(1);
+    const failedExecution = created.project.currentExecution!;
+    await workflow.failProjectTurn(
+      created.project.id,
+      failedExecution.attemptId,
+      {
+        turnId: failedExecution.turnId!,
+        message: "Planner process failed",
+      },
+    );
+    await workflow.controlProject(created.project.id, "archive");
+    const restored = await workflow.controlProject(
+      created.project.id,
+      "unarchive",
+    );
+
+    await expect(workflow.retryProject(created.project.id)).rejects.toThrow(
+      /resumed.*retry/i,
+    );
+
+    expect(restored).toMatchObject({
+      scheduling: "paused",
+      currentExecution: {
+        attemptId: failedExecution.attemptId,
+        status: "failed",
+      },
+    });
+    expect(projectExecutor.started).toHaveLength(1);
+  });
+
   it("archives idle and cancelled projects while preserving their status", async () => {
     for (const status of ["idle", "cancelled"] as const) {
       const created = await store.createProject({

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import { WorkflowConflictError } from "../domain/errors.js";
 import { markPlanningEvaluated } from "../domain/planning.js";
-import { isProjectArchived } from "../domain/project.js";
+import { isProjectArchived, projectCanSchedule } from "../domain/project.js";
 import type {
   CodriveEvent,
   Project,
@@ -62,9 +62,9 @@ export class ProjectExecutionCoordinator {
     context: ProjectExecutionStartContext = {},
     previous: Project = project,
   ): Promise<Project> {
-    if (isProjectArchived(project)) {
+    if (!projectCanSchedule(project)) {
       throw new WorkflowConflictError(
-        `Archived project ${project.id} cannot start a project execution`,
+        `Project ${project.id} must be active, restored, and resumed before starting a project execution`,
       );
     }
     if (
