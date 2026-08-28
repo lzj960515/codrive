@@ -34,6 +34,7 @@ class StubNotifications implements NotificationSource {
     turn: null,
   };
   readonly snapshotReads: Array<{ threadId: string; turnId: string }> = [];
+  beforeStatusReturn?: (() => Promise<void>) | undefined;
   beforeSnapshotReturn?: (() => Promise<void>) | undefined;
 
   onNotification(listener: (notification: JsonRpcNotification) => void): () => void {
@@ -43,6 +44,7 @@ class StubNotifications implements NotificationSource {
 
   async readTurnStatus(): Promise<CodexTurnStatus | null> {
     if (this.turnError) throw this.turnError;
+    await this.beforeStatusReturn?.();
     return this.turnStatus;
   }
 
@@ -175,6 +177,75 @@ describe("RecoveryManager", () => {
       turnId: found.task.currentExecution!.turnId,
       status: "running",
     });
+  });
+
+  it("suppresses project recovery when scheduling is paused during the status read", async () => {
+    const projectStore = new ProjectStore(
+      await mkdtemp(join(tmpdir(), "codrive-project-recovery-race-")),
+    );
+    const projectExecutor = new RecordingProjectExecutor();
+    const projectWorkflow = new WorkflowEngine(
+      projectStore,
+      new RecordingTaskDispatcher(),
+      {
+        maxConcurrentTasks: 1,
+        models: testModels,
+        now: () => "2026-08-03T00:00:00.000Z",
+        createId: (prefix) => `${prefix}_project_recovery`,
+      },
+      projectExecutor,
+    );
+    const created = await projectWorkflow.registerProject({
+      name: "Planning Game",
+      repositoryPath: "/workspace/planning-game",
+      defaultBranch: "main",
+      productDocument: "# Planning Game\n",
+      tasks: [{ title: "Loop", description: "Build loop", acceptanceCriteria: [] }],
+    });
+    const before = created.project.currentExecution!;
+    const projectNotifications = new StubNotifications();
+    projectNotifications.turnStatus = "interrupted";
+    let releaseStatusRead!: () => void;
+    const statusReadReleased = new Promise<void>((resolve) => {
+      releaseStatusRead = resolve;
+    });
+    let markStatusReadStarted!: () => void;
+    const statusReadStarted = new Promise<void>((resolve) => {
+      markStatusReadStarted = resolve;
+    });
+    projectNotifications.beforeStatusReturn = async () => {
+      markStatusReadStarted();
+      await statusReadReleased;
+    };
+    const projectRecovery = new RecoveryManager(
+      projectStore,
+      projectWorkflow,
+      projectNotifications,
+    );
+    const suppressed: string[] = [];
+    projectStore.subscribe((event) => {
+      if (event.type === "recovery.execution_suppressed" && event.reason) {
+        suppressed.push(event.reason);
+      }
+    });
+
+    const recoveryScan = projectRecovery.recoverInterruptedExecutions();
+    await statusReadStarted;
+    await projectWorkflow.controlProject(created.project.id, "pause");
+    releaseStatusRead();
+
+    await expect(recoveryScan).resolves.toBeUndefined();
+    expect((await projectStore.getProject(created.project.id))!.project).toMatchObject({
+      scheduling: "paused",
+      currentExecution: {
+        attemptId: before.attemptId,
+        threadId: before.threadId,
+        turnId: before.turnId,
+        status: "running",
+      },
+    });
+    expect(projectExecutor.started).toHaveLength(1);
+    expect(suppressed).toContain("project_paused");
   });
 
   it("ignores the interrupted notification produced by task cancellation", async () => {

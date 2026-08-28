@@ -292,11 +292,11 @@ export class ProjectExecutionCoordinator {
   }
 
   async resume(project: Project, expectedAttemptId: string): Promise<Project> {
-    if (isProjectArchived(project)) {
+    if (!projectCanSchedule(project)) {
       await this.recordRecoverySuppressed(
         project,
         expectedAttemptId,
-        "project_archived",
+        projectRecoverySuppressionReason(project),
       );
       return project;
     }
@@ -322,9 +322,17 @@ export class ProjectExecutionCoordinator {
     project: Project,
     expectedAttemptId?: string,
   ): Promise<Project> {
-    if (isProjectArchived(project)) {
+    if (!projectCanSchedule(project)) {
+      if (expectedAttemptId) {
+        await this.recordRecoverySuppressed(
+          project,
+          expectedAttemptId,
+          projectRecoverySuppressionReason(project),
+        );
+        return project;
+      }
       throw new WorkflowConflictError(
-        `Archived project ${project.id} cannot restart a project execution`,
+        `Project ${project.id} must be active, restored, and resumed before restarting a project execution`,
       );
     }
     if (
@@ -631,6 +639,12 @@ export class ProjectExecutionCoordinator {
     if (!snapshot) throw new Error(`Project ${projectId} was not found`);
     return snapshot.project;
   }
+}
+
+function projectRecoverySuppressionReason(project: Project): string {
+  if (isProjectArchived(project)) return "project_archived";
+  if (project.scheduling !== "running") return "project_paused";
+  return "project_not_active";
 }
 
 function validateProjectReport(report: ProjectReport): void {
