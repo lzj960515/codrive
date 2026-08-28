@@ -57,14 +57,18 @@ export function createSystemUpdateRenderer(
   const activeUpdatePhases = [
     "checking",
     "installing",
+    "stopping",
+    "migrating",
     "restarting",
     "syncing_resources",
   ];
   const updatePhaseCopy: Record<string, [string, number]> = {
     checking: ["正在固定目标版本", 8],
-    installing: ["正在安装 Codrive", 38],
-    restarting: ["正在重启本机服务", 66],
-    syncing_resources: ["正在同步托管资源", 86],
+    installing: ["正在安装 Codrive", 28],
+    stopping: ["正在停止旧服务", 42],
+    migrating: ["正在迁移本地状态", 58],
+    syncing_resources: ["正在同步托管资源", 76],
+    restarting: ["正在启动新服务", 90],
     succeeded: ["更新完成", 100],
     failed: ["更新未完成", 100],
   };

@@ -13,12 +13,16 @@ export async function createTaskDetailView(
     const { resumePrompt: _resumePrompt, ...evidence } = activity.evidence;
     return { ...activity, evidence };
   });
-  const projection = projectTaskActivities(activities);
+  const projection = projectTaskActivities(
+    activities,
+    task.currentExecution?.workActivityId ?? task.workActivityId,
+  );
   const currentExecution = task.currentExecution
     ? {
         attemptId: task.currentExecution.attemptId,
         action: task.currentExecution.action,
         status: task.currentExecution.status,
+        workActivityId: task.currentExecution.workActivityId ?? null,
         threadId: task.currentExecution.threadId ?? null,
         turnId: task.currentExecution.turnId ?? null,
         scheduledResume: task.currentExecution.scheduledResume

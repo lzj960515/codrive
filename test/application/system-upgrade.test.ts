@@ -264,7 +264,7 @@ describe("UpgradeCoordinator", () => {
 });
 
 describe("SystemUpgradeRunner", () => {
-  it("reports success only after exact install, restart, resource sync, and version health", async () => {
+  it("keeps the service stopped through migration and managed resource sync", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-"));
     const store = new UpgradeStateStore(directory);
     const phases: string[] = [];
@@ -284,8 +284,14 @@ describe("SystemUpgradeRunner", () => {
           calls.push(`install:${target}`);
           return { cliPath: "/global/codrive/dist/interfaces/cli/index.js" };
         },
-        restart: async (_cliPath, stateDirectory) => {
-          calls.push(`restart:${stateDirectory}`);
+        stop: async (_cliPath, stateDirectory) => {
+          calls.push(`stop:${stateDirectory}`);
+        },
+        migrate: async (_cliPath, stateDirectory) => {
+          calls.push(`migrate:${stateDirectory}`);
+        },
+        start: async (_cliPath, stateDirectory) => {
+          calls.push(`start:${stateDirectory}`);
         },
       },
       installResources: async (packageRoot, target) => {
@@ -306,17 +312,60 @@ describe("SystemUpgradeRunner", () => {
 
     expect(calls).toEqual([
       "install:0.7.0",
-      `restart:${directory}`,
+      `stop:${directory}`,
+      `migrate:${directory}`,
       "resources:/global/codrive:0.7.0",
+      `start:${directory}`,
       "health:0.7.0",
     ]);
     expect((await store.read())?.phase).toBe("succeeded");
     expect(phases).toEqual([
       "installing",
-      "restarting",
+      "stopping",
+      "migrating",
       "syncing_resources",
+      "restarting",
       "succeeded",
     ]);
+  });
+
+  it("fails closed before resource sync or restart when state migration fails", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-"));
+    const store = await createUpgradeStore(directory, "upgrade_migration");
+    const calls: string[] = [];
+    const runner = new SystemUpgradeRunner({
+      store,
+      packageUpgrader: {
+        install: async () => ({
+          cliPath: "/global/codrive/dist/interfaces/cli/index.js",
+        }),
+        stop: async () => {
+          calls.push("stop");
+        },
+        migrate: async () => {
+          calls.push("migrate");
+          throw new Error("Cannot bind open review to a work activity");
+        },
+        start: async () => {
+          calls.push("start");
+        },
+      },
+      installResources: async () => {
+        calls.push("resources");
+        return currentResources();
+      },
+      verifyHealth: async () => undefined,
+    });
+
+    await expect(
+      runner.run(upgradeRequest(directory, "upgrade_migration")),
+    ).rejects.toThrow(/migrat/i);
+
+    expect(calls).toEqual(["stop", "migrate"]);
+    expect(await store.read()).toMatchObject({
+      phase: "failed",
+      error: { code: "state_migration_failed" },
+    });
   });
 
   it("persists a safe actionable failure instead of reporting partial success", async () => {
@@ -335,7 +384,9 @@ describe("SystemUpgradeRunner", () => {
         install: async () => {
           throw new Error("EACCES /Users/person/.npmrc SUPER_SECRET");
         },
-        restart: async () => undefined,
+        stop: async () => undefined,
+        migrate: async () => undefined,
+        start: async () => undefined,
       },
       installResources: async () => currentResources(),
       verifyHealth: async () => undefined,
@@ -364,7 +415,9 @@ describe("SystemUpgradeRunner", () => {
         install: async () => ({
           cliPath: "/global/codrive/dist/interfaces/cli/index.js",
         }),
-        restart: async () => undefined,
+        stop: async () => undefined,
+        migrate: async () => undefined,
+        start: async () => undefined,
       },
       installResources: async () => ({
         state: "conflict",
@@ -399,7 +452,9 @@ describe("SystemUpgradeRunner", () => {
         install: async () => {
           throw new Error("No matching version found for codrive@0.7.0");
         },
-        restart: async () => undefined,
+        stop: async () => undefined,
+        migrate: async () => undefined,
+        start: async () => undefined,
       },
       installResources: async () => currentResources(),
       verifyHealth: async () => undefined,
@@ -433,7 +488,9 @@ describe("SystemUpgradeRunner", () => {
         store,
         packageUpgrader: {
           install: async () => ({ cliPath: "/global/codrive/dist/interfaces/cli/index.js" }),
-          restart: async () => undefined,
+          stop: async () => undefined,
+          migrate: async () => undefined,
+          start: async () => undefined,
         },
         installResources: async () => currentResources(),
         verifyHealth: async () => {
@@ -473,7 +530,7 @@ describe("SystemUpgradeRunner", () => {
     expect(JSON.stringify(state)).not.toContain("SECRET_TOKEN");
   });
 
-  it("uses a restart-specific recovery message for real permission failures", async () => {
+  it("uses a stop-specific recovery message for real permission failures", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-command-"));
     const npmExecutable = await createExecutable(
       directory,
@@ -493,7 +550,7 @@ describe("SystemUpgradeRunner", () => {
 
     await expect(
       runner.run(upgradeRequest(directory, "upgrade_restart_denied")),
-    ).rejects.toThrow(/service could not restart with the current permissions/i);
+    ).rejects.toThrow(/service could not stop with the current permissions/i);
     expect(await store.read()).toMatchObject({
       error: {
         code: "permission_denied",
@@ -502,7 +559,7 @@ describe("SystemUpgradeRunner", () => {
     });
   });
 
-  it("classifies a real upgraded CLI failure as a service restart failure", async () => {
+  it("classifies a real upgraded CLI stop failure before migration", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-upgrade-command-"));
     const npmExecutable = await createExecutable(
       directory,
@@ -522,8 +579,8 @@ describe("SystemUpgradeRunner", () => {
 
     await expect(
       runner.run(upgradeRequest(directory, "upgrade_restart")),
-    ).rejects.toThrow(/restart/i);
-    expect((await store.read())?.error?.code).toBe("service_restart_failed");
+    ).rejects.toThrow(/stop/i);
+    expect((await store.read())?.error?.code).toBe("service_stop_failed");
   });
 });
 

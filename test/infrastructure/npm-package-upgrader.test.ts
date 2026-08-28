@@ -23,7 +23,7 @@ describe("NpmPackageUpgrader", () => {
     expect(cli).not.toContain("predates unified updates");
   });
 
-  it("installs the latest global package and restarts through the upgraded CLI", async () => {
+  it("installs an exact global package without changing service state", async () => {
     const calls: Array<{ command: string; args: string[]; capture: boolean }> = [];
     const runner: PackageCommandRunner = {
       async run(command, args, captureOutput) {
@@ -40,7 +40,7 @@ describe("NpmPackageUpgrader", () => {
       nodeExecutable: "/node-test",
     });
 
-    await expect(upgrader.upgrade()).resolves.toEqual({
+    await expect(upgrader.install("0.7.0")).resolves.toEqual({
       cliPath: join(
         "/global/node_modules",
         "codrive",
@@ -50,7 +50,7 @@ describe("NpmPackageUpgrader", () => {
     expect(calls).toEqual([
       {
         command: "npm-test",
-        args: ["install", "--global", "codrive@latest"],
+        args: ["install", "--global", "codrive@0.7.0"],
         capture: false,
       },
       {
@@ -58,22 +58,10 @@ describe("NpmPackageUpgrader", () => {
         args: ["root", "--global"],
         capture: true,
       },
-      {
-        command: "/node-test",
-        args: [
-          join(
-            "/global/node_modules",
-            "codrive",
-            "dist/interfaces/cli/index.js",
-          ),
-          "restart",
-        ],
-        capture: false,
-      },
     ]);
   });
 
-  it("installs a fixed target and restarts the same state directory", async () => {
+  it("runs stop, migration, and start through the upgraded CLI", async () => {
     const calls: Array<{
       command: string;
       args: string[];
@@ -94,18 +82,21 @@ describe("NpmPackageUpgrader", () => {
       nodeExecutable: "/node-test",
     });
 
-    const installed = await upgrader.install("0.7.0");
-    await upgrader.restart(installed.cliPath, "/state/codrive");
+    const cliPath = "/global/node_modules/codrive/dist/interfaces/cli/index.js";
+    await upgrader.stop(cliPath, "/state/codrive");
+    await upgrader.migrate(cliPath, "/state/codrive");
+    await upgrader.start(cliPath, "/state/codrive");
 
-    expect(calls[0]?.args).toEqual([
-      "install",
-      "--global",
-      "codrive@0.7.0",
+    expect(calls).toHaveLength(3);
+    expect(calls.map(({ args }) => args)).toEqual([
+      [cliPath, "stop"],
+      [cliPath, "_migrate-state"],
+      [cliPath, "start"],
     ]);
-    expect(calls[2]).toMatchObject({
-      command: "/node-test",
-      args: [installed.cliPath, "restart"],
-      environment: { CODEDRIVE_HOME: "/state/codrive" },
-    });
+    expect(
+      calls.every(
+        ({ environment }) => environment?.CODEDRIVE_HOME === "/state/codrive",
+      ),
+    ).toBe(true);
   });
 });

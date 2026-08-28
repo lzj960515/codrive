@@ -3,8 +3,9 @@ import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { upgradeStateV2ToV3 } from "./state-v2-upgrade.js";
+import { upgradeStateV3ToV4 } from "./state-v3-upgrade.js";
 
-const currentStateSchemaVersion = 3;
+const currentStateSchemaVersion = 4;
 
 interface StateSchema {
   schemaVersion: number;
@@ -20,11 +21,22 @@ export async function initializeStateDirectory(
   if (schema) {
     if (schema.schemaVersion === 2) {
       const createdAt = validTimestamp(schema.migratedAt, "Codrive state marker");
-      await upgradeStateV2ToV3(stateDirectory, new Date().toISOString());
+      const migratedAt = new Date().toISOString();
+      await upgradeStateV2ToV3(stateDirectory, migratedAt);
       await atomicWriteJson(schemaPath, {
-        schemaVersion: currentStateSchemaVersion,
+        schemaVersion: 3,
         createdAt,
       } satisfies StateSchema);
+      await upgradeStateV3ToV4(stateDirectory, migratedAt, createdAt);
+      return;
+    }
+    if (schema.schemaVersion === 3) {
+      const createdAt = validTimestamp(schema.createdAt, "Codrive state marker");
+      await upgradeStateV3ToV4(
+        stateDirectory,
+        new Date().toISOString(),
+        createdAt,
+      );
       return;
     }
     if (schema.schemaVersion !== currentStateSchemaVersion) {

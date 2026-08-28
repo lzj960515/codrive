@@ -67,12 +67,12 @@ describe("execution activity HTTP and realtime boundary", () => {
     const task = snapshot.tasks[0]!;
     await store.saveTask(snapshot.project.id, {
       ...task,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt-live",
         reportOpportunityId: "report_opportunity_live",
-        action: "develop",
+        action: "work",
         threadId: "thread-live",
         turnId: "turn-live",
         status: "running",

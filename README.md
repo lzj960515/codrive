@@ -1,7 +1,7 @@
 <div align="center">
   <h1>Codrive</h1>
   <p><strong>Turn product work into a continuous stream of visible Codex tasks.</strong></p>
-  <p>Local-first orchestration for planning, development, independent review, rework, and integration.</p>
+  <p>Local-first orchestration for planning, work, independent review, and completion-aware integration.</p>
 
   <p>
     <a href="https://www.npmjs.com/package/codrive"><img alt="npm version" src="https://img.shields.io/npm/v/codrive?style=flat-square&color=cb3837"></a>
@@ -19,7 +19,7 @@
 
 ## What is Codrive?
 
-Codrive is a lightweight local service that connects Codex App conversations, a product board, filesystem-backed state, and reusable Skills. Describe a product goal in Codex App, confirm the plan, and Codrive keeps the resulting tasks moving through development, independent review, rework, and integration.
+Codrive is a lightweight local service that connects Codex App conversations, a product board, filesystem-backed state, and reusable Skills. Describe a product goal in Codex App, confirm the plan, and Codrive keeps each task moving through general work, independent review, and integration until the entire task is complete.
 
 Codex still understands the repository, writes and reviews code, runs tests, resolves conflicts, and makes product decisions. Codrive provides the durable workflow around that work: task state, isolated conversations, scheduling, recovery, and a clear activity history.
 
@@ -27,9 +27,9 @@ Codex still understands the repository, writes and reviews code, runs tests, res
 
 ## Why Codrive?
 
-- **Visible work.** Every development and review task appears in Codex App.
-- **Focused context.** Development and review use separate conversations; each task's review conversation continues across review rounds.
-- **Continuous delivery.** Approved work moves to integration, while requested changes return to the original development conversation.
+- **Visible work.** Every work and review execution appears in Codex App.
+- **Focused context.** Work and Review use separate conversations; each task's Review conversation continues across review rounds.
+- **Continuous delivery.** Approved results move to integration, which either completes the task, opens the next work round, or sends a newly changed candidate back to Review.
 - **Dynamic planning.** Codex selects useful work from current product and repository facts instead of following a fixed dependency graph.
 - **Local ownership.** Product documents, task state, execution history, and credentials stay on your machine.
 
@@ -55,7 +55,7 @@ Use Codrive to add a leaderboard to this project, then start development after I
 
 While the service is running, Codrive checks the npm latest stable release about once per hour. An open board receives the result without a page refresh and shows an update prompt when a newer version is available. **Check again** refreshes the status immediately and starts a new hourly interval.
 
-The update window shows the installed version, the latest stable release, the last check time, and separate status rows for Codrive's four managed Skills and one managed Codex Hook. Automatic checks only update this status: installation still requires your confirmation. The window can then install an exact release, restart the local service, synchronize and verify all five bundled resources, and verify the new version before recording success. The command-line equivalent is:
+The update window shows the installed version, the latest stable release, the last check time, and separate status rows for Codrive's four managed Skills and one managed Codex Hook. Automatic checks only update this status: installation still requires your confirmation. The update worker installs the exact release, stops Codrive and its App Server, migrates and validates local state, synchronizes all five bundled resources while stopped, starts the new service, and verifies the running version before recording success. The command-line equivalent is:
 
 ```bash
 codrive upgrade
@@ -78,15 +78,19 @@ The same in-memory bridge keeps a Hook `lastSeen` window for the exact task exec
 ![Codrive product loop and scheduling architecture](https://raw.githubusercontent.com/lzj960515/codrive/main/docs/architecture/codrive-orchestration.png)
 
 1. **Plan.** Codex turns a product goal into tasks and selects the next work from the latest product and repository facts.
-2. **Develop.** Each selected task runs in its own persistent Codex conversation and isolated Git worktree.
-3. **Review.** The first review starts an independent conversation, and later review rounds continue it. Findings return to the development conversation for evidence-based rework.
-4. **Integrate.** Approved work is merged through the original task conversation, with one integration at a time per repository.
+2. **Work.** Each selected task runs in its own persistent Codex conversation. Code work uses an isolated Git worktree; releases, migrations, and verification can produce a reviewable result without a commit.
+3. **Review.** The first Review starts an independent conversation, and later rounds continue it. Findings return to the work conversation for an evidence-based next result.
+4. **Integrate.** The original task conversation merges a code-backed result or verifies a no-code result, then explicitly completes the task, requests more work, or sends a changed candidate back to Review. Each repository still has one integration lease.
 
 Codrive persists lifecycle state and enforces scheduling boundaries; Codex handles the work that requires judgment. Projects have independent concurrency limits, and planning runs again when its facts change rather than whenever a slot happens to become free.
 
-`PROJECT.md` is the single current product-facts source for every project and task turn. After registration, Agents edit that local file directly and send a small change notification containing document revisions and digests instead of retransmitting the full document. Codrive validates the file, records the decision summary in its append-only event history, replaces stale task selection, and replans. When an existing schema-v2 installation first starts this release, Codrive backs it up and upgrades its projects to the current schema-v3 contract before recovery begins. See [Product facts lifecycle](./docs/architecture/product-facts.md).
+`PROJECT.md` is the single current product-facts source for every project and task turn. After registration, Agents edit that local file directly and send a small change notification containing document revisions and digests instead of retransmitting the full document. Codrive validates the file, records the decision summary in its append-only event history, replaces stale task selection, and replans.
 
-Review findings represent real delivery blockers in supported product and operational paths, not unconditional rework instructions. The development conversation fixes valid issues or records evidence for findings that do not apply; the same independent review conversation then reevaluates the current candidate and that evidence.
+Task state has three distinct layers: the board-visible business status, the next `work | review | integrate` action, and the attempt's runtime status. Every completed work result owns one immutable activity and an optional `candidateCommit`; Review and integration bind that exact activity instead of scanning older candidates. Integration completion is a separate decision from Git merge completion, so one task can continue into release, migration, or verification work after code is merged.
+
+State schema v4 persists that model. Before recovery, Codrive backs up v3, migrates task snapshots and recovery events in a temporary tree, reconstructs work-activity bindings, validates counts and open execution identities, then atomically switches projects and the marker. Migration failure leaves v3 authoritative. A schema-v2 installation first performs the existing v3 upgrade and then this v4 migration. See [Product facts lifecycle](./docs/architecture/product-facts.md).
+
+Review findings represent real delivery blockers in supported product and operational paths, not unconditional instructions. The work conversation fixes valid issues or records evidence for findings that do not apply; the same independent Review conversation then reevaluates the newly recorded work result.
 
 Waiting and recovery are part of the same workflow. A task can pause until a specific time without holding project capacity, capacity errors can move work to a fallback model, and an authoritatively interrupted task can resume from its persisted conversation and execution state. Recovery rechecks the exact action, attempt, thread, turn, project capacity, and integration lease before starting one replacement turn. The task timeline records actual recovery transitions and surfaces only decisions or failures that need attention.
 
@@ -94,9 +98,8 @@ Waiting and recovery are part of the same workflow. A task can pause until a spe
 
 | Work | Conversation behavior |
 | --- | --- |
-| Development | One persistent Codex conversation per task |
-| Rework | Continues the development conversation |
-| Integration | Continues the development conversation |
+| Work | One persistent Codex conversation per task for code, release, migration, verification, and Review feedback |
+| Integration | Continues the work conversation and decides whether the whole task is complete |
 | Review | Uses one independent persistent review conversation per task |
 | Task selection | Uses temporary conversations that stay out of the recent-task list |
 
@@ -120,7 +123,7 @@ codrive                         Start Codrive and the local board in the backgro
 codrive start                   Start Codrive in the background
 codrive stop                    Stop Codrive
 codrive restart                 Restart Codrive
-codrive upgrade                 Install the latest release and restart
+codrive upgrade                 Install the latest release through the stopped-state migration barrier
 codrive status                  Show local service status
 codrive setup                   Install or complete managed Skills and Hook
 codrive doctor                  Check runtime, Codex, login, and managed resources

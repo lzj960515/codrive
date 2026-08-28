@@ -279,11 +279,17 @@ describe("HTTP API", () => {
       reportOpportunityId: `report_opportunity_${report.attemptId}_${report.outcome}`,
       ...report,
     };
+    const workActivityId = ["review", "integrate"].includes(action)
+      ? (await store.listTaskActivities(projectId, currentReport.taskId))
+          .filter(({ type }) => type === "work_completed")
+          .at(-1)?.id
+      : undefined;
     const activity = createTaskReportActivity({
       activityId: `activity_${currentReport.attemptId}_${currentReport.outcome}`,
       projectId,
       action,
       report: currentReport,
+      ...(workActivityId ? { workActivityId } : {}),
       ...(threadId ? { threadId } : {}),
       occurredAt,
     });
@@ -1071,11 +1077,11 @@ describe("HTTP API", () => {
     await store.saveTask(created.project.id, {
       ...task,
       status: "waiting_for_input",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt_1",
         reportOpportunityId: "report_opportunity_1",
-        action: "develop",
+        action: "work",
         status: "waiting_for_input",
         threadId: "development_thread",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -1084,7 +1090,7 @@ describe("HTTP API", () => {
     });
     await appendTaskReportActivity(
       created.project.id,
-      "develop",
+      "work",
       {
         taskId: task.id,
         attemptId: "attempt_1",
@@ -1389,7 +1395,7 @@ describe("HTTP API", () => {
     const execution = {
       attemptId: "attempt_scheduled",
       reportOpportunityId: "report_opportunity_scheduled",
-      action: "develop" as const,
+      action: "work" as const,
       status: "running" as const,
       startedAt: new Date().toISOString(),
       threadId: "thread_scheduled",
@@ -1398,8 +1404,8 @@ describe("HTTP API", () => {
     };
     await store.saveTask(created.project.id, {
       ...task,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: execution,
     });
     const resumeAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
@@ -1434,7 +1440,7 @@ describe("HTTP API", () => {
       task: {
         status: "blocked",
         currentExecution: {
-          action: "develop",
+          action: "work",
           status: "waiting_for_resume",
           scheduledResume: {
             reason: "Wait for the remote build",
@@ -1557,7 +1563,7 @@ describe("HTTP API", () => {
     const execution = {
       attemptId: "attempt_scheduled_failure",
       reportOpportunityId: "report_opportunity_scheduled_failure",
-      action: "develop" as const,
+      action: "work" as const,
       status: "running" as const,
       startedAt: new Date().toISOString(),
       threadId: "thread_scheduled_failure",
@@ -1566,8 +1572,8 @@ describe("HTTP API", () => {
     };
     await store.saveTask(created.project.id, {
       ...task,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: execution,
     });
     const resumeAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
@@ -1625,7 +1631,7 @@ describe("HTTP API", () => {
     });
     expect(retried.statusCode).toBe(200);
     expect(retried.json()).toMatchObject({
-      status: "developing",
+      status: "working",
       currentExecution: { status: "running" },
     });
   });
@@ -1754,12 +1760,12 @@ describe("HTTP API", () => {
     });
     await store.saveTask(created.project.id, {
       ...created.tasks[0]!,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "active_1",
         reportOpportunityId: "report_opportunity_active_1",
-        action: "develop",
+        action: "work",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
         modelRouting: testModelRouting(),
@@ -2005,11 +2011,11 @@ describe("HTTP API", () => {
     await store.saveTask(created.project.id, {
       ...created.tasks[0]!,
       status: "waiting_for_input",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt_1",
         reportOpportunityId: "report_opportunity_1",
-        action: "develop",
+        action: "work",
         status: "waiting_for_input",
         threadId: "development_thread",
         startedAt: "2026-08-03T00:00:00.000Z",
@@ -2018,7 +2024,7 @@ describe("HTTP API", () => {
     });
     await appendTaskReportActivity(
       created.project.id,
-      "develop",
+      "work",
       {
         taskId: created.tasks[0]!.id,
         attemptId: "attempt_0",
@@ -2033,7 +2039,7 @@ describe("HTTP API", () => {
     );
     await appendTaskReportActivity(
       created.project.id,
-      "develop",
+      "work",
       {
         taskId: created.tasks[0]!.id,
         attemptId: "attempt_1",
@@ -2069,14 +2075,14 @@ describe("HTTP API", () => {
         id: created.tasks[0]!.id,
         status: "waiting_for_input",
         currentExecution: {
-          action: "develop",
+          action: "work",
           status: "waiting_for_input",
           threadId: "development_thread",
         },
       },
       activities: [
         expect.objectContaining({
-          type: "development_completed",
+          type: "work_completed",
           summary: "The flight loop is implemented",
           evidence: expect.objectContaining({ tests: "Unit tests passed" }),
         }),
@@ -2170,7 +2176,7 @@ describe("HTTP API", () => {
 
     await appendTaskReportActivity(
       created.project.id,
-      "develop",
+      "work",
       {
         taskId: task.id,
         attemptId: "attempt_develop",
@@ -2234,7 +2240,7 @@ describe("HTTP API", () => {
     );
     await appendTaskReportActivity(
       created.project.id,
-      "develop",
+      "work",
       {
         taskId: task.id,
         attemptId: "attempt_without_thread",
@@ -2261,12 +2267,14 @@ describe("HTTP API", () => {
       ...task,
       status: "waiting_for_input",
       requestedAction: "integrate",
+      workActivityId: "activity_attempt_develop_completed",
       currentExecution: {
         attemptId: "attempt_current_decision",
         reportOpportunityId:
           "report_opportunity_attempt_current_decision_needs_input",
         action: "integrate",
         status: "waiting_for_input",
+        workActivityId: "activity_attempt_develop_completed",
         threadId: "development_thread",
         submittedActivityId: "activity_attempt_current_decision_needs_input",
         startedAt: "2026-08-03T06:00:00.000Z",

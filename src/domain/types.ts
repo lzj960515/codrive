@@ -165,16 +165,15 @@ export interface ProjectExecution {
 
 export type TaskStatus =
   | "backlog"
-  | "developing"
+  | "working"
   | "reviewing"
-  | "changes_requested"
   | "integrating"
   | "waiting_for_input"
   | "blocked"
   | "done"
   | "cancelled";
 
-export type TaskAction = "develop" | "rework" | "review" | "integrate";
+export type TaskAction = "work" | "review" | "integrate";
 
 export type ExecutionStatus =
   | "pending"
@@ -207,6 +206,7 @@ export interface TaskExecution {
   finishedAt?: string;
   turnCompletedAt?: string;
   submittedActivityId?: string;
+  workActivityId?: string;
   scheduledResume?: ScheduledTaskResume;
   reportReminderCount?: number;
   leaseExpiresAt?: string;
@@ -226,6 +226,7 @@ export type TaskReportOutcome =
   | "completed"
   | "approved"
   | "changes_requested"
+  | "work_required"
   | "needs_review"
   | "needs_input"
   | "blocked";
@@ -249,11 +250,10 @@ export interface TaskReport {
 }
 
 export type TaskActivityType =
-  | "development_completed"
-  | "rework_completed"
+  | "work_completed"
   | "review_approved"
   | "review_changes_requested"
-  | "review_requested"
+  | "integration_work_required"
   | "integration_completed"
   | "decision_requested"
   | "blocked"
@@ -287,6 +287,7 @@ export interface TaskActivity {
   occurredAt: string;
   attemptId?: string;
   reportOpportunityId?: string;
+  workActivityId?: string;
   action?: TaskAction;
   outcome?: TaskReportOutcome;
   threadId?: string;
@@ -302,6 +303,7 @@ export interface Task {
   order: number;
   status: TaskStatus;
   requestedAction: TaskAction | null;
+  workActivityId?: string;
   currentExecution?: TaskExecution;
   modelRouting?: ExecutionModelRouting;
   cancellation?: Cancellation;

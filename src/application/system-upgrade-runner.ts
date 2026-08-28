@@ -21,7 +21,10 @@ import {
 
 interface SystemUpgradeRunnerOptions {
   store: UpgradeStateStore;
-  packageUpgrader: Pick<NpmPackageUpgrader, "install" | "restart">;
+  packageUpgrader: Pick<
+    NpmPackageUpgrader,
+    "install" | "stop" | "migrate" | "start"
+  >;
   installResources: (
     packageRoot: string,
     targetVersion: string,
@@ -43,8 +46,14 @@ export class SystemUpgradeRunner {
       const installed = await this.options.packageUpgrader.install(request.targetVersion);
       const packageRoot = dirname(dirname(dirname(dirname(installed.cliPath))));
 
-      await this.transition(request, "restarting");
-      await this.options.packageUpgrader.restart(
+      await this.transition(request, "stopping");
+      await this.options.packageUpgrader.stop(
+        installed.cliPath,
+        request.stateDirectory,
+      );
+
+      await this.transition(request, "migrating");
+      await this.options.packageUpgrader.migrate(
         installed.cliPath,
         request.stateDirectory,
       );
@@ -57,6 +66,12 @@ export class SystemUpgradeRunner {
       if (!isManagedResourceInstallationComplete(resources.state)) {
         throw new UpgradeFailure(managedResourceSyncError(resources));
       }
+
+      await this.transition(request, "restarting");
+      await this.options.packageUpgrader.start(
+        installed.cliPath,
+        request.stateDirectory,
+      );
       await this.options.verifyHealth(request.targetVersion);
       await this.transition(request, "succeeded", true);
     } catch (error) {
@@ -106,12 +121,29 @@ function classifyUpgradeError(
       return {
         code: "permission_denied",
         summary:
-          error.step === "restart"
+          error.step === "stop"
+            ? "Codrive was installed, but the old service could not stop with the current permissions. Repair local service access, then retry."
+            : error.step === "start"
             ? "Codrive was installed, but the service could not restart with the current permissions. Repair local service access, then retry."
+            : error.step === "migrate"
+            ? "Codrive was installed, but its state could not be migrated with the current permissions. Repair state access, then retry."
             : "Codrive could not install the package with the current npm permissions. Repair npm access, then retry.",
       };
     }
-    if (error.step === "restart") {
+    if (error.step === "stop") {
+      return {
+        code: "service_stop_failed",
+        summary: "Codrive was installed, but the old service could not stop. Run codrive upgrade to retry.",
+      };
+    }
+    if (error.step === "migrate") {
+      return {
+        code: "state_migration_failed",
+        summary:
+          "Codrive stopped, but its state could not be migrated safely. Restore or repair the v3 state, then retry.",
+      };
+    }
+    if (error.step === "start") {
       return {
         code: "service_restart_failed",
         summary: "Codrive was installed, but the service could not restart. Run codrive upgrade to retry.",
@@ -127,6 +159,13 @@ function classifyUpgradeError(
     return {
       code: "permission_denied",
       summary: "Codrive could not install the package with the current npm permissions. Repair npm access, then retry.",
+    };
+  }
+  if (phase === "migrating") {
+    return {
+      code: "state_migration_failed",
+      summary:
+        "Codrive stopped, but its state could not be migrated safely. Restore or repair the v3 state, then retry.",
     };
   }
   if (/timed out|timeout/i.test(message)) {
@@ -154,6 +193,12 @@ function classifyUpgradeError(
         "A local unmanaged Codex Hook conflicts with Codrive. Move it aside, then retry the update.",
     };
   }
+  if (phase === "stopping") {
+    return {
+      code: "service_stop_failed",
+      summary: "Codrive was installed, but the old service could not stop. Run codrive upgrade to retry.",
+    };
+  }
   if (phase === "restarting") {
     return {
       code: "service_restart_failed",
@@ -163,7 +208,8 @@ function classifyUpgradeError(
   if (phase === "syncing_resources") {
     return {
       code: "resource_sync_failed",
-      summary: "Codrive restarted, but its managed resources could not be synchronized. Retry from the Codrive update window.",
+      summary:
+        "Codrive state migrated, but its managed resources could not be synchronized while stopped. Retry from the Codrive update window.",
     };
   }
   return {

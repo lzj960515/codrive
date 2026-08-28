@@ -256,7 +256,7 @@ export const boardStyles = `
   .column-sort:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
   .column-sort.active { color: white; background: #52615a; border-color: transparent; }
   .column[data-column="backlog"] .column-head { color: #626b67; background: #e3e6e2; }
-  .column[data-column="developing"] .column-head { color: #a94628; background: #fee0d4; }
+  .column[data-column="working"] .column-head { color: #a94628; background: #fee0d4; }
   .column[data-column="reviewing"] .column-head { color: #267187; background: #d9f1f7; }
   .column[data-column="integrating"] .column-head { color: #28725b; background: #daf0e7; }
   .column[data-column="waiting"] .column-head { color: #8c6325; background: #f8e9c4; }
@@ -280,7 +280,7 @@ export const boardStyles = `
   .task-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--line-strong); }
   .task-card:hover { border-color: #abb5ad; box-shadow: 0 10px 28px rgba(18,31,26,.08); transform: translateY(-2px); }
   .task-card.active { border-color: var(--signal); box-shadow: 0 0 0 2px rgba(244,91,53,.12), 0 10px 28px rgba(18,31,26,.08); }
-  .task-card[data-status="developing"]::before, .task-card[data-status="changes_requested"]::before { background: var(--signal); }
+  .task-card[data-status="working"]::before { background: var(--signal); }
   .task-card[data-status="reviewing"]::before { background: var(--sky); }
   .task-card[data-status="integrating"]::before, .task-card[data-status="done"]::before { background: var(--mint); }
   .task-card[data-status="waiting_for_input"]::before, .task-card[data-status="blocked"]::before { background: var(--amber); }

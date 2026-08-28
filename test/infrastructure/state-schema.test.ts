@@ -17,14 +17,14 @@ describe("Codrive state schema", () => {
         await readFile(join(stateDirectory, "state-schema.json"), "utf8"),
       ),
     ).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });
   });
 
   it("accepts the current marker without rewriting it", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-state-"));
-    const marker = '{"schemaVersion":3,"createdAt":"2026-08-26T00:00:00.000Z"}\n';
+    const marker = '{"schemaVersion":4,"createdAt":"2026-08-26T00:00:00.000Z"}\n';
     await writeFile(join(stateDirectory, "state-schema.json"), marker, "utf8");
 
     await new ProjectStore(stateDirectory).initialize();
@@ -50,8 +50,9 @@ describe("Codrive state schema", () => {
       await readFile(join(stateDirectory, "state-schema.json"), "utf8"),
     );
     expect(marker).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       createdAt: "2026-08-25T00:00:00.000Z",
+      migratedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });
     const snapshot = await store.getProject("project_old");
     expect(snapshot?.project).toMatchObject({
@@ -65,9 +66,13 @@ describe("Codrive state schema", () => {
     });
     expect(snapshot?.project).not.toHaveProperty("contextNotes");
     expect(snapshot?.project).not.toHaveProperty("evaluation");
-    expect(snapshot?.tasks[0]?.currentExecution?.reportOpportunityId).toMatch(
-      /^report_opportunity_/,
-    );
+    expect(snapshot?.tasks[0]).toMatchObject({
+      requestedAction: "work",
+      currentExecution: {
+        action: "work",
+        reportOpportunityId: expect.stringMatching(/^report_opportunity_/),
+      },
+    });
     await expect(
       readFile(
         join(

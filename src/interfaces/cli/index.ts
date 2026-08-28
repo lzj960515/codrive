@@ -23,6 +23,7 @@ import {
   supportsNodeVersion,
 } from "../../infrastructure/runtime-requirements.js";
 import { UpgradeStateStore } from "../../infrastructure/upgrade-state-store.js";
+import { initializeStateDirectory } from "../../infrastructure/state-schema.js";
 import type {
   PackageVersionStatus,
   UpgradeState,
@@ -50,6 +51,9 @@ try {
       break;
     case "_upgrade-worker":
       await runDetachedUpgradeWorker(args);
+      break;
+    case "_migrate-state":
+      await migrateState();
       break;
     case "setup":
       await setup();
@@ -106,6 +110,11 @@ async function stopService(): Promise<void> {
 async function restartService(): Promise<void> {
   const result = await localService().restart();
   process.stdout.write(`Codrive restarted at ${result.url}\n`);
+}
+
+async function migrateState(): Promise<void> {
+  const config = await new ConfigStore().read();
+  await initializeStateDirectory(config.stateDirectory);
 }
 
 async function upgrade(): Promise<void> {

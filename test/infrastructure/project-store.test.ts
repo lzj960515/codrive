@@ -92,15 +92,15 @@ describe("ProjectStore", () => {
 
     await store.saveTask(created.project.id, {
       ...first,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
     });
 
     const loaded = await store.getProject(created.project.id);
     expect(loaded?.tasks).toHaveLength(2);
     expect(loaded?.tasks.find(({ id }) => id === first.id)).toMatchObject({
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
     });
   });
 
@@ -119,9 +119,10 @@ describe("ProjectStore", () => {
           id: "activity_developed",
           projectId: created.project.id,
           taskId: created.tasks[0]!.id,
-          type: "development_completed",
-          action: "develop",
+          type: "work_completed",
+          action: "work",
           outcome: "completed",
+          workActivityId: "activity_developed",
           attemptId: "develop_1",
           summary: "Implemented",
           occurredAt: "2026-08-03T00:00:00.000Z",
@@ -147,7 +148,7 @@ describe("ProjectStore", () => {
     const created = await store.createProject(projectInput);
     const selected = {
       ...created.tasks[0]!,
-      requestedAction: "develop" as const,
+      requestedAction: "work" as const,
     };
     await store.saveTask(created.project.id, selected);
     await store.appendEvent({
@@ -167,7 +168,7 @@ describe("ProjectStore", () => {
 
     expect(await restartedStore.getProject(created.project.id)).toMatchObject({
       project: { name: "Tiny game" },
-      tasks: [{ status: "backlog", requestedAction: "develop" }],
+      tasks: [{ status: "backlog", requestedAction: "work" }],
     });
   });
 

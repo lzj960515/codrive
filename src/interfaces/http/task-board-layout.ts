@@ -2,7 +2,7 @@ import type { TaskStatus } from "../../domain/types.js";
 
 export type TaskBoardColumnKey =
   | "backlog"
-  | "developing"
+  | "working"
   | "reviewing"
   | "integrating"
   | "waiting"
@@ -12,7 +12,7 @@ export type TaskBoardColumnKey =
 export const taskBoardLayout = {
   columns: [
     ["backlog", "待安排"],
-    ["developing", "开发中"],
+    ["working", "工作中"],
     ["reviewing", "审查中"],
     ["integrating", "合入中"],
     ["waiting", "等待中"],
@@ -21,9 +21,8 @@ export const taskBoardLayout = {
   ],
   statusColumns: {
     backlog: "backlog",
-    developing: "developing",
+    working: "working",
     reviewing: "reviewing",
-    changes_requested: "developing",
     integrating: "integrating",
     waiting_for_input: "waiting",
     blocked: "waiting",

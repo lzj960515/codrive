@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
+import { createTaskReportActivity } from "../../src/domain/task-activity.js";
 import type {
   ExecutionStatus,
   Project,
@@ -117,6 +118,37 @@ async function finishTaskExecution(
   return workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
 }
 
+async function bindNoCodeWork(
+  targetStore: ProjectStore,
+  projectId: string,
+  task: Task,
+  activityId: string,
+): Promise<Task> {
+  const activity = createTaskReportActivity({
+    activityId,
+    projectId,
+    action: "work",
+    report: {
+      taskId: task.id,
+      attemptId: `attempt_${activityId}`,
+      reportOpportunityId: `report_opportunity_${activityId}`,
+      outcome: "completed",
+      summary: "Prepared for the next lifecycle stage",
+    },
+    occurredAt: now.toISOString(),
+  });
+  await targetStore.appendEvent({
+    schemaVersion: 1,
+    eventId: `event_${activityId}`,
+    type: "task.activity_recorded",
+    projectId,
+    taskId: task.id,
+    occurredAt: now.toISOString(),
+    data: { activity },
+  });
+  return { ...task, workActivityId: activityId };
+}
+
 function requiredReportOpportunity(
   execution: NonNullable<Task["currentExecution"]>,
 ): string {
@@ -128,7 +160,7 @@ async function advanceTaskToAction(
   taskId: string,
   action: NonNullable<Task["requestedAction"]>,
 ) {
-  if (action === "develop") return;
+  if (action === "work") return;
   await finishTaskExecution(taskId, {
     outcome: "completed",
     summary: "Implemented",
@@ -136,20 +168,11 @@ async function advanceTaskToAction(
     candidateCommit: "candidate_1",
   });
   if (action === "review") return;
-  await finishTaskExecution(
-    taskId,
-    action === "rework"
-      ? {
-          outcome: "changes_requested",
-          summary: "One issue remains",
-          findings: ["Fix the edge case"],
-        }
-      : {
-          outcome: "approved",
-          summary: "Approved",
-          reviewedMainCommit: "main_1",
-        },
-  );
+  await finishTaskExecution(taskId, {
+    outcome: "approved",
+    summary: "Approved",
+    reviewedMainCommit: "main_1",
+  });
 }
 
 async function startTaskAtAction(action: NonNullable<Task["requestedAction"]>) {
@@ -207,14 +230,12 @@ function successfulReportForAction(
     summary: `Finished ${action} after the scheduled wait`,
   };
   switch (action) {
-    case "develop":
+    case "work":
       return {
         ...report,
         workspacePath: "/workspace/game/.worktrees/task_1",
         candidateCommit: "candidate_after_resume",
       };
-    case "rework":
-      return { ...report, candidateCommit: "candidate_after_rework" };
     case "review":
       return { ...report, reviewedMainCommit: "main_after_review" };
     case "integrate":
@@ -286,8 +307,8 @@ describe("WorkflowEngine", () => {
     const updated = (await store.getProject(created.project.id))!;
     expect(updated.tasks).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: "developing", requestedAction: "develop" }),
-        expect.objectContaining({ status: "developing", requestedAction: "develop" }),
+        expect.objectContaining({ status: "working", requestedAction: "work" }),
+        expect.objectContaining({ status: "working", requestedAction: "work" }),
       ]),
     );
   });
@@ -471,6 +492,7 @@ describe("WorkflowEngine", () => {
     await finishTaskExecution(taskId, {
       outcome: "completed",
       summary: "Resolved the blocker",
+      workspacePath: "/workspace/game/.worktrees/task",
       candidateCommit: "candidate_2",
     });
 
@@ -484,6 +506,176 @@ describe("WorkflowEngine", () => {
       (event) => event.type === "thread.created" && event.taskId === taskId,
     );
     expect(createdTaskThreads).toHaveLength(2);
+  });
+
+  it("completes a no-code work result through review and integration", async () => {
+    const created = await registerProject(1);
+    const taskId = created.tasks[0]!.id;
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the operational work",
+      taskIds: [taskId],
+    });
+
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Validated the external operation",
+      tests: "Observed the expected result without a Git candidate.",
+    });
+    const reviewing = (await store.findTask(taskId))!.task;
+    expect(reviewing).toMatchObject({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        action: "review",
+        workActivityId: reviewing.workActivityId,
+      },
+    });
+
+    await finishTaskExecution(taskId, {
+      outcome: "approved",
+      summary: "Operational evidence approved",
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "The task is fully complete",
+    });
+
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "done",
+      requestedAction: null,
+      workActivityId: reviewing.workActivityId,
+    });
+    const activities = await store.listTaskActivities(created.project.id, taskId);
+    expect(activities.map(({ type }) => type)).toEqual([
+      "work_completed",
+      "review_approved",
+      "integration_completed",
+    ]);
+    expect(activities.slice(1).map(({ workActivityId }) => workActivityId)).toEqual([
+      reviewing.workActivityId,
+      reviewing.workActivityId,
+    ]);
+  });
+
+  it("starts fresh work after integration requests it without reusing old candidate evidence", async () => {
+    const created = await registerProject(1);
+    const taskId = created.tasks[0]!.id;
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the code-backed work",
+      taskIds: [taskId],
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Prepared the original candidate",
+      workspacePath: "/workspace/game/.worktrees/task",
+      candidateCommit: "candidate_1",
+    });
+    const firstWorkActivityId = (await store.findTask(taskId))!.task.workActivityId!;
+    await finishTaskExecution(taskId, {
+      outcome: "approved",
+      summary: "Approved the original candidate",
+      reviewedMainCommit: "main_1",
+    });
+
+    await finishTaskExecution(taskId, {
+      outcome: "work_required",
+      summary: "Integration exposed follow-up work",
+      mergedCommit: "main_2",
+    });
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "working",
+      requestedAction: "work",
+      workActivityId: firstWorkActivityId,
+      currentExecution: { action: "work" },
+    });
+
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Completed the follow-up without a Git candidate",
+    });
+    const secondRound = (await store.findTask(taskId))!.task;
+    expect(secondRound.workActivityId).not.toBe(firstWorkActivityId);
+    expect(secondRound.currentExecution).toMatchObject({
+      action: "review",
+      workActivityId: secondRound.workActivityId,
+    });
+
+    // The new no-code result, not the earlier candidate, controls Git evidence rules.
+    await finishTaskExecution(taskId, {
+      outcome: "approved",
+      summary: "Approved the follow-up result",
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Closed the task after the follow-up",
+    });
+
+    expect((await store.findTask(taskId))!.task.status).toBe("done");
+    const activities = await store.listTaskActivities(created.project.id, taskId);
+    expect(activities.filter(({ type }) => type === "work_completed")).toHaveLength(2);
+    expect(
+      activities.find(({ id }) => id === secondRound.workActivityId)?.evidence
+        ?.candidateCommit,
+    ).toBeUndefined();
+  });
+
+  it("turns integration changes into a new reviewable work result", async () => {
+    const created = await registerProject(1);
+    const taskId = created.tasks[0]!.id;
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the candidate",
+      taskIds: [taskId],
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Prepared the candidate",
+      workspacePath: "/workspace/game/.worktrees/task",
+      candidateCommit: "candidate_1",
+    });
+    const originalWorkActivityId = (await store.findTask(taskId))!.task
+      .workActivityId!;
+    await finishTaskExecution(taskId, {
+      outcome: "approved",
+      summary: "Approved the candidate",
+      reviewedMainCommit: "main_1",
+    });
+
+    await finishTaskExecution(taskId, {
+      outcome: "needs_review",
+      summary: "Conflict resolution changed the candidate",
+      workspacePath: "/workspace/game/.worktrees/task",
+      candidateCommit: "candidate_2",
+    });
+
+    const reviewing = (await store.findTask(taskId))!.task;
+    expect(reviewing).toMatchObject({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        action: "review",
+        workActivityId: reviewing.workActivityId,
+      },
+    });
+    expect(reviewing.workActivityId).not.toBe(originalWorkActivityId);
+    const newWork = (
+      await store.listTaskActivities(created.project.id, taskId)
+    ).find(({ id }) => id === reviewing.workActivityId);
+    expect(newWork).toMatchObject({
+      type: "work_completed",
+      action: "integrate",
+      outcome: "needs_review",
+      workActivityId: reviewing.workActivityId,
+      evidence: {
+        workspacePath: "/workspace/game/.worktrees/task",
+        candidateCommit: "candidate_2",
+      },
+    });
   });
 
   it("advances planning only after a task completes its full pipeline", async () => {
@@ -719,11 +911,11 @@ describe("WorkflowEngine", () => {
     });
     await store.saveTask(first.project.id, {
       ...first.tasks[0]!,
-      requestedAction: "develop",
+      requestedAction: "work",
     });
     await store.saveTask(second.project.id, {
       ...second.tasks[0]!,
-      requestedAction: "develop",
+      requestedAction: "work",
     });
     const perProjectDispatcher = new RecordingTaskDispatcher();
     const perProjectWorkflow = new WorkflowEngine(
@@ -812,12 +1004,12 @@ describe("WorkflowEngine", () => {
     for (const [index, task] of planned.tasks.slice(0, 2).entries()) {
       await capacityStore.saveTask(planned.project.id, {
         ...task,
-        status: "developing",
-        requestedAction: "develop",
+        status: "working",
+        requestedAction: "work",
         currentExecution: {
           attemptId: `busy_${index}`,
           reportOpportunityId: `report_opportunity_busy_${index}`,
-          action: "develop",
+          action: "work",
           status: "running",
           startedAt: "2026-08-03T00:00:00.000Z",
           modelRouting: testModelRouting(),
@@ -840,8 +1032,8 @@ describe("WorkflowEngine", () => {
     let plannedSnapshot = (await capacityStore.getProject(planned.project.id))!;
     expect(plannedSnapshot.tasks).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: "backlog", requestedAction: "develop" }),
-        expect.objectContaining({ status: "backlog", requestedAction: "develop" }),
+        expect.objectContaining({ status: "backlog", requestedAction: "work" }),
+        expect.objectContaining({ status: "backlog", requestedAction: "work" }),
       ]),
     );
     expect(capacityDispatcher.started).toHaveLength(0);
@@ -865,7 +1057,7 @@ describe("WorkflowEngine", () => {
     expect(plannedSnapshot.tasks.slice(0, 2).every(({ status }) => status === "done"))
       .toBe(true);
     expect(
-      plannedSnapshot.tasks.slice(2).every(({ status }) => status === "developing"),
+      plannedSnapshot.tasks.slice(2).every(({ status }) => status === "working"),
     ).toBe(true);
     expect(capacityDispatcher.started).toHaveLength(2);
   });
@@ -891,14 +1083,20 @@ describe("WorkflowEngine", () => {
         { title: "Develop me", description: "Develop", acceptanceCriteria: [] },
       ],
     });
+    const reviewable = await bindNoCodeWork(
+      priorityStore,
+      project.project.id,
+      project.tasks[0]!,
+      "activity_priority_work",
+    );
     await priorityStore.saveTask(project.project.id, {
-      ...project.tasks[0]!,
+      ...reviewable,
       status: "reviewing",
       requestedAction: "review",
       currentExecution: {
         attemptId: "developed",
         reportOpportunityId: "report_opportunity_developed",
-        action: "develop",
+        action: "work",
         status: "completed",
         startedAt: "2026-08-03T00:00:00.000Z",
         modelRouting: testModelRouting(),
@@ -907,7 +1105,7 @@ describe("WorkflowEngine", () => {
     });
     await priorityStore.saveTask(project.project.id, {
       ...project.tasks[1]!,
-      requestedAction: "develop",
+      requestedAction: "work",
     });
 
     await priorityWorkflow.reconcile();
@@ -955,12 +1153,12 @@ describe("WorkflowEngine", () => {
     });
     await store.saveTask(created.project.id, {
       ...created.tasks[0]!,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt_1",
         reportOpportunityId: "report_opportunity_1",
-        action: "develop",
+        action: "work",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
         modelRouting: testModelRouting(),
@@ -1008,12 +1206,12 @@ describe("WorkflowEngine", () => {
     });
     await store.saveTask(activeProject.project.id, {
       ...activeProject.tasks[0]!,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt_active",
         reportOpportunityId: "report_opportunity_active",
-        action: "develop",
+        action: "work",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
         modelRouting: testModelRouting(),
@@ -1211,7 +1409,7 @@ describe("WorkflowEngine", () => {
     await store.saveTask(created.project.id, {
       ...created.tasks[0]!,
       status: "blocked",
-      requestedAction: "develop",
+      requestedAction: "work",
     });
 
     const archived = await workflow.controlProject(created.project.id, "archive");
@@ -1319,12 +1517,12 @@ describe("WorkflowEngine", () => {
       });
       await store.saveTask(created.project.id, {
         ...created.tasks[0]!,
-        status: status === "waiting_for_input" ? "waiting_for_input" : "developing",
-        requestedAction: "develop",
+        status: status === "waiting_for_input" ? "waiting_for_input" : "working",
+        requestedAction: "work",
         currentExecution: {
           attemptId: `attempt_${status}`,
           reportOpportunityId: `report_${status}`,
-          action: "develop",
+          action: "work",
           status,
           startedAt: now.toISOString(),
           modelRouting: testModelRouting(),
@@ -1597,7 +1795,7 @@ describe("WorkflowEngine", () => {
         threadId: execution.threadId,
       }),
       expect.objectContaining({
-        type: "development_completed",
+        type: "work_completed",
         attemptId: execution.attemptId,
         threadId: execution.threadId,
       }),
@@ -1683,11 +1881,11 @@ describe("WorkflowEngine", () => {
     await store.saveTask(created.project.id, {
       ...created.tasks[0]!,
       status: "waiting_for_input",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt_1",
         reportOpportunityId: "report_opportunity_1",
-        action: "develop",
+        action: "work",
         status: "waiting_for_input",
         startedAt: "2026-08-03T00:00:00.000Z",
         modelRouting: testModelRouting(),
@@ -1736,7 +1934,7 @@ describe("WorkflowEngine", () => {
     const blocked = (await store.findTask(developing.id))!.task;
     expect(blocked).toMatchObject({
       status: "blocked",
-      requestedAction: "develop",
+      requestedAction: "work",
     });
     expect(blocked.currentExecution).toBeUndefined();
     expect(await store.listTaskActivities(created.project.id, developing.id)).toEqual([
@@ -1747,13 +1945,13 @@ describe("WorkflowEngine", () => {
     ]);
     expect(taskDispatcher.started).toHaveLength(2);
     expect((await store.findTask(created.tasks[1]!.id))!.task).toMatchObject({
-      status: "developing",
+      status: "working",
       currentExecution: { status: "running" },
     });
 
     await workflow.retryTask(developing.id);
     expect((await store.findTask(developing.id))!.task).toMatchObject({
-      status: "developing",
+      status: "working",
       currentExecution: { status: "running" },
     });
     expect(taskDispatcher.started).toHaveLength(3);
@@ -1789,7 +1987,7 @@ describe("WorkflowEngine", () => {
     const waiting = (await store.findTask(developing.id))!.task;
     expect(waiting).toMatchObject({
       status: "blocked",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: execution.attemptId,
         threadId: execution.threadId,
@@ -1808,8 +2006,8 @@ describe("WorkflowEngine", () => {
 
     const resumed = (await store.findTask(developing.id))!.task;
     expect(resumed).toMatchObject({
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: {
         attemptId: execution.attemptId,
         threadId: execution.threadId,
@@ -1835,8 +2033,8 @@ describe("WorkflowEngine", () => {
   });
 
   it.each([
-    { action: "develop", nextStatus: "reviewing", nextAction: "review" },
-    { action: "rework", nextStatus: "reviewing", nextAction: "review" },
+    { action: "work", nextStatus: "reviewing", nextAction: "review" },
+    { action: "work", nextStatus: "reviewing", nextAction: "review" },
     { action: "review", nextStatus: "integrating", nextAction: "integrate" },
     { action: "integrate", nextStatus: "done", nextAction: null },
   ] as const)(
@@ -1937,7 +2135,7 @@ describe("WorkflowEngine", () => {
       projectId,
       taskId,
       execution: originalExecution,
-    } = await startTaskAtAction("develop");
+    } = await startTaskAtAction("work");
     const blockedReport = {
       taskId,
       attemptId: originalExecution.attemptId,
@@ -1999,7 +2197,7 @@ describe("WorkflowEngine", () => {
     );
     expect(waitingForInput).toMatchObject({
       status: "waiting_for_input",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: originalExecution.attemptId,
         status: "waiting_for_input",
@@ -2030,7 +2228,7 @@ describe("WorkflowEngine", () => {
 
   it("rejects a stale report before the early resumed turn submits its result", async () => {
     const { projectId, taskId, execution: originalExecution } =
-      await startTaskAtAction("develop");
+      await startTaskAtAction("work");
     const originalOpportunityId =
       (
         originalExecution as typeof originalExecution & {
@@ -2075,7 +2273,7 @@ describe("WorkflowEngine", () => {
   });
 
   it("requires the current opportunity for a new execution report", async () => {
-    const { projectId, taskId, execution } = await startTaskAtAction("develop");
+    const { projectId, taskId, execution } = await startTaskAtAction("work");
     const report = {
       taskId,
       attemptId: execution.attemptId,
@@ -2104,7 +2302,7 @@ describe("WorkflowEngine", () => {
   });
 
   it("rejects a persisted execution that lacks the current report identity", async () => {
-    const { projectId, taskId, execution } = await startTaskAtAction("develop");
+    const { projectId, taskId, execution } = await startTaskAtAction("work");
     const found = (await store.findTask(taskId))!.task;
     const { reportOpportunityId: _reportOpportunityId, ...invalidExecution } =
       found.currentExecution!;
@@ -2133,7 +2331,7 @@ describe("WorkflowEngine", () => {
   });
 
   it("accepts a new planned blocker after a rescheduled wait resumes", async () => {
-    const { projectId, taskId, execution } = await startTaskAtAction("develop");
+    const { projectId, taskId, execution } = await startTaskAtAction("work");
     const { blockedActivityId: firstBlockedActivityId } =
       await waitForScheduledResume(
         taskId,
@@ -2166,7 +2364,7 @@ describe("WorkflowEngine", () => {
 
     expect((await store.findTask(taskId))!.task).toMatchObject({
       status: "blocked",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: execution.attemptId,
         status: "waiting_for_resume",
@@ -2222,7 +2420,7 @@ describe("WorkflowEngine", () => {
     const failed = (await store.findTask(taskId))!.task;
     expect(failed).toMatchObject({
       status: "blocked",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: execution.attemptId,
         status: "failed",
@@ -2735,7 +2933,7 @@ describe("WorkflowEngine", () => {
 
       const scheduled = (await store.findTask(taskId))!.task;
       expect(scheduled).toMatchObject({
-        status: "developing",
+        status: "working",
         currentExecution: {
           attemptId: first.attemptId,
           reportOpportunityId: first.reportOpportunityId,
@@ -2779,7 +2977,7 @@ describe("WorkflowEngine", () => {
     });
 
     expect((await store.findTask(taskId))!.task).toMatchObject({
-      status: "developing",
+      status: "working",
       currentExecution: {
         attemptId: first.attemptId,
         reportOpportunityId: first.reportOpportunityId,
@@ -3386,8 +3584,14 @@ describe("WorkflowEngine", () => {
       ],
     });
     for (const current of created.tasks) {
+      const reviewable = await bindNoCodeWork(
+        store,
+        created.project.id,
+        current,
+        `activity_${current.id}`,
+      );
       const integrating: Task = {
-        ...current,
+        ...reviewable,
         status: "integrating",
         requestedAction: "integrate",
       };
@@ -3411,21 +3615,34 @@ describe("WorkflowEngine", () => {
         { title: "Two", description: "Two", acceptanceCriteria: [] },
       ],
     });
+    const firstReviewable = await bindNoCodeWork(
+      store,
+      created.project.id,
+      created.tasks[0]!,
+      "activity_input_work",
+    );
+    const secondReviewable = await bindNoCodeWork(
+      store,
+      created.project.id,
+      created.tasks[1]!,
+      "activity_next_work",
+    );
     await store.saveTask(created.project.id, {
-      ...created.tasks[0]!,
+      ...firstReviewable,
       status: "waiting_for_input",
       requestedAction: "integrate",
       currentExecution: {
         attemptId: "integrate_1",
         reportOpportunityId: "report_opportunity_integrate_1",
         action: "integrate",
+        workActivityId: "activity_input_work",
         status: "waiting_for_input",
         startedAt: "2026-08-03T00:00:00.000Z",
         modelRouting: testModelRouting(),
       },
     });
     await store.saveTask(created.project.id, {
-      ...created.tasks[1]!,
+      ...secondReviewable,
       status: "integrating",
       requestedAction: "integrate",
     });
@@ -3446,14 +3663,27 @@ describe("WorkflowEngine", () => {
         { title: "Two", description: "Two", acceptanceCriteria: [] },
       ],
     });
+    const waitingReviewable = await bindNoCodeWork(
+      store,
+      created.project.id,
+      created.tasks[0]!,
+      "activity_waiting_work",
+    );
+    const nextReviewable = await bindNoCodeWork(
+      store,
+      created.project.id,
+      created.tasks[1]!,
+      "activity_ready_work",
+    );
     await store.saveTask(created.project.id, {
-      ...created.tasks[0]!,
+      ...waitingReviewable,
       status: "blocked",
       requestedAction: "integrate",
       currentExecution: {
         attemptId: "integrate_waiting",
         reportOpportunityId: "report_opportunity_integrate_waiting",
         action: "integrate",
+        workActivityId: "activity_waiting_work",
         status: "waiting_for_resume",
         startedAt: "2026-08-03T00:00:00.000Z",
         threadId: "thread_waiting",
@@ -3466,7 +3696,7 @@ describe("WorkflowEngine", () => {
       },
     });
     await store.saveTask(created.project.id, {
-      ...created.tasks[1]!,
+      ...nextReviewable,
       status: "integrating",
       requestedAction: "integrate",
     });
@@ -3492,11 +3722,11 @@ describe("WorkflowEngine", () => {
       await store.saveTask(created.project.id, {
         ...task,
         status: "blocked",
-        requestedAction: "develop",
+        requestedAction: "work",
         currentExecution: {
           attemptId: `wait_${index}`,
           reportOpportunityId: `report_opportunity_wait_${index}`,
-          action: "develop",
+          action: "work",
           status: "waiting_for_resume",
           startedAt: "2026-08-02T23:00:00.000Z",
           threadId: `thread_${index}`,

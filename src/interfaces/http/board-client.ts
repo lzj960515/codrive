@@ -28,9 +28,9 @@ export function renderBoardClient(accessToken: string): string {
       archived: "已归档",
       waiting_for_input: "等待决定",
       waiting_for_resume: "计划等待",
-      blocked: "已阻塞", cancelled: "已取消", backlog: "待安排", developing: "开发中",
-      reviewing: "审查中", changes_requested: "返工中", integrating: "合入中", done: "已完成",
-      running: "自动推进", paused: "已暂停", develop: "开发", rework: "返工", review: "审查",
+      blocked: "已阻塞", cancelled: "已取消", backlog: "待安排", working: "工作中",
+      reviewing: "审查中", integrating: "合入中", done: "已完成",
+      running: "自动推进", paused: "已暂停", work: "工作", review: "审查",
       integrate: "合入", pending: "待开始", awaiting_report: "等待汇报", failed: "执行失败",
       interrupted: "已中断", approved: "审查通过", needs_review: "等待审查",
       needs_input: "等待决定", queued: "待安排",
@@ -40,9 +40,9 @@ export function renderBoardClient(accessToken: string): string {
       closed: "正常", open: "已熔断", half_open: "主模型探测",
       agent_decision: "Codex 判断", codex: "Codex", user: "用户",
       missing: "待补齐", outdated: "待同步", current: "已对齐", conflict: "存在冲突",
-      development_completed: "开发完成", rework_completed: "返工完成",
+      work_completed: "工作完成", integration_work_required: "合入后继续工作",
       review_approved: "审查通过", review_changes_requested: "审查退回",
-      review_requested: "请求审查", integration_completed: "合入完成",
+      integration_completed: "合入完成",
       decision_requested: "请求决定", scheduled_resume_started: "计划恢复",
       scheduled_resume_rescheduled: "重新安排恢复", execution_recovered: "中断恢复", execution_failed: "执行失败"
     };
@@ -115,7 +115,7 @@ export function renderBoardClient(accessToken: string): string {
       body: JSON.stringify({ type, payload })
     });
 
-    const activeUpdatePhases = ["checking", "installing", "restarting", "syncing_resources"];
+    const activeUpdatePhases = ["checking", "installing", "stopping", "migrating", "syncing_resources", "restarting"];
     async function refreshSystem() {
       let refreshed;
       try {
@@ -725,7 +725,7 @@ export function renderBoardClient(accessToken: string): string {
         return;
       }
       const { project, tasks } = snapshot;
-      const active = tasks.filter(task => ["developing", "reviewing", "changes_requested", "integrating"].includes(task.status)).length;
+      const active = tasks.filter(task => ["working", "reviewing", "integrating"].includes(task.status)).length;
       const waiting = tasks.filter(task => ["waiting_for_input", "blocked"].includes(task.status)).length;
       const done = tasks.filter(task => task.status === "done").length;
       const terminal = project.status === "cancelled";
@@ -806,7 +806,7 @@ export function renderBoardClient(accessToken: string): string {
 
     function taskCard(task) {
       const copy = task.status === "cancelled" ? task.cancellation.reason : task.description;
-      const alert = ["waiting_for_input", "blocked", "changes_requested"].includes(task.status) ? "task-alert" : "";
+      const alert = ["waiting_for_input", "blocked"].includes(task.status) ? "task-alert" : "";
       const visibleStatus = ["retry_scheduled", "waiting_for_resume"].includes(task.executionStatus) ? task.executionStatus : task.status;
       return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
         '<span class="task-card-top"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(visibleStatus))+'</span></span>'+

@@ -125,7 +125,7 @@ function projectDisplayStatus(
   if (projectStatus !== "active") return projectStatus;
   const activeTasks = tasks.some(
     ({ status, currentExecution }) =>
-      ["developing", "reviewing", "changes_requested", "integrating"].includes(
+      ["working", "reviewing", "integrating"].includes(
         status,
       ) &&
       currentExecution &&

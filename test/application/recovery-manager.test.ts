@@ -81,7 +81,7 @@ async function createTaskConversationFixture(conversationActive = false) {
   const taskId = created.tasks[0]!.id;
   await store.saveTask(created.project.id, {
     ...created.tasks[0]!,
-    requestedAction: "develop",
+    requestedAction: "work",
   });
   const dispatcher = new RecordingTaskDispatcher();
   dispatcher.conversationActive = conversationActive;
@@ -117,7 +117,7 @@ describe("RecoveryManager", () => {
     taskId = snapshot.tasks[0]!.id;
     await store.saveTask(snapshot.project.id, {
       ...snapshot.tasks[0]!,
-      requestedAction: "develop",
+      requestedAction: "work",
     });
     createId = 0;
     taskDispatcher = new RecordingTaskDispatcher();
@@ -143,7 +143,7 @@ describe("RecoveryManager", () => {
     });
 
     expect((await store.findTask(taskId))?.task).toMatchObject({
-      status: "developing",
+      status: "working",
       currentExecution: {
         status: "running",
         attemptId: execution.attemptId,
@@ -301,7 +301,7 @@ describe("RecoveryManager", () => {
     });
     await timedStore.saveTask(created.project.id, {
       ...created.tasks[0]!,
-      requestedAction: "develop",
+      requestedAction: "work",
     });
     const dispatcher = new RecordingTaskDispatcher();
     const timedWorkflow = new WorkflowEngine(timedStore, dispatcher, {
@@ -384,11 +384,11 @@ describe("RecoveryManager", () => {
     await timedStore.saveTask(created.project.id, {
       ...created.tasks[0]!,
       status: "blocked",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt_1",
         reportOpportunityId: "report_opportunity_1",
-        action: "develop",
+        action: "work",
         status: "waiting_for_resume",
         startedAt: "2026-08-02T23:00:00.000Z",
         threadId: "thread_1",
@@ -465,11 +465,11 @@ describe("RecoveryManager", () => {
     await timedStore.saveTask(created.project.id, {
       ...created.tasks[0]!,
       status: "blocked",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt_1",
         reportOpportunityId: "report_opportunity_1",
-        action: "develop",
+        action: "work",
         status: "waiting_for_resume",
         startedAt: "2026-08-02T23:00:00.000Z",
         threadId: "thread_1",
@@ -548,12 +548,12 @@ describe("RecoveryManager", () => {
     });
     await timedStore.saveTask(created.project.id, {
       ...created.tasks[0]!,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "active_attempt",
         reportOpportunityId: "report_opportunity_active",
-        action: "develop",
+        action: "work",
         status: "running",
         startedAt: "2026-08-02T23:00:00.000Z",
         threadId: "active_thread",
@@ -564,11 +564,11 @@ describe("RecoveryManager", () => {
     await timedStore.saveTask(created.project.id, {
       ...created.tasks[1]!,
       status: "blocked",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "waiting_attempt",
         reportOpportunityId: "report_opportunity_waiting",
-        action: "develop",
+        action: "work",
         status: "waiting_for_resume",
         startedAt: "2026-08-02T23:00:00.000Z",
         threadId: "waiting_thread",
@@ -869,7 +869,7 @@ describe("RecoveryManager", () => {
       await createTaskConversationFixture(true);
 
     expect((await store.findTask(taskId))!.task).toMatchObject({
-      status: "developing",
+      status: "working",
       currentExecution: { status: "pending" },
     });
     expect(dispatcher.started).toHaveLength(0);
@@ -885,7 +885,7 @@ describe("RecoveryManager", () => {
     );
 
     expect((await store.findTask(taskId))!.task).toMatchObject({
-      status: "developing",
+      status: "working",
       currentExecution: { status: "running", turnId: "task_turn_1" },
     });
     expect(dispatcher.started).toHaveLength(1);
@@ -1402,8 +1402,8 @@ describe("RecoveryManager", () => {
     ]);
     await store.saveTask(found.project.id, {
       ...second!,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: {
         ...found.task.currentExecution!,
         attemptId: "attempt-second",
@@ -1442,14 +1442,18 @@ describe("RecoveryManager", () => {
   it("requires the repository integration lease before resuming a silent integrate turn", async () => {
     const observedAt = new Date("2026-08-03T00:00:00.000Z");
     const found = (await store.findTask(taskId))!;
+    const workActivityId = "activity-integration-lease-work";
+    await appendWorkActivity(store, found.project.id, found.task.id, workActivityId);
     const integrationExecution = {
       ...found.task.currentExecution!,
       action: "integrate" as const,
+      workActivityId,
     };
     await store.saveTask(found.project.id, {
       ...found.task,
       status: "integrating",
       requestedAction: "integrate",
+      workActivityId,
       currentExecution: integrationExecution,
     });
     const competing = await store.createProject({
@@ -1459,15 +1463,24 @@ describe("RecoveryManager", () => {
       productDocument: "# Competing\n",
       tasks: [{ title: "Integrate", description: "Integrate", acceptanceCriteria: [] }],
     });
+    const competingWorkActivityId = "activity-competing-integration-work";
+    await appendWorkActivity(
+      store,
+      competing.project.id,
+      competing.tasks[0]!.id,
+      competingWorkActivityId,
+    );
     await store.saveTask(competing.project.id, {
       ...competing.tasks[0]!,
       status: "integrating",
       requestedAction: "integrate",
+      workActivityId: competingWorkActivityId,
       currentExecution: {
         ...integrationExecution,
         attemptId: "attempt-competing",
         threadId: "thread-competing",
         turnId: "turn-competing",
+        workActivityId: competingWorkActivityId,
       },
     });
     const activityBridge = new ExecutionActivityBridge({
@@ -1696,12 +1709,12 @@ describe("RecoveryManager", () => {
     });
     await idleStore.saveTask(created.project.id, {
       ...created.tasks[0]!,
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt_1",
         reportOpportunityId: "report_opportunity_1",
-        action: "develop",
+        action: "work",
         status: "running",
         startedAt: "2026-08-03T00:00:00.000Z",
         modelRouting: testModelRouting(),
@@ -1839,7 +1852,7 @@ describe("RecoveryManager", () => {
     expect(await store.listTaskActivities((await store.findTask(taskId))!.project.id, taskId))
       .toEqual([
         expect.objectContaining({
-          type: "development_completed",
+          type: "work_completed",
           evidence: { workspacePath: "/workspace/game/.worktrees/loop", candidateCommit: "abc123" },
         }),
       ]);
@@ -1860,6 +1873,13 @@ describe("RecoveryManager", () => {
       ...created.tasks[0]!,
       status: "done",
     });
+    const workActivityId = "activity_idle_work";
+    await appendWorkActivity(
+      idleStore,
+      created.project.id,
+      created.tasks[0]!.id,
+      workActivityId,
+    );
     await idleStore.appendEvent({
       schemaVersion: 1,
       eventId: "activity_event_integrated",
@@ -1875,6 +1895,7 @@ describe("RecoveryManager", () => {
           type: "integration_completed",
           action: "integrate",
           outcome: "completed",
+          workActivityId,
           attemptId: "integrate_1",
           summary: "Merged",
           occurredAt: "2026-08-03T00:00:00.000Z",
@@ -1908,4 +1929,34 @@ function coherentSnapshot(
     activeTurnIds: status === "inProgress" ? [turnId] : [],
     turn: { id: turnId, status, items: [] },
   };
+}
+
+async function appendWorkActivity(
+  store: ProjectStore,
+  projectId: string,
+  taskId: string,
+  activityId: string,
+): Promise<void> {
+  const occurredAt = "2026-08-02T23:59:00.000Z";
+  await store.appendEvent({
+    schemaVersion: 1,
+    eventId: `event_${activityId}`,
+    type: "task.activity_recorded",
+    projectId,
+    taskId,
+    occurredAt,
+    data: {
+      activity: {
+        id: activityId,
+        projectId,
+        taskId,
+        type: "work_completed",
+        action: "work",
+        outcome: "completed",
+        workActivityId: activityId,
+        summary: "Work completed",
+        occurredAt,
+      },
+    },
+  });
 }

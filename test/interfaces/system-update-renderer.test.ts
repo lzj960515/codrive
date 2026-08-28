@@ -60,6 +60,33 @@ describe("SystemUpdateRenderer", () => {
     );
     expect(view.element("update-primary").disabled).toBe(true);
   });
+
+  it.each([
+    ["stopping", "正在停止旧服务", "42%"],
+    ["migrating", "正在迁移本地状态", "58%"],
+  ] as const)("renders the active %s upgrade phase", (phase, copy, progress) => {
+    const view = createView();
+    const updatedAt = "2026-08-17T01:00:00.000Z";
+    const update = {
+      ...systemUpdate("current", "current"),
+      upgrade: {
+        targetVersion: "0.8.0",
+        phase,
+        updatedAt,
+        phaseStartedAt: { [phase]: updatedAt },
+      },
+    };
+
+    const result = view.render(update, null);
+
+    expect(result.shouldPoll).toBe(true);
+    expect(view.element("update-trigger-copy").textContent).toBe(copy);
+    expect(view.element("update-phase").textContent).toBe(copy);
+    expect(view.element("update-progress-bar").style.width).toBe(progress);
+    expect(view.element("update-progress").dataset.phase).toBe(phase);
+    expect(view.element("update-timeline").innerHTML).toContain(copy);
+    expect(view.element("update-primary").disabled).toBe(true);
+  });
 });
 
 function createView() {

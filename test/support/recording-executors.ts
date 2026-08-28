@@ -46,7 +46,7 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
     const existingThreadId =
       request.task.currentExecution?.action === "review"
         ? conversations.reviewThreadId
-        : conversations.developmentThreadId;
+        : conversations.workThreadId;
     if (existingThreadId) {
       return { threadId: existingThreadId, disposition: "resumed" };
     }

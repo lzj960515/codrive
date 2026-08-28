@@ -7,7 +7,7 @@ import {
 
 describe("task board layout", () => {
   it("groups workflow variants into their board columns", () => {
-    expect(taskBoardColumn("changes_requested")).toBe("developing");
+    expect(taskBoardColumn("working")).toBe("working");
     expect(taskBoardColumn("waiting_for_input")).toBe("waiting");
     expect(taskBoardColumn("blocked")).toBe("waiting");
     expect(taskBoardColumn("done")).toBe("done");
@@ -20,7 +20,7 @@ describe("task board layout", () => {
     expect(new Set(keys).size).toBe(keys.length);
     expect(keys).toEqual([
       "backlog",
-      "developing",
+      "working",
       "reviewing",
       "integrating",
       "waiting",

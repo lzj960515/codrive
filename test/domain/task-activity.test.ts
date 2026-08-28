@@ -18,17 +18,21 @@ describe("task activities", () => {
     outcome: TaskReport["outcome"];
     type: TaskActivityType;
   }>([
-    { action: "develop", outcome: "completed", type: "development_completed" },
-    { action: "rework", outcome: "completed", type: "rework_completed" },
+    {
+      action: "integrate",
+      outcome: "work_required",
+      type: "integration_work_required",
+    },
+    { action: "work", outcome: "completed", type: "work_completed" },
     { action: "review", outcome: "approved", type: "review_approved" },
     {
       action: "review",
       outcome: "changes_requested",
       type: "review_changes_requested",
     },
-    { action: "integrate", outcome: "needs_review", type: "review_requested" },
+    { action: "integrate", outcome: "needs_review", type: "work_completed" },
     { action: "integrate", outcome: "completed", type: "integration_completed" },
-    { action: "develop", outcome: "needs_input", type: "decision_requested" },
+    { action: "work", outcome: "needs_input", type: "decision_requested" },
     { action: "review", outcome: "blocked", type: "blocked" },
   ])("maps $action/$outcome to $type", ({ action, outcome, type }) => {
     const report = reportFor(outcome);
@@ -54,7 +58,7 @@ describe("task activities", () => {
       tests: "pnpm test passed",
     };
 
-    const activity = createActivity("develop", report);
+    const activity = createActivity("work", report);
 
     expect(activity.reportOpportunityId).toBe("report_opportunity_1");
     expect(activity.evidence).toEqual({
@@ -90,7 +94,7 @@ describe("task activities", () => {
   it("projects delivery and conversation facts from the ordered history", () => {
     const activities = [
       createActivity(
-        "develop",
+        "work",
         {
           taskId,
           attemptId: "develop_1",
@@ -113,9 +117,10 @@ describe("task activities", () => {
           findings: ["Handle an empty input"],
         },
         "review_thread_1",
+        "activity_develop_1_completed",
       ),
       createActivity(
-        "rework",
+        "work",
         {
           taskId,
           attemptId: "rework_1",
@@ -135,6 +140,7 @@ describe("task activities", () => {
           reviewedMainCommit: "main_2",
         },
         "review_thread_2",
+        "activity_rework_1_completed",
       ),
       createActivity(
         "integrate",
@@ -146,6 +152,7 @@ describe("task activities", () => {
           mergedCommit: "merged_1",
         },
         "development_thread",
+        "activity_rework_1_completed",
       ),
     ];
 
@@ -158,7 +165,7 @@ describe("task activities", () => {
         mergedCommit: "merged_1",
       },
       conversations: {
-        developmentThreadId: "development_thread",
+        workThreadId: "development_thread",
         reviewThreadId: "review_thread_2",
         reviewCount: 2,
       },
@@ -167,14 +174,14 @@ describe("task activities", () => {
   });
 
   it("preserves multiple reports from the same attempt in chronological order", () => {
-    const request = createActivity("develop", {
+    const request = createActivity("work", {
       taskId,
       attemptId: "attempt_1",
       outcome: "needs_input",
       summary: "A product choice is required",
       question: "Keep both variants?",
     });
-    const completed = createActivity("develop", {
+    const completed = createActivity("work", {
       taskId,
       attemptId: "attempt_1",
       outcome: "completed",
@@ -187,7 +194,7 @@ describe("task activities", () => {
 
     expect([request.type, completed.type]).toEqual([
       "decision_requested",
-      "development_completed",
+      "work_completed",
     ]);
     expect(projection.latestDecisionRequest).toBeNull();
   });
@@ -199,6 +206,7 @@ function createActivity(
     reportOpportunityId?: string;
   },
   threadId = "thread_1",
+  workActivityId?: string,
 ) {
   const currentReport: TaskReport = {
     reportOpportunityId: `report_opportunity_${report.attemptId}_${report.outcome}`,
@@ -209,6 +217,7 @@ function createActivity(
     projectId,
     action,
     report: currentReport,
+    ...(workActivityId ? { workActivityId } : {}),
     threadId,
     occurredAt,
   });

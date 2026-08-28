@@ -87,12 +87,12 @@ function task(overrides: Partial<Task> = {}): Task {
     description: "Build the loop",
     acceptanceCriteria: [],
     order: 1,
-    status: "developing",
-    requestedAction: "develop",
+    status: "working",
+    requestedAction: "work",
     currentExecution: {
       attemptId: "attempt_1",
       reportOpportunityId: "report_opportunity_attempt_1",
-      action: "develop",
+      action: "work",
       status: "pending",
       startedAt: timestamp,
       modelRouting: modelRouting(),
@@ -148,7 +148,7 @@ describe("CodexTaskDispatcher", () => {
     ]);
   });
 
-  it("keeps review, rework, and integration conversations attached to the project", async () => {
+  it("keeps review, follow-up work, and integration conversations attached to the project", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
     const reviewing = task({
@@ -163,12 +163,12 @@ describe("CodexTaskDispatcher", () => {
         modelRouting: modelRouting(),
       },
     });
-    const reworking = task({
-      requestedAction: "rework",
+    const followUpWork = task({
+      requestedAction: "work",
       currentExecution: {
         attemptId: "rework_1",
         reportOpportunityId: "report_opportunity_rework_1",
-        action: "rework",
+        action: "work",
         status: "pending",
         startedAt: timestamp,
         modelRouting: modelRouting(),
@@ -188,13 +188,13 @@ describe("CodexTaskDispatcher", () => {
     });
 
     await dispatcher.attachConversation(
-      request(reviewing, { developmentThreadId: "development_thread" }),
+      request(reviewing, { workThreadId: "development_thread" }),
     );
     await dispatcher.attachConversation(
-      request(reworking, { developmentThreadId: "development_thread" }),
+      request(followUpWork, { workThreadId: "development_thread" }),
     );
     await dispatcher.attachConversation(
-      request(integrating, { developmentThreadId: "development_thread" }),
+      request(integrating, { workThreadId: "development_thread" }),
     );
 
     expect(gateway.calls).toEqual([
@@ -234,7 +234,7 @@ describe("CodexTaskDispatcher", () => {
 
     const conversation = await dispatcher.attachConversation(
       request(reviewing, {
-        developmentThreadId: "development_thread",
+        workThreadId: "development_thread",
         reviewThreadId: "review_thread",
         reviewCount: 1,
       }),
@@ -347,7 +347,7 @@ describe("CodexTaskDispatcher", () => {
     ]);
   });
 
-  it("leaves optional capability selection to Codex for review and rework turns", async () => {
+  it("leaves optional capability selection to Codex for review and work turns", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = new CodexTaskDispatcher(gateway);
     const reviewing = task({
@@ -362,12 +362,12 @@ describe("CodexTaskDispatcher", () => {
         modelRouting: modelRouting(),
       },
     });
-    const reworking = task({
-      requestedAction: "rework",
+    const followUpWork = task({
+      requestedAction: "work",
       currentExecution: {
         attemptId: "rework_1",
         reportOpportunityId: "report_opportunity_rework_1",
-        action: "rework",
+        action: "work",
         status: "pending",
         startedAt: timestamp,
         modelRouting: modelRouting(),
@@ -375,7 +375,7 @@ describe("CodexTaskDispatcher", () => {
     });
 
     await dispatcher.startTurn(request(reviewing), "review_thread");
-    await dispatcher.startTurn(request(reworking), "development_thread");
+    await dispatcher.startTurn(request(followUpWork), "development_thread");
 
     expect(gateway.calls.map((call) => call.args[2])).toEqual([
       "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
@@ -432,14 +432,14 @@ describe("CodexTaskDispatcher", () => {
         currentExecution: {
           attemptId: "attempt_2",
           reportOpportunityId: "report_opportunity_attempt_2",
-          action: "rework",
+          action: "work",
           status: "pending",
           startedAt: timestamp,
           modelRouting: modelRouting(),
           threadId: "thread_1",
         },
       }),
-      { developmentThreadId: "thread_1" },
+      { workThreadId: "thread_1" },
     );
 
     const taskTurn = await dispatcher.startTurn(currentRequest, "thread_1");
@@ -457,7 +457,7 @@ describe("CodexTaskDispatcher", () => {
       currentExecution: {
         attemptId: "attempt_1",
         reportOpportunityId: "report_opportunity_attempt_1",
-        action: "develop",
+        action: "work",
         status: "running",
         startedAt: timestamp,
         modelRouting: modelRouting(),

@@ -72,6 +72,7 @@ const taskReportSchema = z.object({
     "completed",
     "approved",
     "changes_requested",
+    "work_required",
     "needs_review",
     "needs_input",
     "blocked",
@@ -493,7 +494,10 @@ async function taskContext(
   task: Task,
 ) {
   const activities = await store.listTaskActivities(project.id, task.id);
-  const activity = projectTaskActivities(activities);
+  const activity = projectTaskActivities(
+    activities,
+    task.currentExecution?.workActivityId ?? task.workActivityId,
+  );
   const { delivery } = activity;
   return {
     taskId: task.id,

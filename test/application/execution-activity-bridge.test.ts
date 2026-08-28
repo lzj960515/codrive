@@ -30,7 +30,7 @@ describe("ExecutionActivityBridge", () => {
     expect(activity).toEqual({
       projectId: fixture.projectId,
       taskId: fixture.task.id,
-      action: "develop",
+      action: "work",
       attemptId: "attempt-current",
       threadId: "thread-current",
       turnId: "turn-current",
@@ -117,7 +117,7 @@ describe("ExecutionActivityBridge", () => {
       {
         projectId: fixture.projectId,
         taskId: fixture.task.id,
-        action: "develop",
+        action: "work",
         attemptId: "attempt-current",
         executionStatus: "running",
         threadId: "thread-current",
@@ -243,12 +243,12 @@ async function createFixture(options: {
   });
   const task: Task = {
     ...snapshot.tasks[0]!,
-    status: "developing",
-    requestedAction: "develop",
+    status: "working",
+    requestedAction: "work",
     currentExecution: {
       attemptId: "attempt-current",
       reportOpportunityId: "report_opportunity_current",
-      action: "develop",
+      action: "work",
       threadId: "thread-current",
       turnId: "turn-current",
       status: "running",

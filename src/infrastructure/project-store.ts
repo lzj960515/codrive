@@ -25,6 +25,12 @@ import {
   productDocumentDigest,
 } from "../domain/product-facts.js";
 import { initializeStateDirectory } from "./state-schema.js";
+import {
+  assertCurrentEvent,
+  assertCurrentProject,
+  assertCurrentTask,
+  isTaskActivity,
+} from "./state-v4-validation.js";
 
 export class ProjectStore {
   readonly projectsDirectory: string;
@@ -121,12 +127,18 @@ export class ProjectStore {
 
   async getProject(projectId: string): Promise<ProjectSnapshot | null> {
     try {
-      const project = await this.readJson<Project>(this.projectPath(projectId));
+      const project = assertCurrentProject(
+        await this.readJson<Project>(this.projectPath(projectId)),
+      );
       const taskFiles = await readdir(this.tasksDirectory(projectId));
       const tasks = await Promise.all(
         taskFiles
           .filter((file) => file.endsWith(".json"))
-          .map((file) => this.readJson<Task>(join(this.tasksDirectory(projectId), file))),
+          .map(async (file) =>
+            assertCurrentTask(
+              await this.readJson<Task>(join(this.tasksDirectory(projectId), file)),
+            ),
+          ),
       );
       tasks.sort((left, right) => left.order - right.order);
       return { project, tasks };
@@ -242,11 +254,17 @@ export class ProjectStore {
   }
 
   async saveProject(project: Project): Promise<void> {
-    await this.atomicWriteJson(this.projectPath(project.id), project);
+    await this.atomicWriteJson(
+      this.projectPath(project.id),
+      assertCurrentProject(project),
+    );
   }
 
   async saveTask(projectId: string, task: Task): Promise<void> {
-    await this.atomicWriteJson(this.taskPath(projectId, task.id), task);
+    await this.atomicWriteJson(
+      this.taskPath(projectId, task.id),
+      assertCurrentTask(task),
+    );
   }
 
   async appendEvent(
@@ -258,6 +276,7 @@ export class ProjectStore {
       options.captureState === false
         ? event
         : await this.withRecoveryState(event);
+    assertCurrentEvent(storedEvent);
     await appendFile(
       this.eventsPath(event.projectId),
       `${JSON.stringify(storedEvent)}\n`,
@@ -339,7 +358,7 @@ export class ProjectStore {
       return (await readFile(this.eventsPath(projectId), "utf8"))
         .split("\n")
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as CodriveEvent);
+        .map((line) => assertCurrentEvent(JSON.parse(line) as CodriveEvent));
     } catch (error) {
       if (isMissingFile(error)) return [];
       throw error;
@@ -411,12 +430,19 @@ export class ProjectStore {
     for (const line of contents.split("\n")) {
       if (!line.trim()) continue;
       const event = JSON.parse(line) as CodriveEvent;
+      assertCurrentEvent(event);
       if (event.state?.project) project = event.state.project;
-      if (event.state?.task) tasks.set(event.state.task.id, event.state.task);
+      if (event.state?.task) {
+        const task = assertCurrentTask(event.state.task);
+        tasks.set(task.id, task);
+      }
     }
 
     if (project && !(await this.hasNewerSnapshot(this.projectPath(projectId), project))) {
-      await this.atomicWriteJson(this.projectPath(projectId), project);
+      await this.atomicWriteJson(
+        this.projectPath(projectId),
+        assertCurrentProject(project),
+      );
     }
     for (const task of tasks.values()) {
       const path = this.taskPath(projectId, task.id);
@@ -469,15 +495,4 @@ function pathContains(root: string, candidate: string): boolean {
 
 function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-
-function isTaskActivity(value: unknown): value is TaskActivity {
-  return Boolean(
-    value &&
-      typeof value === "object" &&
-      "id" in value &&
-      "taskId" in value &&
-      "type" in value &&
-      "occurredAt" in value,
-  );
 }

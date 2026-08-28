@@ -26,6 +26,7 @@ export interface CreateTaskReportActivityInput {
   projectId: string;
   action: TaskAction;
   report: TaskReport;
+  workActivityId?: string;
   threadId?: string;
   occurredAt: string;
 }
@@ -57,7 +58,7 @@ export interface TaskDeliveryProjection {
 }
 
 export interface TaskConversationProjection {
-  developmentThreadId?: string;
+  workThreadId?: string;
   reviewThreadId?: string;
   reviewCount: number;
 }
@@ -73,19 +74,26 @@ export function createTaskReportActivity({
   projectId,
   action,
   report,
+  workActivityId,
   threadId,
   occurredAt,
 }: CreateTaskReportActivityInput): TaskActivity {
   const evidence = reportEvidence(report);
+  const type = activityType(action, report.outcome);
   return {
     id: activityId,
     projectId,
     taskId: report.taskId,
-    type: activityType(action, report.outcome),
+    type,
     action,
     outcome: report.outcome,
     attemptId: report.attemptId,
     reportOpportunityId: report.reportOpportunityId,
+    ...(type === "work_completed"
+      ? { workActivityId: activityId }
+      : workActivityId
+        ? { workActivityId }
+        : {}),
     summary: report.summary,
     occurredAt,
     ...(threadId ? { threadId } : {}),
@@ -148,6 +156,7 @@ export function taskActivityMatchesReport(
 
 export function projectTaskActivities(
   activities: readonly TaskActivity[],
+  workActivityId?: string,
 ): TaskActivityProjection {
   const projection: TaskActivityProjection = {
     delivery: {},
@@ -155,23 +164,38 @@ export function projectTaskActivities(
     latestDecisionRequest: null,
   };
   const reviewAttempts = new Set<string>();
+  let latestWorkspacePath: string | undefined;
+  let latestBaseCommit: string | undefined;
+  const targetWorkActivityId = workActivityId ?? lastWorkActivityId(activities);
 
   for (const activity of activities) {
     const evidence = activity.evidence;
-    if (evidence?.workspacePath) {
-      projection.delivery.workspacePath = evidence.workspacePath;
-    }
-    if (evidence?.baseCommit) {
-      projection.delivery.baseCommit = evidence.baseCommit;
-    }
-    if (evidence?.candidateCommit) {
-      projection.delivery.candidateCommit = evidence.candidateCommit;
-    }
-    if (evidence?.reviewedMainCommit) {
-      projection.delivery.reviewedMainCommit = evidence.reviewedMainCommit;
-    }
-    if (evidence?.mergedCommit) {
-      projection.delivery.mergedCommit = evidence.mergedCommit;
+    if (evidence?.workspacePath) latestWorkspacePath = evidence.workspacePath;
+    if (evidence?.baseCommit) latestBaseCommit = evidence.baseCommit;
+
+    if (activity.id === targetWorkActivityId) {
+      projection.delivery = {
+        ...(evidence?.workspacePath
+          ? { workspacePath: evidence.workspacePath }
+          : latestWorkspacePath
+            ? { workspacePath: latestWorkspacePath }
+            : {}),
+        ...(evidence?.baseCommit
+          ? { baseCommit: evidence.baseCommit }
+          : latestBaseCommit
+            ? { baseCommit: latestBaseCommit }
+            : {}),
+        ...(evidence?.candidateCommit
+          ? { candidateCommit: evidence.candidateCommit }
+          : {}),
+      };
+    } else if (activity.workActivityId === targetWorkActivityId) {
+      if (evidence?.reviewedMainCommit) {
+        projection.delivery.reviewedMainCommit = evidence.reviewedMainCommit;
+      }
+      if (evidence?.mergedCommit) {
+        projection.delivery.mergedCommit = evidence.mergedCommit;
+      }
     }
 
     if (activity.action === "review") {
@@ -180,7 +204,7 @@ export function projectTaskActivities(
         projection.conversations.reviewThreadId = activity.threadId;
       }
     } else if (activity.threadId) {
-      projection.conversations.developmentThreadId = activity.threadId;
+      projection.conversations.workThreadId = activity.threadId;
     }
 
     if (activity.type === "decision_requested") {
@@ -194,7 +218,24 @@ export function projectTaskActivities(
   }
 
   projection.conversations.reviewCount = reviewAttempts.size;
+  if (!projection.delivery.workspacePath && latestWorkspacePath) {
+    projection.delivery.workspacePath = latestWorkspacePath;
+  }
+  if (!projection.delivery.baseCommit && latestBaseCommit) {
+    projection.delivery.baseCommit = latestBaseCommit;
+  }
   return projection;
+}
+
+function lastWorkActivityId(
+  activities: readonly TaskActivity[],
+): string | undefined {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    if (activities[index]?.type === "work_completed") {
+      return activities[index]!.id;
+    }
+  }
+  return undefined;
 }
 
 function reportEvidence(report: TaskReport): TaskActivityEvidence | undefined {
@@ -212,16 +253,16 @@ function activityType(
 ): TaskActivityType {
   if (outcome === "needs_input") return "decision_requested";
   if (outcome === "blocked") return "blocked";
-  if (action === "develop" && outcome === "completed") {
-    return "development_completed";
-  }
-  if (action === "rework" && outcome === "completed") return "rework_completed";
+  if (action === "work" && outcome === "completed") return "work_completed";
   if (action === "review" && outcome === "approved") return "review_approved";
   if (action === "review" && outcome === "changes_requested") {
     return "review_changes_requested";
   }
   if (action === "integrate" && outcome === "needs_review") {
-    return "review_requested";
+    return "work_completed";
+  }
+  if (action === "integrate" && outcome === "work_required") {
+    return "integration_work_required";
   }
   if (action === "integrate" && outcome === "completed") {
     return "integration_completed";

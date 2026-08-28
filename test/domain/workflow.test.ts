@@ -29,7 +29,13 @@ function applyTaskReport(
   now: string,
 ): Task {
   return applyTaskReportWithIdentity(
-    task,
+    {
+      ...task,
+      currentExecution: {
+        ...task.currentExecution!,
+        submittedActivityId: `activity_${task.currentExecution!.attemptId}`,
+      },
+    },
     {
       reportOpportunityId: task.currentExecution!.reportOpportunityId,
       ...report,
@@ -39,6 +45,9 @@ function applyTaskReport(
 }
 
 function task(overrides: Partial<Task> = {}): Task {
+  const requiresWorkBinding = ["review", "integrate"].includes(
+    overrides.requestedAction ?? "",
+  );
   return {
     id: "task_1",
     projectId: "project_1",
@@ -50,22 +59,23 @@ function task(overrides: Partial<Task> = {}): Task {
     requestedAction: null,
     createdAt: timestamp,
     updatedAt: timestamp,
+    ...(requiresWorkBinding ? { workActivityId: "activity_work" } : {}),
     ...overrides,
   };
 }
 
 describe("task workflow", () => {
   it("starts the action selected by the project-level AI decision", () => {
-    const selected = task({ requestedAction: "develop" });
+    const selected = task({ requestedAction: "work" });
 
     const started = startTaskExecution(selected, "attempt_1", timestamp);
 
     expect(started).toMatchObject({
-      status: "developing",
-      requestedAction: "develop",
+      status: "working",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "attempt_1",
-        action: "develop",
+        action: "work",
         status: "pending",
       },
     });
@@ -73,7 +83,7 @@ describe("task workflow", () => {
 
   it("rejects stale reports", () => {
     const running = startTaskExecution(
-      task({ requestedAction: "develop" }),
+      task({ requestedAction: "work" }),
       "current_attempt",
       timestamp,
     );
@@ -90,9 +100,9 @@ describe("task workflow", () => {
     );
   });
 
-  it("routes development, review, rework, and integration reports", () => {
+  it("routes work, review feedback, and integration reports", () => {
     const developing = startTaskExecution(
-      task({ requestedAction: "develop" }),
+      task({ requestedAction: "work" }),
       "develop_attempt",
       timestamp,
     );
@@ -127,8 +137,8 @@ describe("task workflow", () => {
       timestamp,
     );
     expect(changesRequested).toMatchObject({
-      status: "changes_requested",
-      requestedAction: "rework",
+      status: "working",
+      requestedAction: "work",
     });
 
     const reworking = startTaskExecution(
@@ -143,6 +153,7 @@ describe("task workflow", () => {
         attemptId: "rework_attempt",
         outcome: "completed",
         summary: "Fixed",
+        workspacePath: "/workspace/.worktrees/task_1",
         candidateCommit: "def456",
       },
       timestamp,
@@ -187,7 +198,7 @@ describe("task workflow", () => {
 
   it("keeps the same execution while Codex waits for an answer in the App", () => {
     const developing = startTaskExecution(
-      task({ requestedAction: "develop" }),
+      task({ requestedAction: "work" }),
       "develop_attempt",
       timestamp,
     );
@@ -206,10 +217,10 @@ describe("task workflow", () => {
 
     expect(waiting).toMatchObject({
       status: "waiting_for_input",
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: {
         attemptId: "develop_attempt",
-        action: "develop",
+        action: "work",
         status: "waiting_for_input",
       },
     });
@@ -233,7 +244,7 @@ describe("task workflow", () => {
     expect(completed.currentExecution).toBeUndefined();
   });
 
-  it.each(["develop", "rework", "review", "integrate"] as const)(
+  it.each(["work", "review", "integrate"] as const)(
     "keeps the same %s execution while a planned blocker waits",
     (action) => {
       const started = startTaskExecution(
@@ -275,7 +286,7 @@ describe("task workflow", () => {
 
   it("validates the complete planned blocker report contract", () => {
     const developing = startTaskExecution(
-      task({ requestedAction: "develop" }),
+      task({ requestedAction: "work" }),
       "develop_attempt",
       timestamp,
     );
@@ -339,11 +350,11 @@ describe("task workflow", () => {
     ).toThrow(/only.*blocked/i);
   });
 
-  it("requires the artifacts consumed by later stages", () => {
+  it("requires artifacts only when a report creates code-backed work", () => {
     const cases: Array<{ task: Task; report: TaskReportFixture; expected: RegExp }> = [
       {
         task: startTaskExecution(
-          task({ requestedAction: "develop" }),
+          task({ requestedAction: "work" }),
           "develop_attempt",
           timestamp,
         ),
@@ -351,23 +362,10 @@ describe("task workflow", () => {
           taskId: "task_1",
           attemptId: "develop_attempt",
           outcome: "completed",
-          summary: "Missing candidate",
+          summary: "Candidate without its workspace",
+          candidateCommit: "candidate",
         },
-        expected: /workspacePath.*candidateCommit/i,
-      },
-      {
-        task: startTaskExecution(
-          task({ status: "reviewing", requestedAction: "review" }),
-          "review_attempt",
-          timestamp,
-        ),
-        report: {
-          taskId: "task_1",
-          attemptId: "review_attempt",
-          outcome: "approved",
-          summary: "Missing reviewed main",
-        },
-        expected: /reviewedMainCommit/i,
+        expected: /workspacePath/i,
       },
       {
         task: startTaskExecution(
@@ -378,10 +376,11 @@ describe("task workflow", () => {
         report: {
           taskId: "task_1",
           attemptId: "integrate_attempt",
-          outcome: "completed",
-          summary: "Missing merged commit",
+          outcome: "needs_review",
+          summary: "Missing candidate workspace",
+          candidateCommit: "resolved",
         },
-        expected: /mergedCommit/i,
+        expected: /workspacePath/i,
       },
     ];
 
@@ -396,5 +395,5 @@ describe("task workflow", () => {
 function statusForAction(action: NonNullable<Task["requestedAction"]>): Task["status"] {
   if (action === "review") return "reviewing";
   if (action === "integrate") return "integrating";
-  return "developing";
+  return "working";
 }

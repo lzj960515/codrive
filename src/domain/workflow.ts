@@ -44,6 +44,9 @@ export function startTaskExecution(
       status: "pending",
       startedAt: now,
       modelRouting,
+      ...(["review", "integrate"].includes(action)
+        ? { workActivityId: requireWorkActivity(task) }
+        : {}),
     },
     updatedAt: now,
   };
@@ -72,6 +75,9 @@ export function applyTaskReport(
     status: transition.status,
     requestedAction: transition.action,
     modelRouting: execution.modelRouting,
+    ...(reportCreatesWorkResult(execution.action, report.outcome)
+      ? { workActivityId: requireSubmittedActivity(execution) }
+      : {}),
     updatedAt: now,
   };
   return nextTask;
@@ -139,14 +145,12 @@ function validateReportArtifacts(
   if (report.outcome === "needs_input") {
     requireReportFields(report, ["question"]);
   }
-  if (action === "develop" && report.outcome === "completed") {
-    requireReportFields(report, ["workspacePath", "candidateCommit"]);
-  }
-  if (action === "rework" && report.outcome === "completed") {
-    requireReportFields(report, ["candidateCommit"]);
-  }
-  if (action === "review" && report.outcome === "approved") {
-    requireReportFields(report, ["reviewedMainCommit"]);
+  if (
+    action === "work" &&
+    report.outcome === "completed" &&
+    report.candidateCommit
+  ) {
+    requireReportFields(report, ["workspacePath"]);
   }
   if (
     action === "review" &&
@@ -158,10 +162,10 @@ function validateReportArtifacts(
     );
   }
   if (action === "integrate" && report.outcome === "needs_review") {
-    requireReportFields(report, ["candidateCommit"]);
-  }
-  if (action === "integrate" && report.outcome === "completed") {
-    requireReportFields(report, ["mergedCommit"]);
+    requireReportFields(report, [
+      "workspacePath",
+      "candidateCommit",
+    ]);
   }
 }
 
@@ -220,9 +224,8 @@ function requireReportFields(
 
 function statusForAction(action: TaskAction): TaskStatus {
   switch (action) {
-    case "develop":
-    case "rework":
-      return "developing";
+    case "work":
+      return "working";
     case "review":
       return "reviewing";
     case "integrate":
@@ -238,11 +241,11 @@ function transitionForReport(
     return { status: "blocked", action };
   }
 
-  if ((action === "develop" || action === "rework") && outcome === "completed") {
+  if (action === "work" && outcome === "completed") {
     return { status: "reviewing", action: "review" };
   }
   if (action === "review" && outcome === "changes_requested") {
-    return { status: "changes_requested", action: "rework" };
+    return { status: "working", action: "work" };
   }
   if (action === "review" && outcome === "approved") {
     return { status: "integrating", action: "integrate" };
@@ -250,9 +253,38 @@ function transitionForReport(
   if (action === "integrate" && outcome === "needs_review") {
     return { status: "reviewing", action: "review" };
   }
+  if (action === "integrate" && outcome === "work_required") {
+    return { status: "working", action: "work" };
+  }
   if (action === "integrate" && outcome === "completed") {
     return { status: "done", action: null };
   }
 
   throw new Error(`Outcome ${outcome} is invalid for ${action}`);
+}
+
+function requireWorkActivity(task: Task): string {
+  if (!task.workActivityId) {
+    throw new Error(`Task ${task.id} has no work activity for review or integration`);
+  }
+  return task.workActivityId;
+}
+
+function requireSubmittedActivity(
+  execution: NonNullable<Task["currentExecution"]>,
+): string {
+  if (!execution.submittedActivityId) {
+    throw new Error(`Task execution ${execution.attemptId} has no submitted activity`);
+  }
+  return execution.submittedActivityId;
+}
+
+function reportCreatesWorkResult(
+  action: TaskAction,
+  outcome: TaskReport["outcome"],
+): boolean {
+  return (
+    (action === "work" && outcome === "completed") ||
+    (action === "integrate" && outcome === "needs_review")
+  );
 }

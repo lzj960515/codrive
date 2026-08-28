@@ -139,7 +139,7 @@ async function seedDemoState() {
   await mkdir(join(demoHome, "projects"), { recursive: true });
   await writeFile(
     join(demoHome, "state-schema.json"),
-    `${JSON.stringify({ schemaVersion: 3, createdAt: timestamp }, null, 2)}\n`,
+    `${JSON.stringify({ schemaVersion: 4, createdAt: timestamp }, null, 2)}\n`,
     "utf8",
   );
 
@@ -185,7 +185,7 @@ function demoProjects(): Array<
     lumaquillProject(),
     simpleProject("project_10_fieldloom", "Fieldloom 研究台", [
       ["归档访谈摘录", "done"],
-      ["生成主题聚类", "developing"],
+      ["生成主题聚类", "working"],
       ["审阅洞察卡片", "backlog"],
     ]),
     simpleProject("project_20_signalnest", "Signalnest 发布中心", [
@@ -212,9 +212,9 @@ function lumaquillProject(): ProjectSnapshot & {
   const tasks: Task[] = [
     task(projectId, 1, "梳理下季度选题池", "汇总读者问题并形成可排期的主题清单。", "backlog"),
     {
-      ...task(projectId, 2, "搭建选题协作流", "让编辑、设计与审核围绕同一份简报推进。", "developing"),
-      requestedAction: "develop",
-      currentExecution: execution("develop", "running", "thread_demo_editorial_flow"),
+      ...task(projectId, 2, "搭建选题协作流", "让编辑、设计与审核围绕同一份简报推进。", "working"),
+      requestedAction: "work",
+      currentExecution: execution("work", "running", "thread_demo_editorial_flow"),
     },
     {
       ...task(projectId, 3, "校验发布前质量门", "在内容进入排期前自动核对标题、链接与授权信息。", "reviewing"),
@@ -223,18 +223,26 @@ function lumaquillProject(): ProjectSnapshot & {
         "独立审查可追溯到候选提交与验证结果",
       ],
       requestedAction: "review",
-      currentExecution: execution("review", "running", "thread_demo_quality_review"),
+      workActivityId: "activity_quality_work",
+      currentExecution: {
+        ...execution("review", "running", "thread_demo_quality_review"),
+        workActivityId: "activity_quality_work",
+      },
     },
     {
       ...task(projectId, 4, "合入内容日历筛选", "按渠道、负责人和发布日期筛选内容日历。", "integrating"),
       requestedAction: "integrate",
-      currentExecution: execution("integrate", "awaiting_report", "thread_demo_calendar_merge"),
+      workActivityId: "activity_calendar_work",
+      currentExecution: {
+        ...execution("integrate", "awaiting_report", "thread_demo_calendar_merge"),
+        workActivityId: "activity_calendar_work",
+      },
     },
     {
       ...task(projectId, 5, "确定首批发布渠道", "为首轮内容确定邮件、博客与播客的优先级。", "waiting_for_input"),
-      requestedAction: "develop",
+      requestedAction: "work",
       currentExecution: execution(
-        "develop",
+        "work",
         "waiting_for_input",
         "thread_demo_channel_decision",
       ),
@@ -247,20 +255,38 @@ function lumaquillProject(): ProjectSnapshot & {
     project,
     tasks,
     activities: [
-      activity(projectId, tasks[2]!.id, "activity_quality_developed", {
-        type: "development_completed",
-        action: "develop",
+      activity(projectId, tasks[2]!.id, "activity_quality_work", {
+        type: "work_completed",
+        action: "work",
         outcome: "completed",
-        attemptId: "attempt_demo_quality_development",
-        reportOpportunityId: "report_opportunity_demo_quality_development",
+        attemptId: "attempt_demo_quality_work",
+        reportOpportunityId: "report_opportunity_demo_quality_work",
+        workActivityId: "activity_quality_work",
         summary: "质量门已覆盖标题、链接和授权状态，并提供清晰的失败说明。",
         occurredAt: "2026-08-12T15:20:00.000+08:00",
-        threadId: "thread_demo_quality_development",
+        threadId: "thread_demo_quality_work",
         evidence: {
           workspacePath: "/demo/lumaquill-studio/.worktrees/quality-gate",
           baseCommit: "4c2a8d1",
           candidateCommit: "8b31f0a",
           tests: "pnpm test · 42 passed\npnpm typecheck · passed",
+        },
+      }),
+      activity(projectId, tasks[3]!.id, "activity_calendar_work", {
+        type: "work_completed",
+        action: "work",
+        outcome: "completed",
+        attemptId: "attempt_demo_calendar_work",
+        reportOpportunityId: "report_opportunity_demo_calendar_work",
+        workActivityId: "activity_calendar_work",
+        summary: "内容日历筛选候选已完成并通过独立审查。",
+        occurredAt: "2026-08-12T16:10:00.000+08:00",
+        threadId: "thread_demo_calendar_merge",
+        evidence: {
+          workspacePath: "/demo/lumaquill-studio/.worktrees/calendar-filter",
+          baseCommit: "8b31f0a",
+          candidateCommit: "92ca044",
+          tests: "pnpm test · 46 passed\npnpm typecheck · passed",
         },
       }),
     ],
@@ -324,14 +350,14 @@ function task(
     acceptanceCriteria: ["交付结果符合当前产品目标", "验证结果记录在任务活动中"],
     order,
     status,
-    requestedAction: status === "done" || status === "backlog" ? null : "develop",
+    requestedAction: status === "done" || status === "backlog" ? null : "work",
     createdAt: "2026-08-08T10:00:00.000+08:00",
     updatedAt: `2026-08-${String(10 + Math.min(order, 3)).padStart(2, "0")}T09:30:00.000+08:00`,
   };
 }
 
 function execution(
-  action: "develop" | "review" | "integrate",
+  action: "work" | "review" | "integrate",
   status: "running" | "awaiting_report" | "waiting_for_input",
   threadId: string,
 ) {

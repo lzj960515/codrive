@@ -118,7 +118,7 @@ describe("CodriveLog", () => {
       attemptId: "attempt_1",
       occurredAt: "2026-08-04T03:05:37.362Z",
       before: { status: "blocked", executionStatus: "failed" },
-      after: { status: "developing", executionStatus: "pending" },
+      after: { status: "working", executionStatus: "pending" },
       state: {
         task: {
           latestReport: { summary: "PRIVATE_REPORT_BODY_MUST_NOT_APPEAR" },

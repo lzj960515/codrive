@@ -1,6 +1,6 @@
 ---
 name: codrive-task
-description: 读取并执行 Codrive 的项目任务选择或看板任务当前阶段，包括开发、返工、独立审查、同步合入和结果汇报。用户或 Codrive 要求选择、领取、处理、审查、继续、验收或汇报 Codrive 工作时使用。
+description: 读取并执行 Codrive 的项目任务选择或看板任务当前阶段，包括通用工作、独立审查、同步合入、后续工作判断和结果汇报。用户或 Codrive 要求选择、领取、处理、审查、继续、验收或汇报 Codrive 工作时使用。
 compatibility: Requires Node.js 24+, Git, and a running local Codrive service.
 ---
 
@@ -36,12 +36,12 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 ## 连续任务工作区
 
-Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查对话始终显示在 Codex App 的同一个项目下。每个任务拥有两个稳定角色的对话：开发对话负责开发、返工和合入，独立的 Review 对话负责候选审查与复审。新的 Review round 继续同一个 Review 对话，使审查者能够结合返工、开发反证和上一轮结论重新判断。
+Codrive 将持久任务对话归属到产品仓库根目录，让工作和审查对话始终显示在 Codex App 的同一个项目下。每个任务拥有两个稳定角色的对话：工作对话负责代码、文档、发布、迁移、验证、审查反馈处理和合入，独立的 Review 对话负责当前 work 结果的审查与复审。新的 Review round 继续同一个 Review 对话，使审查者能够结合后续修改、反证和上一轮结论重新判断。
 
-对话目录表示产品归属；`context.workspacePath` 和 `context.delivery` 是从活动历史推导的当前工作树与 Git 事实。开发、审查、返工和合入的文件、Git 与测试操作都在任务工作树中完成。
+对话目录表示产品归属；`context.workspacePath` 和 `context.delivery` 来自当前绑定的 `work` 活动。该活动有 `candidateCommit` 时，这些字段是本轮 Review 和合入唯一可用的 Git 事实；没有候选时，本轮是发布、迁移、验证等无代码工作，不虚构 Git 操作。
 
 - `context` 返回 `workspacePath` 时，先进入该工作树，再执行当前阶段。提交与审查基线使用 `context.delivery`，并用实际 Git 状态确认。
-- 首次开发尚未记录 `workspacePath` 时，先检查规范路径 `<repository>/.worktrees/codrive/<project-id>/<task-id>`；已有工作树就继续使用，没有时再创建。
+- 当前 `work` 需要改代码且尚未记录 `workspacePath` 时，先检查规范路径 `<repository>/.worktrees/codrive/<project-id>/<task-id>`；已有工作树就继续使用，没有时再创建。
 - 进入工作树后检查 `git status`、提交历史和差异，把已有改动作为当前任务的连续执行现场。结合任务目标、验收标准和版本历史，自主决定保留、修改、整合或清理，然后继续当前阶段。
 - 主仓库中的用户改动保持原样；开发工作放在任务工作树，合入时基于最新主分支安全整合。
 
@@ -57,36 +57,33 @@ Codrive 将持久任务对话归属到产品仓库根目录，让开发和审查
 - 缺少影响项目规划的产品语义、外部凭据或权限时汇报 `needs_input` 和明确的 `question`。
 - 存在确定障碍时汇报 `blocked`。
 
-通过 `project-report` 提交选择结果。Codrive 按该 attempt 捕获的容量验证任务，并为选中任务分别创建独立开发对话。任务开始、审查、返工和合入延续当前选择结果；完整任务完成、任务取消、新工作、产品决定、并发配置变化或人工重新规划才产生新的规划版本。
+通过 `project-report` 提交选择结果。Codrive 按该 attempt 捕获的容量验证任务，并为选中任务分别创建独立工作对话。任务的 work、Review 和合入延续当前选择结果；完整任务完成、任务取消、新工作、产品决定、并发配置变化或人工重新规划才产生新的规划版本。
 
-## 开发 `develop`
+## 工作 `work`
 
-1. 按“连续任务工作区”定位或创建当前任务的隔离工作树。
-2. 让 `.worktrees/` 进入仓库自己的 `.git/info/exclude`。
-3. 理解并整理工作树中的现有实现，让最终差异完整服务当前任务。
-4. 实现任务、运行相关测试、修复发现的问题并提交代码。
-5. 汇报 `completed`，包括 `workspacePath`、`baseCommit`、`candidateCommit` 和测试摘要。
+`work` 是任务内所有需要业务判断和执行的通用阶段，包括首次实现、处理 Review finding、发布、迁移、外部验证和合入后的后续工作。先从活动末尾确认本轮来源：存在最近的 `review_changes_requested` 或 `integration_work_required` 时，独立判断每条 finding 或后续工作依据；成立的问题完成修改，不适用的问题形成有证据的回复，需要新产品语义的问题汇报 `needs_input`。
 
-## 返工 `rework`
-
-从 `activities` 末尾向前找到最近一条 `review_changes_requested`，读取其中的 `evidence.findings`。结合任务契约、实际交付物和业务证据独立判断每条 finding：成立的问题完成修改，不适用的问题形成有证据的回复，需要新产品语义的问题汇报 `needs_input` 请求决定。
-
-处理完所有 findings 后运行与实际改动相称的验证。汇报 `completed` 时提供当前 `candidateCommit` 和测试证据，并在 `summary` 中清楚记录已修改的问题和未修改 finding 的反证。有效回复可以保留原候选提交；Review 对话会在下一轮复审中重新判断。
+- 需要修改仓库时，按“连续任务工作区”定位或创建隔离工作树，让 `.worktrees/` 进入仓库自己的 `.git/info/exclude`，理解并整理已有现场，完成实现、验证和提交。汇报 `completed` 时提供 `workspacePath`、`baseCommit`、`candidateCommit` 和测试摘要。
+- 不修改仓库的发布、迁移或验证工作直接在受支持的目标边界执行并收集证据。汇报 `completed` 时提供实际验证摘要，不提交空 SHA 或虚构工作树。
+- 当前 Review finding 已由证据证明不适用时，可以保留原实现；在 `summary` 中记录反证。新的 `work_completed` 活动仍代表本轮可审查结果，Review 对话会重新判断。
 
 ## 审查 `review`
 
-从任务契约、验收标准、完整活动历史、`context.delivery.candidateCommit` 和实际交付物状态还原真实交付场景。根据交付物性质独立检查目标是否完成、验收证据是否可信，以及明显回归、安全和数据风险。只有能通过受支持的使用方式触发并真实影响当前交付的问题才成为阻塞；纯理论可能性保留为非阻塞观察，不进入 `findings`。
+从任务契约、验收标准、完整活动历史、当前绑定的 work 活动和实际交付物状态还原真实交付场景。work 活动有 `context.delivery.candidateCommit` 时独立审查该候选；没有候选时审查发布、迁移或验证证据，不要求 Git 提交。根据交付物性质检查目标是否完成、证据是否可信，以及明显回归、安全和数据风险。只有能通过受支持的使用方式触发并真实影响当前交付的问题才成为阻塞；纯理论可能性保留为非阻塞观察，不进入 `findings`。
 
-- 满足交付标准时汇报 `approved`，把审查时的主分支提交写入 `reviewedMainCommit`。
+- 满足交付标准时汇报 `approved`。当前 work 有候选时把审查时的主分支提交写入 `reviewedMainCommit`；无候选时只提供测试或业务验证证据。
 - 存在阻塞问题时汇报 `changes_requested`，`findings` 只列可操作问题。
 - 复审时读取执行者对 findings 的处理与反证，重新判断旧结论；当前没有阻塞问题时直接批准。
 
 ## 合入 `integrate`
 
-根据 `context.delivery` 恢复候选提交与审查基线，检查主分支和人工改动，安全同步候选并自主解决可以判断的冲突。运行受影响测试。
+根据当前绑定 work 的 `context.delivery` 判断本轮是否包含代码候选，并结合任务契约判断本轮结果之后整个任务是否结束。
 
-- 审查后主分支没有影响候选时，合入主分支，删除任务工作树和临时任务分支，再用 `git worktree list` 与 `git branch --list` 确认清理结果，汇报 `completed` 和 `mergedCommit`。
-- 同步或冲突解决改变候选实现时，提交新候选但先不合入，汇报 `needs_review`。
+- 有候选时，检查主分支和人工改动，安全同步候选并自主解决可以判断的冲突，运行受影响测试。同步未改变候选语义时完成合入并清理任务工作树和临时分支；用 `git worktree list` 与 `git branch --list` 确认清理结果。
+- 无候选时不执行 Git 合入或清理，只核实已经 Review 通过的业务结果。
+- 本轮结果已经满足整个任务时汇报 `completed`；有候选时同时提供 `mergedCommit`，无候选时提供实际核实证据。
+- 本轮已经合入或核实，但任务仍有发布、迁移、验证或代码工作时汇报 `work_required`，在 `summary` 中写清下一轮工作；本轮有候选时同时提供 `mergedCommit`。
+- 同步或冲突解决产生新的代码候选时，先不合入，汇报 `needs_review`，并提供 `workspacePath`、`baseCommit`、`candidateCommit` 和测试证据。该报告会形成新的 `work_completed` 活动并重新进入独立 Review。
 - 需要新的产品决策、外部凭据或权限时汇报 `needs_input`，保留所有现有内容。
 
 ## 汇报契约
@@ -99,12 +96,12 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 
 每份报告包含刚刚读取的 `context` 返回的 `attemptId` 和非空 `reportOpportunityId`，以及当前阶段允许的 `outcome` 和简明 `summary`。直接原样使用这两个执行身份，不从 turn、活动或历史 context 推导。缺少任一身份时停止提交并重新读取 context。Codrive 将每个报告机会的首次成功报告追加为一条不可变活动；同一机会的完全相同报告幂等返回，不追加活动。各阶段同时提供后续流程依赖的事实：
 
-- `develop` 完成：`workspacePath`、`baseCommit`、`candidateCommit`、`tests`。
-- `rework` 完成：`candidateCommit`、`tests`，并在 `summary` 中记录 findings 的处理结论。
-- `review` 通过：`reviewedMainCommit`、`tests`。
+- `work` 完成：代码工作提供 `workspacePath`、`baseCommit`、`candidateCommit`、`tests`；无代码工作提供实际验证证据，不携带 Git 字段。
+- `review` 通过：代码 work 提供 `reviewedMainCommit`、`tests`；无代码 work 提供实际审查证据。
 - `review` 退回：非空 `findings` 和已执行的验证。
-- `integrate` 完成：`mergedCommit`、`tests`。
-- `integrate` 需要重审：新的 `candidateCommit` 和 `tests`。
+- `integrate` 完成：代码 work 提供 `mergedCommit`、`tests`；无代码 work 提供核实证据。
+- `integrate` 需要继续工作：`work_required`、清楚的后续工作摘要，以及代码 work 的 `mergedCommit`。
+- `integrate` 需要重审：新的 `workspacePath`、`baseCommit`、`candidateCommit` 和 `tests`。
 - 需要用户决定：`needs_input` 和一个明确的 `question`。
 
 `needs_input` 追加“请求决定”活动并保留当前执行和 `attemptId`，同时为用户回答后的结果轮换 `reportOpportunityId`。用户在 Codex App 的原任务对话中回答后，重新读取 context，使用同一个 `attemptId` 和新的 `reportOpportunityId` 提交最终报告；历史请求继续保留在活动时间线中，`submittedActivityId` 仍指向当前决定活动，直到新结果写入。
@@ -146,7 +143,7 @@ node <skill-directory>/scripts/codrive-task.mjs report <task-id>
 
 两种路径都提供具体取消理由：`user_confirmed` 概括用户同意的范围和原因，`agent_decision` 写明支持直接取消的可观察事实。取消命令成为当前阶段的最后一个副作用，终态任务无需再提交阶段报告。
 
-开发完成报告格式：
+代码 work 完成报告格式：
 
 ```json
 {

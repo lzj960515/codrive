@@ -24,7 +24,12 @@ export interface NpmPackageUpgraderOptions {
 
 const maximumCapturedOutputLength = 256 * 1_024;
 
-export type PackageUpgradeStep = "install" | "locate" | "restart";
+export type PackageUpgradeStep =
+  | "install"
+  | "locate"
+  | "stop"
+  | "migrate"
+  | "start";
 export type PackageCommandFailureKind = "permission_denied" | "command_failed";
 
 export class PackageCommandError extends Error {
@@ -55,12 +60,6 @@ export class NpmPackageUpgrader {
     this.nodeExecutable = options.nodeExecutable ?? process.execPath;
   }
 
-  async upgrade(): Promise<{ cliPath: string }> {
-    const installed = await this.install("latest");
-    await this.restart(installed.cliPath);
-    return installed;
-  }
-
   async install(targetVersion: string): Promise<{ cliPath: string }> {
     await this.runChecked(
       "install",
@@ -83,15 +82,30 @@ export class NpmPackageUpgrader {
     return { cliPath };
   }
 
-  async restart(cliPath: string, stateDirectory?: string): Promise<void> {
+  async stop(cliPath: string, stateDirectory: string): Promise<void> {
+    await this.runCliStep("stop", cliPath, "stop", stateDirectory);
+  }
+
+  async migrate(cliPath: string, stateDirectory: string): Promise<void> {
+    await this.runCliStep("migrate", cliPath, "_migrate-state", stateDirectory);
+  }
+
+  async start(cliPath: string, stateDirectory: string): Promise<void> {
+    await this.runCliStep("start", cliPath, "start", stateDirectory);
+  }
+
+  private async runCliStep(
+    step: PackageUpgradeStep,
+    cliPath: string,
+    command: string,
+    stateDirectory: string,
+  ): Promise<void> {
     await this.runChecked(
-      "restart",
+      step,
       this.nodeExecutable,
-      [cliPath, "restart"],
+      [cliPath, command],
       false,
-      stateDirectory
-        ? { ...process.env, CODEDRIVE_HOME: stateDirectory }
-        : process.env,
+      { ...process.env, CODEDRIVE_HOME: stateDirectory },
     );
   }
 

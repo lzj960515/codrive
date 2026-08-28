@@ -1,6 +1,8 @@
 export type UpgradePhase =
   | "checking"
   | "installing"
+  | "stopping"
+  | "migrating"
   | "restarting"
   | "syncing_resources"
   | "succeeded"
@@ -11,6 +13,8 @@ export type SystemUpdateErrorCode =
   | "invalid_registry_response"
   | "permission_denied"
   | "package_install_failed"
+  | "service_stop_failed"
+  | "state_migration_failed"
   | "service_restart_failed"
   | "service_start_timeout"
   | "wrong_version"

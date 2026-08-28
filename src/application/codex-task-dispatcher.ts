@@ -95,7 +95,7 @@ function conversationThreadId(request: DispatchRequest): string | undefined {
   const action = request.task.currentExecution?.action;
   return action === "review"
     ? request.activity.conversations.reviewThreadId
-    : request.activity.conversations.developmentThreadId;
+    : request.activity.conversations.workThreadId;
 }
 
 function conversationDirectory({ project }: DispatchRequest): string {

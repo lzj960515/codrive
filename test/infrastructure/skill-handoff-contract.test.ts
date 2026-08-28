@@ -58,13 +58,18 @@ describe("non-execution Skill handoff", () => {
     expect(control).toContain("恢复后仍保持暂停");
   });
 
-  it("expresses trustworthy review and rework decisions in the stage contract", async () => {
+  it("expresses the generic work, review, and completion-decision contract", async () => {
     const task = await readFile(resolve("skills/codrive-task/SKILL.md"), "utf8");
 
     expect(task).toContain("独立判断每条 finding");
     expect(task).toContain("不适用的问题形成有证据的回复");
     expect(task).toContain("受支持的使用方式");
     expect(task).toContain("真实影响当前交付");
+    expect(task).toContain("## 工作 `work`");
+    expect(task).toContain("`work_required`");
+    expect(task).toContain("没有候选时");
+    expect(task).not.toContain("## 开发 `develop`");
+    expect(task).not.toContain("## 返工 `rework`");
     expect(task).toContain("codrive-task.mjs report");
   });
 });

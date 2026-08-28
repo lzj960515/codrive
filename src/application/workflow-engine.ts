@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 
-import { WorkflowConflictError } from "../domain/errors.js";
+import {
+  InvalidTaskReportError,
+  WorkflowConflictError,
+} from "../domain/errors.js";
 import {
   findProjectArchiveBlocker,
   isProjectArchived,
@@ -528,12 +531,16 @@ export class WorkflowEngine {
         );
       }
       validateTaskReport(found.task, report, this.now());
+      validateBoundWorkReport(execution, activities, report);
 
       const activity = createTaskReportActivity({
         activityId: this.createId("activity"),
         projectId: found.project.id,
         action: execution.action,
         report,
+        ...(execution.workActivityId
+          ? { workActivityId: execution.workActivityId }
+          : {}),
         ...(execution.threadId ? { threadId: execution.threadId } : {}),
         occurredAt: this.now(),
       });
@@ -1798,6 +1805,17 @@ export class WorkflowEngine {
     const attemptId = this.createId("attempt");
     let pending: Task;
     try {
+      if (["review", "integrate"].includes(task.requestedAction ?? "")) {
+        const activities = await this.store.listTaskActivities(project.id, task.id);
+        const boundWork = activities.find(
+          ({ id, type }) => id === task.workActivityId && type === "work_completed",
+        );
+        if (!boundWork) {
+          throw new Error(
+            `Task ${task.id} cannot ${task.requestedAction} without its bound work activity`,
+          );
+        }
+      }
       pending = startTaskExecution(
         task,
         attemptId,
@@ -2167,7 +2185,7 @@ export class WorkflowEngine {
       for (const task of selected) {
         await this.store.saveTask(project.id, {
           ...task,
-          requestedAction: "develop",
+          requestedAction: "work",
           updatedAt: this.now(),
         });
       }
@@ -2449,6 +2467,7 @@ export class WorkflowEngine {
       task,
       activity: projectTaskActivities(
         await this.store.listTaskActivities(project.id, task.id),
+        task.currentExecution?.workActivityId ?? task.workActivityId,
       ),
     };
   }
@@ -2879,14 +2898,14 @@ function availableProjectPlanningCapacity(
   snapshot: ProjectSnapshot,
   concurrencyLimit: number,
 ): number {
-  const reservedDevelopTasks = snapshot.tasks
+  const reservedWorkTasks = snapshot.tasks
     .filter(
       ({ status, requestedAction }) =>
-        status === "backlog" && requestedAction === "develop",
+        status === "backlog" && requestedAction === "work",
     ).length;
   return Math.max(
     0,
-    concurrencyLimit - countActiveTasks(snapshot.tasks) - reservedDevelopTasks,
+    concurrencyLimit - countActiveTasks(snapshot.tasks) - reservedWorkTasks,
   );
 }
 
@@ -2927,7 +2946,7 @@ function compareTaskDispatchCandidates(
   left: { project: Project; task: Task },
   right: { project: Project; task: Task },
 ): number {
-  const actionPriority = (task: Task) => (task.requestedAction === "develop" ? 1 : 0);
+  const actionPriority = (task: Task) => (task.requestedAction === "work" ? 1 : 0);
   return (
     actionPriority(left.task) - actionPriority(right.task) ||
     left.task.updatedAt.localeCompare(right.task.updatedAt) ||
@@ -2992,7 +3011,7 @@ function completedProjectExecution(
 function statusForTaskAction(action: NonNullable<Task["requestedAction"]>): Task["status"] {
   if (action === "review") return "reviewing";
   if (action === "integrate") return "integrating";
-  return "developing";
+  return "working";
 }
 
 function eventForTask(task: Task): string {
@@ -3002,8 +3021,8 @@ function eventForTask(task: Task): string {
   switch (task.status) {
     case "reviewing":
       return "task.review_requested";
-    case "changes_requested":
-      return "task.changes_requested";
+    case "working":
+      return "task.work_requested";
     case "integrating":
       return "task.approved";
     case "done":
@@ -3012,6 +3031,43 @@ function eventForTask(task: Task): string {
       return "task.waiting_for_input";
     default:
       return "task.updated";
+  }
+}
+
+function validateBoundWorkReport(
+  execution: NonNullable<Task["currentExecution"]>,
+  activities: readonly TaskActivity[],
+  report: TaskReport,
+): void {
+  if (!["review", "integrate"].includes(execution.action)) return;
+  const work = activities.find(
+    ({ id, type }) => id === execution.workActivityId && type === "work_completed",
+  );
+  if (!work) {
+    throw new WorkflowConflictError(
+      `Task execution ${execution.attemptId} is not bound to a work activity`,
+    );
+  }
+  if (!work.evidence?.candidateCommit) return;
+  if (execution.action === "review" && report.outcome === "approved") {
+    requireGitEvidence(report, "reviewedMainCommit");
+  }
+  if (
+    execution.action === "integrate" &&
+    ["completed", "work_required"].includes(report.outcome)
+  ) {
+    requireGitEvidence(report, "mergedCommit");
+  }
+}
+
+function requireGitEvidence(
+  report: TaskReport,
+  field: "reviewedMainCommit" | "mergedCommit",
+): void {
+  if (!report[field]) {
+    throw new InvalidTaskReportError(
+      `Report ${report.attemptId} requires ${field} for code-backed work`,
+    );
   }
 }
 
