@@ -7,7 +7,6 @@ import type {
 } from "../domain/types.js";
 import type { ConfigStore } from "../infrastructure/config-store.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
-import { isTaskActivity } from "../infrastructure/state-v4-validation.js";
 import type {
   SemanticAtlasMaintenanceRequest,
   SemanticAtlasMaintenanceState,
@@ -49,9 +48,9 @@ export class SemanticAtlasMaintenanceCoordinator {
   public async start(): Promise<void> {
     if (this.unsubscribe) return;
     this.unsubscribe = this.projects.subscribe((event) => {
-      const activity = integrationActivityFrom(event);
-      if (!activity) return;
-      void this.enqueue(() => this.handleLiveIntegration(activity)).catch(
+      const completedTask = completedIntegrationTaskFrom(event);
+      if (!completedTask) return;
+      void this.enqueue(() => this.handleCompletedIntegration(completedTask)).catch(
         this.onError,
       );
     });
@@ -90,6 +89,22 @@ export class SemanticAtlasMaintenanceCoordinator {
     await this.stateStore.save(state);
   }
 
+  private async handleCompletedIntegration(
+    completedTask: CompletedIntegrationTask,
+  ): Promise<void> {
+    const activities = await this.projects.listTaskActivities(
+      completedTask.projectId,
+      completedTask.taskId,
+    );
+    const integration = findLatestIntegration(activities);
+    if (!integration) {
+      throw new Error(
+        `Completed integration task '${completedTask.taskId}' has no integration activity`,
+      );
+    }
+    await this.handleLiveIntegration(integration);
+  }
+
   private async recoverPersistedIntegrations(): Promise<void> {
     const enabledAt = await this.enabledAt();
     if (enabledAt === null) return;
@@ -112,11 +127,15 @@ export class SemanticAtlasMaintenanceCoordinator {
     snapshots: readonly ProjectSnapshot[],
     enabledAt: string,
   ): Promise<void> {
-    for (const { project } of snapshots) {
+    for (const { project, tasks } of snapshots) {
+      const completedTaskIds = new Set(
+        tasks.filter(({ status }) => status === "done").map(({ id }) => id),
+      );
       const activities = await this.projects.listTaskActivities(project.id);
       for (const activity of activities) {
         if (
           activity.type !== "integration_completed" ||
+          !completedTaskIds.has(activity.taskId) ||
           activity.occurredAt < enabledAt ||
           requestIsKnown(state, activity.id)
         ) {
@@ -176,13 +195,32 @@ export class SemanticAtlasMaintenanceCoordinator {
   }
 }
 
-function integrationActivityFrom(event: CodriveEvent): TaskActivity | undefined {
-  const activity = event.type === "task.activity_recorded"
-    ? event.data?.activity
-    : undefined;
-  return isTaskActivity(activity) && activity.type === "integration_completed"
-    ? activity
-    : undefined;
+interface CompletedIntegrationTask {
+  readonly projectId: string;
+  readonly taskId: string;
+}
+
+function completedIntegrationTaskFrom(
+  event: CodriveEvent,
+): CompletedIntegrationTask | undefined {
+  if (
+    event.type !== "task.completed" ||
+    event.before?.action !== "integrate" ||
+    !event.taskId
+  ) {
+    return undefined;
+  }
+  return { projectId: event.projectId, taskId: event.taskId };
+}
+
+function findLatestIntegration(
+  activities: readonly TaskActivity[],
+): TaskActivity | undefined {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (activity?.type === "integration_completed") return activity;
+  }
+  return undefined;
 }
 
 function requestFrom(activity: TaskActivity): SemanticAtlasMaintenanceRequest {

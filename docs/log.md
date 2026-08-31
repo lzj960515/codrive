@@ -12,6 +12,10 @@
 - Made normal runtime consume persisted Integration events directly instead of
   polling all projects. A maintenance task's own Integration event checks for
   remaining work through the same flow.
+- Bound Integration consumption to the persisted `task.completed` transition
+  while retaining the immutable Integration activity as the request identity,
+  so a completing maintenance task cannot suppress its own follow-up check and
+  interrupted tasks remain recoverable.
 - Standardized every managed Skill write payload on one explicit `--json` argument, added successful-command envelopes, and made task reports return their persisted activity receipt.
 
 ## 2026-08-26

@@ -10,10 +10,11 @@ Codrive is a local, single-user orchestration service that connects filesystem-b
 - `model-routing.ts` owns capacity-failure classification, persisted retry state, exponential backoff, and fallback routing for every Codex turn.
 - `PackageVersionCheckScheduler` owns startup compensation, the persisted hourly npm check cadence, and live board status events; `PackageVersionService` owns npm access, validation, caching, and in-flight deduplication.
 - `SystemSettingsService` owns validated runtime concurrency plus global and project model configuration changes.
-- `SemanticAtlasMaintenanceCoordinator` consumes persisted Integration events,
-  asks Semantic Atlas only whether the current project requires maintenance,
-  and ensures one open ordinary maintenance task per project. Semantic Atlas
-  owns all candidate, business-domain, and completion interpretation.
+- `SemanticAtlasMaintenanceCoordinator` consumes a persisted Integration only
+  after its source task reaches `done`, asks Semantic Atlas only whether the
+  current project requires maintenance, and ensures one open ordinary
+  maintenance task per project. Semantic Atlas owns all candidate,
+  business-domain, and completion interpretation.
 - `src/infrastructure` owns filesystem persistence, App Server transport, and managed Skill/Hook installation.
 - `src/interfaces` owns the HTTP API, authenticated Socket.IO board transport, CLI, and local board.
 - `skills` contains the product's installable Codex Skills.

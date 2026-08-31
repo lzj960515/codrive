@@ -14,12 +14,12 @@ describe("SemanticAtlasMaintenanceCoordinator", () => {
     fixture.maintenanceRequired = true;
     await fixture.coordinator.start();
 
-    fixture.publish(integrationEvent("source"));
+    fixture.publishCompletedIntegration("source");
 
     await vi.waitFor(() => expect(fixture.ensuredProjectIds).toEqual(["project-1"]));
     expect(fixture.checkedRepositories).toEqual(["/workspace/product"]);
     expect(fixture.listProjectsCalls).toBe(1);
-    expect(fixture.activityReads).toEqual(["project-1"]);
+    expect(fixture.activityReads).toEqual(["project-1", "project-1"]);
     expect(fixture.state).toEqual({
       schemaVersion: 1,
       handledIntegrationActivityIds: ["integration-source"],
@@ -36,7 +36,7 @@ describe("SemanticAtlasMaintenanceCoordinator", () => {
     fixture.maintenanceError = new Error("status unavailable");
     await fixture.coordinator.start();
 
-    fixture.publish(integrationEvent("source"));
+    fixture.publishCompletedIntegration("source");
     await vi.waitFor(() =>
       expect(fixture.state.requests.map(({ id }) => id)).toEqual([
         "integration-source",
@@ -45,7 +45,7 @@ describe("SemanticAtlasMaintenanceCoordinator", () => {
     expect(fixture.state.handledIntegrationActivityIds).toEqual([]);
 
     fixture.maintenanceError = undefined;
-    fixture.publish(integrationEvent("later"));
+    fixture.publishCompletedIntegration("later");
     await vi.waitFor(() =>
       expect(fixture.state.handledIntegrationActivityIds).toEqual([
         "integration-source",
@@ -63,7 +63,7 @@ describe("SemanticAtlasMaintenanceCoordinator", () => {
     const fixture = coordinatorFixture();
     await fixture.coordinator.start();
 
-    fixture.publish(integrationEvent("source"));
+    fixture.publishCompletedIntegration("source");
 
     await vi.waitFor(() =>
       expect(fixture.state.handledIntegrationActivityIds).toEqual(["integration-source"])
@@ -81,7 +81,7 @@ describe("SemanticAtlasMaintenanceCoordinator", () => {
     fixture.maintenanceRequired = true;
     await fixture.coordinator.start();
 
-    fixture.publish(integrationEvent("source"));
+    fixture.publishCompletedIntegration("source");
 
     await vi.waitFor(() =>
       expect(fixture.state.handledIntegrationActivityIds).toEqual(["integration-source"])
@@ -116,10 +116,60 @@ describe("SemanticAtlasMaintenanceCoordinator", () => {
     fixture.maintenanceRequired = true;
     await fixture.coordinator.start();
 
-    fixture.publish(integrationEvent("maintenance"));
+    fixture.publishCompletedIntegration("maintenance");
 
     await vi.waitFor(() => expect(fixture.ensuredProjectIds).toEqual(["project-1"]));
     expect(fixture.checkedRepositories).toEqual(["/workspace/product"]);
+    await fixture.coordinator.stop();
+  });
+
+  it("waits for the maintenance task to reach done before consuming its integration", async () => {
+    const fixture = coordinatorFixture([
+      task("source", "done"),
+      task("maintenance", "integrating", { kind: "semantic_atlas_maintenance" }),
+    ]);
+    fixture.maintenanceRequired = true;
+    await fixture.coordinator.start();
+
+    fixture.publish(integrationEvent("maintenance"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fixture.state.handledIntegrationActivityIds).toEqual([]);
+    expect(fixture.checkedRepositories).toEqual([]);
+
+    fixture.completeOpenMaintenanceTasks();
+    fixture.publish(taskCompletedEvent("maintenance"));
+
+    await vi.waitFor(() =>
+      expect(fixture.checkedRepositories).toEqual(["/workspace/product"])
+    );
+    expect(fixture.ensuredProjectIds).toEqual(["project-1"]);
+    expect(fixture.state.handledIntegrationActivityIds).toEqual([
+      "integration-maintenance",
+    ]);
+    await fixture.coordinator.stop();
+  });
+
+  it("defers a persisted integration until recovery finishes the source task", async () => {
+    const fixture = coordinatorFixture([
+      task("source", "done"),
+      task("maintenance", "integrating", { kind: "semantic_atlas_maintenance" }),
+    ]);
+    fixture.maintenanceRequired = true;
+    fixture.persistedActivities.push(integrationActivity("maintenance"));
+
+    await fixture.coordinator.start();
+    expect(fixture.checkedRepositories).toEqual([]);
+    expect(fixture.state.handledIntegrationActivityIds).toEqual([]);
+
+    fixture.completeOpenMaintenanceTasks();
+    fixture.publish(taskCompletedEvent("maintenance"));
+
+    await vi.waitFor(() =>
+      expect(fixture.checkedRepositories).toEqual(["/workspace/product"])
+    );
+    expect(fixture.state.handledIntegrationActivityIds).toEqual([
+      "integration-maintenance",
+    ]);
     await fixture.coordinator.stop();
   });
 
@@ -129,7 +179,7 @@ describe("SemanticAtlasMaintenanceCoordinator", () => {
     const releaseCheck = fixture.holdMaintenanceCheck();
     await fixture.coordinator.start();
 
-    fixture.publish(integrationEvent("source"));
+    fixture.publishCompletedIntegration("source");
     await vi.waitFor(() =>
       expect(fixture.checkedRepositories).toEqual(["/workspace/product"])
     );
@@ -223,7 +273,20 @@ function coordinatorFixture(initialTasks: Task[] = [task("source", "done")]) {
       return listProjectsCalls;
     },
     publish(event: CodriveEvent) {
+      const activity = event.data?.activity;
+      if (
+        event.type === "task.activity_recorded" &&
+        activity &&
+        typeof activity === "object" &&
+        "type" in activity
+      ) {
+        persistedActivities.push(activity as TaskActivity);
+      }
       listener?.(event);
+    },
+    publishCompletedIntegration(taskId: string) {
+      fixture.publish(integrationEvent(taskId));
+      fixture.publish(taskCompletedEvent(taskId));
     },
     completeOpenMaintenanceTasks() {
       for (const currentTask of snapshot.tasks) {
@@ -348,5 +411,28 @@ function integrationEvent(taskId: string): CodriveEvent {
     taskId,
     occurredAt: activity.occurredAt,
     data: { activity },
+  };
+}
+
+function taskCompletedEvent(taskId: string): CodriveEvent {
+  return {
+    schemaVersion: 1,
+    eventId: `completed-${taskId}`,
+    type: "task.completed",
+    projectId: "project-1",
+    taskId,
+    occurredAt: "2026-08-31T01:00:01.000Z",
+    before: {
+      status: "integrating",
+      requestedAction: "integrate",
+      action: "integrate",
+      executionStatus: "running",
+    },
+    after: {
+      status: "done",
+      requestedAction: null,
+      action: "integrate",
+      executionStatus: "completed",
+    },
   };
 }

@@ -20,14 +20,15 @@ install, upgrade, version-gate, or diagnose Semantic Atlas.
 
 ```text
 task records a persisted integration_completed activity
-  -> ProjectStore publishes the same event to in-process subscribers
+  -> task reaches done and ProjectStore publishes task.completed
+  -> resolve the exact persisted Integration activity
   -> retain one check request keyed by the Integration activity
   -> current project already has open maintenance: complete the request
   -> semantic-atlas reconcile status --repo
   -> required: false: complete the request
   -> required: true: ensure one open maintenance task for the project
   -> normal work -> independent review -> integration -> done
-  -> the maintenance task's integration_completed event follows the same path
+  -> the maintenance task's completed Integration follows the same path
 ```
 
 `SemanticAtlasMaintenanceCoordinator` subscribes directly to `ProjectStore`.
@@ -35,12 +36,18 @@ Socket.IO is a separate projection of those Store events for the browser; the
 coordinator does not connect back through the socket. Normal runtime performs no
 maintenance polling and does not scan unrelated projects after an Integration.
 
-The activity is already durable before subscribers run. The coordinator also
-stores pending requests and handled activity IDs in
+The Integration activity is durable before the task reaches `done`. The
+coordinator waits for the persisted `task.completed` state event before
+consuming that activity, so the completing maintenance task cannot block its
+own follow-up check as an open task. The coordinator also stores pending
+requests and handled activity IDs in
 `semantic-atlas-maintenance.json`. It subscribes before startup recovery, then
-runs one pass over persisted Integration activities after `enabledAt`. The same
-one-pass recovery runs when the setting changes. Event IDs make a live event and
-its recovered copy idempotent; there is no periodic recovery loop.
+runs one pass over persisted Integration activities whose source tasks are
+already `done` and whose activity occurred after `enabledAt`. The same one-pass
+recovery runs when the setting changes. Activity IDs make a live completion and
+its recovered copy idempotent; there is no periodic recovery loop. An activity
+persisted before an interrupted task reaches `done` remains deferred until task
+recovery publishes the normal completion event.
 
 ## Task Identity And Lifecycle
 

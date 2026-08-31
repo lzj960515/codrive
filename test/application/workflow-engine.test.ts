@@ -580,6 +580,23 @@ describe("WorkflowEngine", () => {
       reviewing.workActivityId,
       reviewing.workActivityId,
     ]);
+    const events = await store.listProjectEvents(created.project.id);
+    const integrationActivityIndex = events.findIndex((event) =>
+      event.type === "task.activity_recorded" &&
+      event.data?.activity &&
+      typeof event.data.activity === "object" &&
+      "type" in event.data.activity &&
+      event.data.activity.type === "integration_completed"
+    );
+    const completionIndex = events.findIndex((event) =>
+      event.type === "task.completed" && event.taskId === taskId
+    );
+    expect(completionIndex).toBeGreaterThan(integrationActivityIndex);
+    expect(events[completionIndex]?.before).toMatchObject({
+      status: "integrating",
+      action: "integrate",
+    });
+    expect(events[completionIndex]?.after).toMatchObject({ status: "done" });
   });
 
   it("starts fresh work after integration requests it without reusing old candidate evidence", async () => {
