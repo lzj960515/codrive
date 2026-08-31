@@ -10,6 +10,7 @@ import { ManagedHookRuntimeInspector } from "./application/managed-hook-runtime-
 import { PackageVersionCheckScheduler } from "./application/package-version-check-scheduler.js";
 import { RecoveryManager } from "./application/recovery-manager.js";
 import { SystemSettingsService } from "./application/system-settings-service.js";
+import { SemanticAtlasMaintenanceCoordinator } from "./application/semantic-atlas-maintenance-coordinator.js";
 import { SystemUpdateService } from "./application/system-update-service.js";
 import { UpgradeCoordinator } from "./application/upgrade-coordinator.js";
 import { WorkflowEngine } from "./application/workflow-engine.js";
@@ -25,6 +26,8 @@ import {
 import { PackageVersionService } from "./infrastructure/package-version-service.js";
 import { readPackageVersion } from "./infrastructure/package-metadata.js";
 import { ProjectStore } from "./infrastructure/project-store.js";
+import { SemanticAtlasCli } from "./infrastructure/semantic-atlas-cli.js";
+import { SemanticAtlasMaintenanceStore } from "./infrastructure/semantic-atlas-maintenance-store.js";
 import { UpgradeStateStore } from "./infrastructure/upgrade-state-store.js";
 import { createHttpServer } from "./interfaces/http/server.js";
 
@@ -39,6 +42,7 @@ export class CodriveServer {
   private log: CodriveLog | null = null;
   private updateRecoveryTimer: NodeJS.Timeout | null = null;
   private versionChecks: PackageVersionCheckScheduler | null = null;
+  private semanticAtlasMaintenance: SemanticAtlasMaintenanceCoordinator | null = null;
   private ready = false;
 
   constructor(stateDirectory?: string) {
@@ -101,10 +105,26 @@ export class CodriveServer {
         projectExecutor,
         lifecycle,
       );
+      const semanticAtlas = new SemanticAtlasCli();
+      this.semanticAtlasMaintenance = new SemanticAtlasMaintenanceCoordinator(
+        this.configStore,
+        store,
+        new SemanticAtlasMaintenanceStore(this.config.stateDirectory),
+        semanticAtlas,
+        workflow,
+        {
+          onError: (error) => this.log?.error(
+            "semantic-atlas",
+            error instanceof Error ? error.message : String(error),
+          ),
+        },
+      );
       const settingsService = new SystemSettingsService(
         this.configStore,
         workflow,
         this.codex,
+        semanticAtlas,
+        this.semanticAtlasMaintenance,
       );
       const versions = new PackageVersionService({
         currentVersion: version,
@@ -171,8 +191,9 @@ export class CodriveServer {
         activityBridge: this.activityBridge,
       });
       await this.recovery.start();
-      this.ready = true;
+      await this.semanticAtlasMaintenance.start();
       await this.versionChecks.start();
+      this.ready = true;
       const url = `http://${this.config.host}:${this.config.port}`;
       this.log.info(`Codrive is running at ${url}`);
       return {
@@ -196,6 +217,8 @@ export class CodriveServer {
     this.updateRecoveryTimer = null;
     this.versionChecks?.stop();
     this.versionChecks = null;
+    this.semanticAtlasMaintenance?.stop();
+    this.semanticAtlasMaintenance = null;
     this.recovery?.stop();
     this.recovery = null;
     await this.http?.close();

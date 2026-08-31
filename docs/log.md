@@ -2,6 +2,13 @@
 
 ## 2026-08-31
 
+- Added the opt-in Semantic Atlas integration card with installed/uninstalled
+  detection and one global automatic-maintenance toggle.
+- Added durable post-integration check requests, actionable-domain CLI reads,
+  project-plus-domain idempotent ordinary maintenance tasks, completion rescans,
+  restart recovery, and self-loop prevention.
+- Kept business interpretation and candidate completion inside Semantic Atlas;
+  Codrive continues to own only orchestration, review, integration, and recovery.
 - Standardized every managed Skill write payload on one explicit `--json` argument, added successful-command envelopes, and made task reports return their persisted activity receipt.
 
 ## 2026-08-26

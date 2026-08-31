@@ -277,6 +277,43 @@ async function failCapacityAndStartRetry(taskId: string, delayMs: number) {
 }
 
 describe("WorkflowEngine", () => {
+  it("creates one open Semantic Atlas maintenance task per domain in one planning revision", async () => {
+    const created = await registerProject(1);
+
+    const [commerce, support] = await workflow.ensureSemanticAtlasMaintenanceTasks(
+      created.project.id,
+      ["commerce", "support", "commerce"],
+    );
+    const replay = await workflow.ensureSemanticAtlasMaintenanceTasks(
+      created.project.id,
+      ["commerce", "support"],
+    );
+    const snapshot = (await store.getProject(created.project.id))!;
+
+    expect(replay.map(({ id }) => id)).toEqual([commerce!.id, support!.id]);
+    expect(snapshot.tasks.filter(({ origin }) =>
+      origin?.kind === "semantic_atlas_maintenance"
+    )).toHaveLength(2);
+    expect(commerce).toMatchObject({
+      status: "backlog",
+      origin: {
+        kind: "semantic_atlas_maintenance",
+        businessDomainId: "commerce",
+      },
+    });
+    expect(support).toMatchObject({
+      status: "backlog",
+      origin: {
+        kind: "semantic_atlas_maintenance",
+        businessDomainId: "support",
+      },
+    });
+    expect(snapshot.project.planning).toMatchObject({
+      revision: 2,
+      changeReason: "system_work_added",
+    });
+  });
+
   it("persists a project thread before starting its turn", async () => {
     projectExecutor.beforeStartTurn = async (project, threadId) => {
       const stored = (await store.getProject(project.id))!.project;

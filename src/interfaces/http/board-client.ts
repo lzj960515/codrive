@@ -819,13 +819,19 @@ export function renderBoardClient(accessToken: string): string {
     function renderSettings() {
       const host = document.getElementById("project");
       if (!systemSettings) return;
-      const { settings, availableModels } = systemSettings;
+      const { settings, availableModels, semanticAtlas } = systemSettings;
       const options = selected => availableModels.map(model =>
         '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
       ).join("");
       host.innerHTML =
         '<div class="page-screen settings-screen">'+
-          '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数和模型路由。</p></div></header>'+
+          '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数、模型路由和产品集成。</p></div></header>'+
+          '<section class="integration-card" data-installed="'+String(semanticAtlas.installed)+'">'+
+            '<div><span class="integration-kicker">理解层</span><h2>Semantic Atlas</h2><p>在普通任务合入后检查当前可行动候选，并创建独立的业务地图维护任务。</p></div>'+
+            (semanticAtlas.installed
+              ? '<label class="integration-toggle"><span><b>已安装</b><small>自动维护</small></span><input form="settings-form" name="semanticAtlasAutomaticMaintenance" type="checkbox" '+(semanticAtlas.automaticMaintenance ? 'checked' : '')+'><i aria-hidden="true"></i></label>'
+              : '<div class="integration-missing"><b>未安装</b><a href="https://github.com/lzj960515/semantic-atlas" target="_blank" rel="noreferrer">查看安装方式 ↗</a></div>')+
+          '</section>'+
           '<form id="settings-form" class="settings-form settings-panel">'+
             '<label class="setting-field"><span><b>每个项目的并发任务数</b><small>每个项目独立计算容量，不同项目互不占用槽位。</small></span><input name="maxConcurrentTasks" type="number" min="1" max="32" required value="'+settings.maxConcurrentTasks+'"></label>'+
             '<label class="setting-field"><span><b>默认模型</b><small>新任务、审查、合入与项目规划优先使用这个模型。</small></span><select name="primary">'+options(settings.models.primary)+'</select></label>'+
@@ -837,6 +843,9 @@ export function renderBoardClient(accessToken: string): string {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
         const status = document.getElementById("settings-status");
+        const semanticAtlasSettings = semanticAtlas.installed
+          ? { semanticAtlasAutomaticMaintenance: form.get("semanticAtlasAutomaticMaintenance") === "on" }
+          : {};
         status.textContent = "正在保存...";
         try {
           systemSettings = await command("system.update_settings", {
@@ -844,7 +853,8 @@ export function renderBoardClient(accessToken: string): string {
             models: {
               primary: String(form.get("primary")),
               fallback: String(form.get("fallback"))
-            }
+            },
+            ...semanticAtlasSettings
           });
           status.textContent = "设置已保存并生效。";
           renderSettings();

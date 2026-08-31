@@ -115,6 +115,10 @@ describe("HTTP API", () => {
           isDefault: false,
         },
       ],
+    }, {
+      readInstallation: async () => ({ installed: true }),
+    }, {
+      settingsChanged: async () => undefined,
     });
     errors = [];
     upgradeLaunches = [];
@@ -855,6 +859,7 @@ describe("HTTP API", () => {
           primary: "gpt-5.6-terra",
           fallback: "gpt-5.6-sol",
         },
+        semanticAtlasAutomaticMaintenance: true,
       },
     });
     const page = await server.inject({ method: "GET", url: "/settings" });
@@ -866,6 +871,7 @@ describe("HTTP API", () => {
         { id: "gpt-5.6-sol" },
         { id: "gpt-5.6-terra" },
       ],
+      semanticAtlas: { installed: true, automaticMaintenance: false },
     });
     expect(updated.statusCode).toBe(200);
     expect(updated.json()).toMatchObject({
@@ -876,12 +882,20 @@ describe("HTTP API", () => {
           fallback: "gpt-5.6-sol",
         },
       },
+      semanticAtlas: { installed: true, automaticMaintenance: true },
     });
     expect(page.statusCode).toBe(200);
     expect(page.body).toContain("运行设置");
     expect(page.body).toContain("每个项目的并发任务数");
     expect(page.body).toContain("默认模型");
     expect(page.body).toContain("备用模型");
+    expect(page.body).toContain("Semantic Atlas");
+    expect(page.body).toContain("已安装");
+    expect(page.body).toContain("未安装");
+    expect(page.body).toContain("semanticAtlasAutomaticMaintenance");
+    expect(page.body).toContain(
+      "const semanticAtlasSettings = semanticAtlas.installed",
+    );
     expect(page.body).toContain(
       "'+escapeHtml(model.displayName)+'</option>'",
     );

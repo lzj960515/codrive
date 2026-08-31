@@ -14,6 +14,10 @@ export interface CodriveConfig {
   accessToken: string;
   stateDirectory: string;
   codexExecutable?: string;
+  semanticAtlas?: {
+    automaticMaintenance: boolean;
+    enabledAt?: string;
+  };
 }
 
 const currentSchemaVersion = 2;

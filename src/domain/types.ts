@@ -44,6 +44,7 @@ export interface ExecutionModelRouting {
 export type PlanningChangeReason =
   | "project_registered"
   | "work_added"
+  | "system_work_added"
   | "task_completed"
   | "task_cancelled"
   | "product_document_updated"
@@ -300,6 +301,7 @@ export interface Task {
   title: string;
   description: string;
   acceptanceCriteria: string[];
+  origin?: TaskOrigin;
   order: number;
   status: TaskStatus;
   requestedAction: TaskAction | null;
@@ -309,6 +311,11 @@ export interface Task {
   cancellation?: Cancellation;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TaskOrigin {
+  kind: "semantic_atlas_maintenance";
+  businessDomainId: string;
 }
 
 export interface LifecycleEvent {
@@ -353,6 +360,7 @@ export interface CreateTaskInput {
   description: string;
   acceptanceCriteria: string[];
   order?: number;
+  origin?: TaskOrigin;
 }
 
 export interface CreateProjectInput {

@@ -21,6 +21,7 @@ describe("SystemSettingsService", () => {
   let service: SystemSettingsService;
   let taskDispatcher: RecordingTaskDispatcher;
   let projectExecutor: RecordingProjectExecutor;
+  let maintenanceSettingsChanges: number;
 
   beforeEach(async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-settings-"));
@@ -29,6 +30,7 @@ describe("SystemSettingsService", () => {
     projectStore = new ProjectStore(stateDirectory);
     taskDispatcher = new RecordingTaskDispatcher();
     projectExecutor = new RecordingProjectExecutor();
+    maintenanceSettingsChanges = 0;
     workflow = new WorkflowEngine(
       projectStore,
       taskDispatcher,
@@ -56,7 +58,13 @@ describe("SystemSettingsService", () => {
           isDefault: false,
         },
       ],
-    });
+    }, {
+      readInstallation: async () => ({ installed: true }),
+    }, {
+      settingsChanged: async () => {
+        maintenanceSettingsChanges += 1;
+      },
+    }, () => "2026-08-31T08:00:00.000Z");
   });
 
   it("returns persisted runtime settings with the live Codex model catalog", async () => {
@@ -69,6 +77,93 @@ describe("SystemSettingsService", () => {
         expect.objectContaining({ id: "gpt-5.6-sol", isDefault: true }),
         expect.objectContaining({ id: "gpt-5.6-terra" }),
       ]),
+      semanticAtlas: {
+        installed: true,
+        automaticMaintenance: false,
+      },
+    });
+  });
+
+  it("persists the Semantic Atlas automation toggle and wakes maintenance", async () => {
+    await service.update({
+      maxConcurrentTasks: 4,
+      models: testModels,
+      semanticAtlasAutomaticMaintenance: true,
+    });
+
+    expect(await configStore.read()).toMatchObject({
+      semanticAtlas: {
+        automaticMaintenance: true,
+        enabledAt: "2026-08-31T08:00:00.000Z",
+      },
+    });
+    expect(maintenanceSettingsChanges).toBe(1);
+    await expect(service.read()).resolves.toMatchObject({
+      semanticAtlas: { installed: true, automaticMaintenance: true },
+    });
+  });
+
+  it("refuses to enable automatic maintenance when Semantic Atlas is not installed", async () => {
+    const unavailable = new SystemSettingsService(
+      configStore,
+      workflow,
+      { listModels: async () => [{
+        id: "gpt-5.6-sol",
+        displayName: "Sol",
+        description: "Primary",
+        isDefault: true,
+      }, {
+        id: "gpt-5.6-terra",
+        displayName: "Terra",
+        description: "Fallback",
+        isDefault: false,
+      }] },
+      { readInstallation: async () => ({ installed: false }) },
+      { settingsChanged: async () => undefined },
+    );
+
+    await expect(unavailable.update({
+      maxConcurrentTasks: 4,
+      models: testModels,
+      semanticAtlasAutomaticMaintenance: true,
+    })).rejects.toThrow("Semantic Atlas must be installed");
+    expect((await configStore.read()).semanticAtlas).toBeUndefined();
+  });
+
+  it("preserves an enabled integration when the CLI is temporarily unavailable", async () => {
+    await service.update({
+      maxConcurrentTasks: 4,
+      models: testModels,
+      semanticAtlasAutomaticMaintenance: true,
+    });
+    const unavailable = new SystemSettingsService(
+      configStore,
+      workflow,
+      { listModels: async () => [{
+        id: "gpt-5.6-sol",
+        displayName: "Sol",
+        description: "Primary",
+        isDefault: true,
+      }, {
+        id: "gpt-5.6-terra",
+        displayName: "Terra",
+        description: "Fallback",
+        isDefault: false,
+      }] },
+      { readInstallation: async () => ({ installed: false }) },
+    );
+
+    await unavailable.update({
+      maxConcurrentTasks: 3,
+      models: testModels,
+    });
+
+    expect(await configStore.read()).toMatchObject({
+      maxConcurrentTasks: 3,
+      semanticAtlas: {
+        automaticMaintenance: true,
+        enabledAt: "2026-08-31T08:00:00.000Z",
+      },
     });
   });
 

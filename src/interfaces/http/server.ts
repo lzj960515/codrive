@@ -1,7 +1,10 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 
-import type { SystemSettingsService } from "../../application/system-settings-service.js";
+import type {
+  ProjectModelSettingsInput,
+  RuntimeSettingsInput,
+} from "../../application/system-settings-service.js";
 import type { SystemUpdateService } from "../../application/system-update-service.js";
 import type { WorkflowEngine } from "../../application/workflow-engine.js";
 import type { ExecutionActivityBridge } from "../../application/execution-activity-bridge.js";
@@ -30,10 +33,12 @@ export interface HttpServerDependencies {
     ExecutionActivityBridge,
     "read" | "subscribe" | "isCurrent" | "recordHook"
   >;
-  settingsService: Pick<
-    SystemSettingsService,
-    "read" | "update" | "readProject" | "updateProject"
-  >;
+  settingsService: {
+    read(): Promise<unknown>;
+    update(input: RuntimeSettingsInput): Promise<unknown>;
+    readProject(projectId: string): Promise<unknown>;
+    updateProject(projectId: string, input: ProjectModelSettingsInput): Promise<unknown>;
+  };
   systemUpdateService?: Pick<
     SystemUpdateService,
     "read" | "refresh" | "start" | "installResources"
@@ -153,6 +158,7 @@ const commandSchema = z.discriminatedUnion("type", [
         primary: z.string().min(1),
         fallback: z.string().min(1),
       }),
+      semanticAtlasAutomaticMaintenance: z.boolean().optional(),
     }),
   }),
   z.object({
@@ -474,7 +480,13 @@ export function createHttpServer(
       return reply.code(202).send(update);
     }
     if (command.type === "system.update_settings") {
-      return dependencies.settingsService.update(command.payload);
+      const { semanticAtlasAutomaticMaintenance, ...runtimeSettings } = command.payload;
+      return dependencies.settingsService.update({
+        ...runtimeSettings,
+        ...(semanticAtlasAutomaticMaintenance === undefined
+          ? {}
+          : { semanticAtlasAutomaticMaintenance }),
+      });
     }
     if (command.type === "project.update_settings") {
       return dependencies.settingsService.updateProject(

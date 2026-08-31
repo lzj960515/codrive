@@ -1,5 +1,6 @@
 import { WorkflowConflictError } from "../domain/errors.js";
 import type { ModelRoutingSettings } from "../domain/types.js";
+import type { SemanticAtlasClient } from "../domain/semantic-atlas.js";
 import type { ConfigStore } from "../infrastructure/config-store.js";
 import type { CodexModelOption } from "./codex-gateway.js";
 import type { WorkflowEngine } from "./workflow-engine.js";
@@ -7,6 +8,7 @@ import type { WorkflowEngine } from "./workflow-engine.js";
 export interface RuntimeSettingsInput {
   maxConcurrentTasks: number;
   models: ModelRoutingSettings;
+  semanticAtlasAutomaticMaintenance?: boolean;
 }
 
 export interface ProjectModelSettingsInput {
@@ -17,17 +19,29 @@ export interface ModelCatalog {
   listModels(): Promise<CodexModelOption[]>;
 }
 
+export interface SemanticAtlasSettingsCoordinator {
+  settingsChanged(): Promise<void>;
+}
+
 export class SystemSettingsService {
   constructor(
     private readonly configStore: ConfigStore,
     private readonly workflow: WorkflowEngine,
     private readonly modelCatalog: ModelCatalog,
+    private readonly semanticAtlas: Pick<SemanticAtlasClient, "readInstallation"> = {
+      readInstallation: async () => ({ installed: false }),
+    },
+    private readonly maintenance: SemanticAtlasSettingsCoordinator = {
+      settingsChanged: async () => undefined,
+    },
+    private readonly now: () => string = () => new Date().toISOString(),
   ) {}
 
   async read() {
-    const [config, availableModels] = await Promise.all([
+    const [config, availableModels, installation] = await Promise.all([
       this.configStore.read(),
       this.modelCatalog.listModels(),
+      this.semanticAtlas.readInstallation(),
     ]);
     return {
       settings: {
@@ -35,16 +49,54 @@ export class SystemSettingsService {
         models: config.models,
       },
       availableModels,
+      semanticAtlas: {
+        installed: installation.installed,
+        automaticMaintenance: config.semanticAtlas?.automaticMaintenance ?? false,
+      },
     };
   }
 
   async update(input: RuntimeSettingsInput) {
-    const availableModels = await this.modelCatalog.listModels();
+    const [availableModels, installation] = await Promise.all([
+      this.modelCatalog.listModels(),
+      this.semanticAtlas.readInstallation(),
+    ]);
     validateSettings(input, availableModels);
     const current = await this.configStore.read();
-    await this.configStore.save({ ...current, ...input });
+    const requestedAutomaticMaintenance = input.semanticAtlasAutomaticMaintenance;
+    const automaticMaintenance = requestedAutomaticMaintenance
+      ?? current.semanticAtlas?.automaticMaintenance
+      ?? false;
+    if (requestedAutomaticMaintenance === true && !installation.installed) {
+      throw new WorkflowConflictError(
+        "Semantic Atlas must be installed before automatic maintenance can be enabled",
+      );
+    }
+    const wasEnabled = current.semanticAtlas?.automaticMaintenance ?? false;
+    const semanticAtlas = {
+      automaticMaintenance,
+      ...(!wasEnabled && automaticMaintenance
+        ? { enabledAt: this.now() }
+        : current.semanticAtlas?.enabledAt
+        ? { enabledAt: current.semanticAtlas.enabledAt }
+        : {}),
+    };
+    await this.configStore.save({
+      ...current,
+      maxConcurrentTasks: input.maxConcurrentTasks,
+      models: input.models,
+      semanticAtlas,
+    });
     await this.workflow.updateRuntimeSettings(input);
-    return { settings: input, availableModels };
+    await this.maintenance.settingsChanged();
+    return {
+      settings: {
+        maxConcurrentTasks: input.maxConcurrentTasks,
+        models: input.models,
+      },
+      availableModels,
+      semanticAtlas: { installed: installation.installed, automaticMaintenance },
+    };
   }
 
   async readProject(projectId: string) {

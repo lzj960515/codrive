@@ -442,6 +442,99 @@ export class WorkflowEngine {
     });
   }
 
+  ensureSemanticAtlasMaintenanceTasks(
+    projectId: string,
+    businessDomainIds: readonly string[],
+  ): Promise<readonly Task[]> {
+    return this.enqueue(async () => {
+      const snapshot = await this.requireSnapshot(projectId);
+      const uniqueBusinessDomainIds = [...new Set(businessDomainIds)];
+      const openTasksByDomain = new Map(
+        snapshot.tasks
+          .filter((task) =>
+            task.origin?.kind === "semantic_atlas_maintenance" &&
+            !["done", "cancelled"].includes(task.status)
+          )
+          .map((task) => [task.origin!.businessDomainId, task]),
+      );
+      const missingBusinessDomainIds = uniqueBusinessDomainIds.filter(
+        (businessDomainId) => !openTasksByDomain.has(businessDomainId),
+      );
+      if (missingBusinessDomainIds.length === 0) {
+        return uniqueBusinessDomainIds.map((businessDomainId) =>
+          openTasksByDomain.get(businessDomainId)!
+        );
+      }
+      if (snapshot.project.status === "cancelled") {
+        throw new WorkflowConflictError(
+          `Cancelled project ${projectId} cannot accept Semantic Atlas maintenance`,
+        );
+      }
+
+      const createdTasks = await this.store.addTasks(
+        projectId,
+        missingBusinessDomainIds.map((businessDomainId) => ({
+          title: `维护 ${businessDomainId} 业务地图`,
+          description:
+            `使用 $semantic-atlas-maintenance 处理 ${businessDomainId} 业务域的当前可行动候选。` +
+            "工作阶段准备地图改动或证据结论，独立审查后在合入阶段记录维护结果。",
+          acceptanceCriteria: [
+            `只处理 ${businessDomainId} 业务域并核实当前证据。`,
+            "地图改动至多涉及一个 owning YAML，并通过完整验证与独立审查。",
+            "合入阶段收到 Semantic Atlas recorded 或 idempotent 回执后才能完成。",
+          ],
+          origin: {
+            kind: "semantic_atlas_maintenance" as const,
+            businessDomainId,
+          },
+        })),
+      );
+      for (const task of createdTasks) {
+        openTasksByDomain.set(task.origin!.businessDomainId, task);
+      }
+      const currentProject = hasActiveProjectExecution(snapshot.project)
+        ? await this.requireProjectExecutions().cancel(snapshot.project)
+        : snapshot.project;
+      const changedAt = this.now();
+      const project: Project = {
+        ...currentProject,
+        status: "active",
+        requestedAction: null,
+        planning: advancePlanning(
+          currentProject.planning,
+          "system_work_added",
+          changedAt,
+          this.maxConcurrentTasks,
+        ),
+        updatedAt: changedAt,
+      };
+      await this.store.saveProject(project);
+      await this.recordSupersededSelection(
+        snapshot.project,
+        project,
+        "system_work_added",
+      );
+      for (const task of createdTasks) {
+        await this.recordEvent({
+          type: "project.system_work_added",
+          projectId,
+          taskId: task.id,
+          before: projectLifecycleState(snapshot.project),
+          after: projectLifecycleState(project),
+          data: {
+            source: "semantic_atlas",
+            businessDomainId: task.origin!.businessDomainId,
+          },
+        });
+      }
+      await this.recordPlanningRevision(project, snapshot.project.planning.revision);
+      await this.reconcileInternal();
+      return uniqueBusinessDomainIds.map((businessDomainId) =>
+        openTasksByDomain.get(businessDomainId)!
+      );
+    });
+  }
+
   updateProductDocument(
     projectId: string,
     change: ProductDocumentChange,

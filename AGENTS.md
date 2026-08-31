@@ -10,6 +10,10 @@ Codrive is a local, single-user orchestration service that connects filesystem-b
 - `model-routing.ts` owns capacity-failure classification, persisted retry state, exponential backoff, and fallback routing for every Codex turn.
 - `PackageVersionCheckScheduler` owns startup compensation, the persisted hourly npm check cadence, and live board status events; `PackageVersionService` owns npm access, validation, caching, and in-flight deduplication.
 - `SystemSettingsService` owns validated runtime concurrency plus global and project model configuration changes.
+- `SemanticAtlasMaintenanceCoordinator` owns durable post-integration checks,
+  Semantic Atlas candidate reads, and project-plus-domain idempotent maintenance
+  task creation. Semantic Atlas owns all business interpretation and candidate
+  completion semantics.
 - `src/infrastructure` owns filesystem persistence, App Server transport, and managed Skill/Hook installation.
 - `src/interfaces` owns the HTTP API, authenticated Socket.IO board transport, CLI, and local board.
 - `skills` contains the product's installable Codex Skills.
@@ -32,7 +36,13 @@ The detached upgrade worker installs the exact package, stops the old Codrive se
 
 Scheduled blockers are persisted task-execution waits. They keep the action, attempt, conversation, model route, absolute deadline, reason, and AI resume checkpoint while releasing project capacity and the repository integration lease. Every reportable turn has a server-generated `reportOpportunityId`; a resumed turn rotates that identity within the same attempt, while `submittedActivityId` continues to point at the current recorded decision. Reports and immutable report activities carry the opportunity identity so retries remain idempotent without allowing an earlier turn to occupy the resumed turn. Missing or mismatched execution identity is rejected. `WorkflowEngine` owns due, early, rescheduled, paused, cancelled, duplicate-wakeup, and report-opportunity decisions; `RecoveryManager` only maintains exact deadline wakeups and startup/reconnect compensation.
 
-The HTTP surface has five read boundaries: board projection, product detail, project model settings, runtime settings, and Skill context. The board projection separates the default unarchived list, the explicit archived collection with its count, and a project-scoped snapshot for later refreshes. Writes use the unified `/api/commands` endpoint. State transitions and persisted project configuration belong to `WorkflowEngine`; validated runtime and project model inputs belong to `SystemSettingsService`, not route handlers.
+The HTTP surface has five read boundaries: board projection, product detail, project model settings, runtime settings and integrations, and Skill context. The board projection separates the default unarchived list, the explicit archived collection with its count, and a project-scoped snapshot for later refreshes. Writes use the unified `/api/commands` endpoint. State transitions and persisted project configuration belong to `WorkflowEngine`; validated runtime, integration, and project model inputs belong to `SystemSettingsService`, not route handlers.
+
+Semantic Atlas automatic maintenance is a global opt-in. Settings expose only
+installed or uninstalled plus the toggle; Codrive does not install, upgrade, or
+diagnose that product. Generated maintenance work uses the ordinary task
+lifecycle and never triggers itself. See
+[Semantic Atlas automatic maintenance](./docs/architecture/semantic-atlas-maintenance.md).
 
 Socket.IO carries scoped invalidation signals, while HTTP remains authoritative for data. `BoardRealtimeGateway` authenticates the handshake, derives `project:<id>`, `task:<id>`, and `system` rooms from validated watch requests, and maps Store or system events to `project:changed`, `task:changed`, and `system:changed`. Archive and restore additionally emit `projects:changed` to authenticated connections so browsers reread only the default and archived project collections. Browser reconnects restore only the current watches and reread only those HTTP scopes.
 

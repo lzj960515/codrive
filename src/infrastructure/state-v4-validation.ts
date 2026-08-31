@@ -85,6 +85,13 @@ export function assertCurrentTask(task: Task): Task {
       `Unsupported task lifecycle action ${String(task.requestedAction)} in schema v4`,
     );
   }
+  if (
+    task.origin &&
+    (task.origin.kind !== "semantic_atlas_maintenance" ||
+      !task.origin.businessDomainId?.trim())
+  ) {
+    throw new Error(`Task ${task.id} has an invalid origin in schema v4`);
+  }
 
   const execution = task.currentExecution;
   const action = execution?.action;

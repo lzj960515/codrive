@@ -30,6 +30,7 @@
     "hooks",
     "docs/architecture/product-facts.md",
     "docs/architecture/realtime-sync.md",
+    "docs/architecture/semantic-atlas-maintenance.md",
     "README.md",
     "README.zh-CN.md"
   ],
