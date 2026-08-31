@@ -315,7 +315,6 @@ export interface Task {
 
 export interface TaskOrigin {
   kind: "semantic_atlas_maintenance";
-  businessDomainId: string;
 }
 
 export interface LifecycleEvent {

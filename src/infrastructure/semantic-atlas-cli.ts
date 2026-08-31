@@ -9,15 +9,13 @@ import type {
 
 const execFile = promisify(executeFile);
 
-const candidateEnvelopeSchema = z.object({
+const maintenanceStatusEnvelopeSchema = z.object({
   schemaVersion: z.literal(1),
   ok: z.literal(true),
-  command: z.literal("reconcile candidates"),
+  command: z.literal("reconcile status"),
   data: z.object({
-    domains: z.array(z.object({
-      businessDomainId: z.string().trim().min(1),
-    }).passthrough()),
-  }).passthrough(),
+    required: z.boolean(),
+  }).strict(),
 }).passthrough();
 
 export interface SemanticAtlasCliDependencies {
@@ -47,16 +45,16 @@ export class SemanticAtlasCli implements SemanticAtlasClient {
     }
   }
 
-  public async listActionableBusinessDomains(
-    repositoryPath: string,
-  ): Promise<readonly string[]> {
+  public async maintenanceRequired(repositoryPath: string): Promise<boolean> {
     const result = await this.dependencies.execute("semantic-atlas", [
       "reconcile",
-      "candidates",
+      "status",
       "--repo",
       repositoryPath,
     ]);
-    const parsed = candidateEnvelopeSchema.parse(JSON.parse(result.stdout) as unknown);
-    return parsed.data.domains.map(({ businessDomainId }) => businessDomainId);
+    const parsed = maintenanceStatusEnvelopeSchema.parse(
+      JSON.parse(result.stdout) as unknown,
+    );
+    return parsed.data.required;
   }
 }

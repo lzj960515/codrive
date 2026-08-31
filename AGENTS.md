@@ -10,10 +10,10 @@ Codrive is a local, single-user orchestration service that connects filesystem-b
 - `model-routing.ts` owns capacity-failure classification, persisted retry state, exponential backoff, and fallback routing for every Codex turn.
 - `PackageVersionCheckScheduler` owns startup compensation, the persisted hourly npm check cadence, and live board status events; `PackageVersionService` owns npm access, validation, caching, and in-flight deduplication.
 - `SystemSettingsService` owns validated runtime concurrency plus global and project model configuration changes.
-- `SemanticAtlasMaintenanceCoordinator` owns durable post-integration checks,
-  Semantic Atlas candidate reads, and project-plus-domain idempotent maintenance
-  task creation. Semantic Atlas owns all business interpretation and candidate
-  completion semantics.
+- `SemanticAtlasMaintenanceCoordinator` consumes persisted Integration events,
+  asks Semantic Atlas only whether the current project requires maintenance,
+  and ensures one open ordinary maintenance task per project. Semantic Atlas
+  owns all candidate, business-domain, and completion interpretation.
 - `src/infrastructure` owns filesystem persistence, App Server transport, and managed Skill/Hook installation.
 - `src/interfaces` owns the HTTP API, authenticated Socket.IO board transport, CLI, and local board.
 - `skills` contains the product's installable Codex Skills.
@@ -41,7 +41,8 @@ The HTTP surface has five read boundaries: board projection, product detail, pro
 Semantic Atlas automatic maintenance is a global opt-in. Settings expose only
 installed or uninstalled plus the toggle; Codrive does not install, upgrade, or
 diagnose that product. Generated maintenance work uses the ordinary task
-lifecycle and never triggers itself. See
+lifecycle. Its own Integration completion follows the same event path and asks
+Semantic Atlas whether another maintenance task is required. See
 [Semantic Atlas automatic maintenance](./docs/architecture/semantic-atlas-maintenance.md).
 
 Socket.IO carries scoped invalidation signals, while HTTP remains authoritative for data. `BoardRealtimeGateway` authenticates the handshake, derives `project:<id>`, `task:<id>`, and `system` rooms from validated watch requests, and maps Store or system events to `project:changed`, `task:changed`, and `system:changed`. Archive and restore additionally emit `projects:changed` to authenticated connections so browsers reread only the default and archived project collections. Browser reconnects restore only the current watches and reread only those HTTP scopes.

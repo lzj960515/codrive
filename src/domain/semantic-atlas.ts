@@ -4,5 +4,5 @@ export interface SemanticAtlasInstallation {
 
 export interface SemanticAtlasClient {
   readInstallation(): Promise<SemanticAtlasInstallation>;
-  listActionableBusinessDomains(repositoryPath: string): Promise<readonly string[]>;
+  maintenanceRequired(repositoryPath: string): Promise<boolean>;
 }

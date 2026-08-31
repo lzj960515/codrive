@@ -7,7 +7,6 @@ export interface SemanticAtlasMaintenanceRequest {
   projectId: string;
   sourceTaskId: string;
   createdAt: string;
-  waitingForTaskIds: string[];
 }
 
 export interface SemanticAtlasMaintenanceState {

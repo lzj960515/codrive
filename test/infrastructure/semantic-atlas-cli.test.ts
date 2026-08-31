@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { SemanticAtlasCli } from "../../src/infrastructure/semantic-atlas-cli.js";
 
 describe("SemanticAtlasCli", () => {
-  it("detects the public CLI and returns only Semantic Atlas actionable domains", async () => {
+  it("detects the public CLI and asks only whether maintenance is required", async () => {
     const calls: Array<{ executable: string; arguments_: readonly string[] }> = [];
     const cli = new SemanticAtlasCli({
       execute: async (executable, arguments_) => {
@@ -13,14 +13,8 @@ describe("SemanticAtlasCli", () => {
           stdout: JSON.stringify({
             schemaVersion: 1,
             ok: true,
-            command: "reconcile candidates",
-            data: {
-              summary: { waitingForEvidenceOccurrences: 3 },
-              domains: [
-                { businessDomainId: "commerce", candidates: [] },
-                { businessDomainId: "support", candidates: [] },
-              ],
-            },
+            command: "reconcile status",
+            data: { required: true },
           }),
         };
       },
@@ -28,18 +22,18 @@ describe("SemanticAtlasCli", () => {
 
     await expect(cli.readInstallation()).resolves.toEqual({ installed: true });
     await expect(
-      cli.listActionableBusinessDomains("/workspace/product"),
-    ).resolves.toEqual(["commerce", "support"]);
+      cli.maintenanceRequired("/workspace/product"),
+    ).resolves.toBe(true);
     expect(calls).toEqual([
       { executable: "semantic-atlas", arguments_: ["--version"] },
       {
         executable: "semantic-atlas",
-        arguments_: ["reconcile", "candidates", "--repo", "/workspace/product"],
+        arguments_: ["reconcile", "status", "--repo", "/workspace/product"],
       },
     ]);
   });
 
-  it("treats an unavailable command as not installed and rejects invalid candidate output", async () => {
+  it("treats an unavailable command as not installed and rejects invalid status output", async () => {
     const missing = new SemanticAtlasCli({
       execute: async () => {
         throw new Error("ENOENT");
@@ -51,7 +45,7 @@ describe("SemanticAtlasCli", () => {
       execute: async () => ({ stdout: JSON.stringify({ ok: true, data: {} }) }),
     });
     await expect(
-      invalid.listActionableBusinessDomains("/workspace/product"),
+      invalid.maintenanceRequired("/workspace/product"),
     ).rejects.toThrow();
   });
 });

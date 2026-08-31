@@ -1,7 +1,13 @@
 import type { SemanticAtlasClient } from "../domain/semantic-atlas.js";
-import type { ProjectSnapshot, Task } from "../domain/types.js";
+import type {
+  CodriveEvent,
+  ProjectSnapshot,
+  Task,
+  TaskActivity,
+} from "../domain/types.js";
 import type { ConfigStore } from "../infrastructure/config-store.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
+import { isTaskActivity } from "../infrastructure/state-v4-validation.js";
 import type {
   SemanticAtlasMaintenanceRequest,
   SemanticAtlasMaintenanceState,
@@ -9,170 +15,209 @@ import type {
 } from "../infrastructure/semantic-atlas-maintenance-store.js";
 
 export interface SemanticAtlasMaintenanceTaskScheduler {
-  ensureSemanticAtlasMaintenanceTasks(
-    projectId: string,
-    businessDomainIds: readonly string[],
-  ): Promise<readonly Task[]>;
+  ensureSemanticAtlasMaintenanceTask(projectId: string): Promise<Task>;
 }
 
 export interface SemanticAtlasMaintenanceCoordinatorOptions {
-  intervalMs?: number;
   onError?: (error: unknown) => void;
 }
 
+type MaintenanceProjectStore = Pick<
+  ProjectStore,
+  "subscribe" | "listProjects" | "listTaskActivities" | "getProject"
+>;
+
 export class SemanticAtlasMaintenanceCoordinator {
-  private readonly intervalMs: number;
   private readonly onError: (error: unknown) => void;
-  private reconcileQueue: Promise<void> = Promise.resolve();
-  private timer: NodeJS.Timeout | null = null;
+  private eventQueue: Promise<void> = Promise.resolve();
+  private unsubscribe: (() => void) | null = null;
 
   public constructor(
     private readonly configStore: Pick<ConfigStore, "read">,
-    private readonly projects: Pick<ProjectStore, "listProjects" | "listTaskActivities">,
-    private readonly stateStore: Pick<SemanticAtlasMaintenanceStore, "read" | "save">,
+    private readonly projects: MaintenanceProjectStore,
+    private readonly stateStore: Pick<
+      SemanticAtlasMaintenanceStore,
+      "read" | "save"
+    >,
     private readonly semanticAtlas: SemanticAtlasClient,
     private readonly tasks: SemanticAtlasMaintenanceTaskScheduler,
     options: SemanticAtlasMaintenanceCoordinatorOptions = {},
   ) {
-    this.intervalMs = options.intervalMs ?? 30_000;
     this.onError = options.onError ?? (() => undefined);
   }
 
   public async start(): Promise<void> {
-    await this.reconcile();
-    this.timer = setInterval(() => {
-      void this.reconcile().catch(this.onError);
-    }, this.intervalMs);
-    this.timer.unref();
+    if (this.unsubscribe) return;
+    this.unsubscribe = this.projects.subscribe((event) => {
+      const activity = integrationActivityFrom(event);
+      if (!activity) return;
+      void this.enqueue(() => this.handleLiveIntegration(activity)).catch(
+        this.onError,
+      );
+    });
+    await this.enqueue(() => this.recoverPersistedIntegrations());
   }
 
-  public stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+  public async stop(): Promise<void> {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    await this.eventQueue;
   }
 
   public settingsChanged(): Promise<void> {
-    return this.reconcile().catch((error: unknown) => {
-      this.onError(error);
-    });
+    return this.enqueue(() => this.recoverPersistedIntegrations()).catch(
+      (error: unknown) => {
+        this.onError(error);
+      },
+    );
   }
 
-  public reconcile(): Promise<void> {
-    const next = this.reconcileQueue.then(() => this.reconcileCurrentState());
-    this.reconcileQueue = next.catch(() => undefined);
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    const next = this.eventQueue.then(operation);
+    this.eventQueue = next.catch(() => undefined);
     return next;
   }
 
-  private async reconcileCurrentState(): Promise<void> {
-    const config = await this.configStore.read();
-    const automaticMaintenance = config.semanticAtlas?.automaticMaintenance ?? false;
-    if (!automaticMaintenance || !(await this.semanticAtlas.readInstallation()).installed) {
-      return;
-    }
+  private async handleLiveIntegration(activity: TaskActivity): Promise<void> {
+    const enabledAt = await this.enabledAt();
+    if (enabledAt === null || activity.occurredAt < enabledAt) return;
 
-    const snapshots = await this.projects.listProjects();
     const state = await this.stateStore.read();
-    await this.discoverRequests(state, snapshots, config.semanticAtlas?.enabledAt);
-    await this.processRequests(state, snapshots);
+    if (!requestIsKnown(state, activity.id)) {
+      state.requests.push(requestFrom(activity));
+    }
+    await this.processRequests(state, activity.projectId);
     await this.stateStore.save(state);
   }
 
-  private async discoverRequests(
+  private async recoverPersistedIntegrations(): Promise<void> {
+    const enabledAt = await this.enabledAt();
+    if (enabledAt === null) return;
+
+    const state = await this.stateStore.read();
+    const snapshots = await this.projects.listProjects();
+    await this.discoverPersistedRequests(state, snapshots, enabledAt);
+    await this.processRequests(state);
+    await this.stateStore.save(state);
+  }
+
+  private async enabledAt(): Promise<string | null> {
+    const config = await this.configStore.read();
+    if (!(config.semanticAtlas?.automaticMaintenance ?? false)) return null;
+    return config.semanticAtlas?.enabledAt ?? "";
+  }
+
+  private async discoverPersistedRequests(
     state: SemanticAtlasMaintenanceState,
     snapshots: readonly ProjectSnapshot[],
-    enabledAt?: string,
+    enabledAt: string,
   ): Promise<void> {
-    const known = new Set([
-      ...state.handledIntegrationActivityIds,
-      ...state.requests.map(({ id }) => id),
-    ]);
-    for (const { project, tasks } of snapshots) {
-      if (project.status === "cancelled") continue;
-      for (const task of tasks) {
-        if (task.status !== "done" || task.origin?.kind === "semantic_atlas_maintenance") {
-          continue;
-        }
-        const activities = await this.projects.listTaskActivities(project.id, task.id);
-        const integration = latestIntegrationActivity(activities);
+    for (const { project } of snapshots) {
+      const activities = await this.projects.listTaskActivities(project.id);
+      for (const activity of activities) {
         if (
-          !integration ||
-          known.has(integration.id) ||
-          (enabledAt && integration.occurredAt < enabledAt)
+          activity.type !== "integration_completed" ||
+          activity.occurredAt < enabledAt ||
+          requestIsKnown(state, activity.id)
         ) {
           continue;
         }
-        state.requests.push({
-          id: integration.id,
-          projectId: project.id,
-          sourceTaskId: task.id,
-          createdAt: integration.occurredAt,
-          waitingForTaskIds: [],
-        });
-        known.add(integration.id);
+        state.requests.push(requestFrom(activity));
       }
     }
   }
 
   private async processRequests(
     state: SemanticAtlasMaintenanceState,
-    snapshots: readonly ProjectSnapshot[],
+    onlyProjectId?: string,
   ): Promise<void> {
-    const snapshotsByProject = new Map(
-      snapshots.map((snapshot) => [snapshot.project.id, snapshot]),
-    );
-    const remaining: SemanticAtlasMaintenanceRequest[] = [];
-    for (const request of state.requests) {
-      const snapshot = snapshotsByProject.get(request.projectId);
-      if (!snapshot || snapshot.project.status === "cancelled") {
-        state.handledIntegrationActivityIds.push(request.id);
-        continue;
-      }
-      if (hasOpenWaitingTask(request, snapshot)) {
-        remaining.push(request);
-        continue;
-      }
+    if (!(await this.semanticAtlas.readInstallation()).installed) return;
 
-      try {
-        const businessDomains = await this.semanticAtlas.listActionableBusinessDomains(
-          snapshot.project.repositoryPath,
-        );
-        if (businessDomains.length === 0) {
-          state.handledIntegrationActivityIds.push(request.id);
-          continue;
-        }
-        const maintenanceTasks = await this.tasks.ensureSemanticAtlasMaintenanceTasks(
-          request.projectId,
-          businessDomains,
-        );
-        remaining.push({
-          ...request,
-          waitingForTaskIds: maintenanceTasks.map(({ id }) => id),
-        });
-      } catch (error) {
-        this.onError(error);
-        remaining.push(request);
-      }
+    const projectIds = [...new Set(
+      state.requests
+        .filter(({ projectId }) => !onlyProjectId || projectId === onlyProjectId)
+        .map(({ projectId }) => projectId),
+    )];
+    for (const projectId of projectIds) {
+      await this.processProjectRequests(state, projectId);
     }
-    state.requests = remaining;
+  }
+
+  private async processProjectRequests(
+    state: SemanticAtlasMaintenanceState,
+    projectId: string,
+  ): Promise<void> {
+    const requests = state.requests.filter(
+      (request) => request.projectId === projectId,
+    );
+    if (requests.length === 0) return;
+
+    const snapshot = await this.projects.getProject(projectId);
+    if (!snapshot || snapshot.project.status === "cancelled") {
+      completeRequests(state, requests);
+      return;
+    }
+    if (hasOpenMaintenanceTask(snapshot)) {
+      completeRequests(state, requests);
+      return;
+    }
+
+    try {
+      const required = await this.semanticAtlas.maintenanceRequired(
+        snapshot.project.repositoryPath,
+      );
+      if (required) {
+        await this.tasks.ensureSemanticAtlasMaintenanceTask(projectId);
+      }
+      completeRequests(state, requests);
+    } catch (error) {
+      this.onError(error);
+    }
   }
 }
 
-function latestIntegrationActivity(
-  activities: Awaited<ReturnType<ProjectStore["listTaskActivities"]>>,
-) {
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
-    if (activities[index]?.type === "integration_completed") return activities[index];
-  }
-  return undefined;
+function integrationActivityFrom(event: CodriveEvent): TaskActivity | undefined {
+  const activity = event.type === "task.activity_recorded"
+    ? event.data?.activity
+    : undefined;
+  return isTaskActivity(activity) && activity.type === "integration_completed"
+    ? activity
+    : undefined;
 }
 
-function hasOpenWaitingTask(
-  request: SemanticAtlasMaintenanceRequest,
-  snapshot: ProjectSnapshot,
+function requestFrom(activity: TaskActivity): SemanticAtlasMaintenanceRequest {
+  return {
+    id: activity.id,
+    projectId: activity.projectId,
+    sourceTaskId: activity.taskId,
+    createdAt: activity.occurredAt,
+  };
+}
+
+function requestIsKnown(
+  state: SemanticAtlasMaintenanceState,
+  activityId: string,
 ): boolean {
-  const tasksById = new Map(snapshot.tasks.map((task) => [task.id, task]));
-  return request.waitingForTaskIds.some((taskId) => {
-    const task = tasksById.get(taskId);
-    return task && !["done", "cancelled"].includes(task.status);
-  });
+  return state.handledIntegrationActivityIds.includes(activityId) ||
+    state.requests.some(({ id }) => id === activityId);
+}
+
+function hasOpenMaintenanceTask(snapshot: ProjectSnapshot): boolean {
+  return snapshot.tasks.some((task) =>
+    task.origin?.kind === "semantic_atlas_maintenance" &&
+    !["done", "cancelled"].includes(task.status)
+  );
+}
+
+function completeRequests(
+  state: SemanticAtlasMaintenanceState,
+  completed: readonly SemanticAtlasMaintenanceRequest[],
+): void {
+  const completedIds = new Set(completed.map(({ id }) => id));
+  state.requests = state.requests.filter(({ id }) => !completedIds.has(id));
+  for (const { id } of completed) {
+    if (!state.handledIntegrationActivityIds.includes(id)) {
+      state.handledIntegrationActivityIds.push(id);
+    }
+  }
 }

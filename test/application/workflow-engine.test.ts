@@ -277,36 +277,22 @@ async function failCapacityAndStartRetry(taskId: string, delayMs: number) {
 }
 
 describe("WorkflowEngine", () => {
-  it("creates one open Semantic Atlas maintenance task per domain in one planning revision", async () => {
+  it("creates one open Semantic Atlas maintenance task in one planning revision", async () => {
     const created = await registerProject(1);
 
-    const [commerce, support] = await workflow.ensureSemanticAtlasMaintenanceTasks(
+    const maintenance = await workflow.ensureSemanticAtlasMaintenanceTask(
       created.project.id,
-      ["commerce", "support", "commerce"],
     );
-    const replay = await workflow.ensureSemanticAtlasMaintenanceTasks(
-      created.project.id,
-      ["commerce", "support"],
-    );
+    const replay = await workflow.ensureSemanticAtlasMaintenanceTask(created.project.id);
     const snapshot = (await store.getProject(created.project.id))!;
 
-    expect(replay.map(({ id }) => id)).toEqual([commerce!.id, support!.id]);
+    expect(replay.id).toBe(maintenance.id);
     expect(snapshot.tasks.filter(({ origin }) =>
       origin?.kind === "semantic_atlas_maintenance"
-    )).toHaveLength(2);
-    expect(commerce).toMatchObject({
+    )).toHaveLength(1);
+    expect(maintenance).toMatchObject({
       status: "backlog",
-      origin: {
-        kind: "semantic_atlas_maintenance",
-        businessDomainId: "commerce",
-      },
-    });
-    expect(support).toMatchObject({
-      status: "backlog",
-      origin: {
-        kind: "semantic_atlas_maintenance",
-        businessDomainId: "support",
-      },
+      origin: { kind: "semantic_atlas_maintenance" },
     });
     expect(snapshot.project.planning).toMatchObject({
       revision: 2,

@@ -1,88 +1,268 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { SemanticAtlasMaintenanceCoordinator } from "../../src/application/semantic-atlas-maintenance-coordinator.js";
-import type { ProjectSnapshot, Task, TaskActivity } from "../../src/domain/types.js";
+import type {
+  CodriveEvent,
+  ProjectSnapshot,
+  Task,
+  TaskActivity,
+} from "../../src/domain/types.js";
 
 describe("SemanticAtlasMaintenanceCoordinator", () => {
-  it("persists an integration request, waits for its ordinary maintenance task, then rescans", async () => {
-    const sourceTask = task("source", "done");
-    const maintenanceTask = task("maintenance", "backlog", {
-      kind: "semantic_atlas_maintenance",
-      businessDomainId: "commerce",
+  it("checks only the project from a persisted integration event and creates one task", async () => {
+    const fixture = coordinatorFixture();
+    fixture.maintenanceRequired = true;
+    await fixture.coordinator.start();
+
+    fixture.publish(integrationEvent("source"));
+
+    await vi.waitFor(() => expect(fixture.ensuredProjectIds).toEqual(["project-1"]));
+    expect(fixture.checkedRepositories).toEqual(["/workspace/product"]);
+    expect(fixture.listProjectsCalls).toBe(1);
+    expect(fixture.activityReads).toEqual(["project-1"]);
+    expect(fixture.state).toEqual({
+      schemaVersion: 1,
+      handledIntegrationActivityIds: ["integration-source"],
+      requests: [],
     });
-    const snapshot = projectSnapshot([sourceTask]);
-    const state = { schemaVersion: 1 as const, handledIntegrationActivityIds: [], requests: [] };
-    const domainResponses: readonly string[][] = [["commerce"], []];
-    let domainRead = 0;
-    const ensured: string[] = [];
-    const coordinator = new SemanticAtlasMaintenanceCoordinator(
-      { read: async () => enabledConfig() },
-      {
-        listProjects: async () => [snapshot],
-        listTaskActivities: async () => [integrationActivity(sourceTask.id)],
-      },
-      { read: async () => state, save: async () => undefined },
-      {
-        readInstallation: async () => ({ installed: true }),
-        listActionableBusinessDomains: async () => domainResponses[domainRead++] ?? [],
-      },
-      {
-        ensureSemanticAtlasMaintenanceTasks: async (_projectId, domains) => {
-          ensured.push(...domains);
-          snapshot.tasks.push(maintenanceTask);
-          return [maintenanceTask];
-        },
-      },
-    );
-
-    await coordinator.reconcile();
-    expect(ensured).toEqual(["commerce"]);
-    expect(state.requests).toEqual([
-      expect.objectContaining({
-        id: "integration-source",
-        waitingForTaskIds: [maintenanceTask.id],
-      }),
-    ]);
-
-    await coordinator.reconcile();
-    expect(domainRead).toBe(1);
-    maintenanceTask.status = "done";
-    await coordinator.reconcile();
-    expect(domainRead).toBe(2);
-    expect(state.requests).toEqual([]);
-    expect(state.handledIntegrationActivityIds).toEqual(["integration-source"]);
+    await fixture.coordinator.stop();
   });
 
-  it("does not create a self-trigger from a completed Semantic Atlas maintenance task", async () => {
-    const maintenanceTask = task("maintenance", "done", {
-      kind: "semantic_atlas_maintenance",
-      businessDomainId: "commerce",
-    });
-    const state = { schemaVersion: 1 as const, handledIntegrationActivityIds: [], requests: [] };
-    const coordinator = new SemanticAtlasMaintenanceCoordinator(
-      { read: async () => enabledConfig() },
-      {
-        listProjects: async () => [projectSnapshot([maintenanceTask])],
-        listTaskActivities: async () => [integrationActivity(maintenanceTask.id)],
-      },
-      { read: async () => state, save: async () => undefined },
-      {
-        readInstallation: async () => ({ installed: true }),
-        listActionableBusinessDomains: async () => {
-          throw new Error("must not query");
-        },
-      },
-      {
-        ensureSemanticAtlasMaintenanceTasks: async () => {
-          throw new Error("must not create");
-        },
-      },
+  it("retains a failed check and retries that project on its next integration", async () => {
+    const fixture = coordinatorFixture([
+      task("source", "done"),
+      task("later", "done"),
+    ]);
+    fixture.maintenanceError = new Error("status unavailable");
+    await fixture.coordinator.start();
+
+    fixture.publish(integrationEvent("source"));
+    await vi.waitFor(() =>
+      expect(fixture.state.requests.map(({ id }) => id)).toEqual([
+        "integration-source",
+      ])
+    );
+    expect(fixture.state.handledIntegrationActivityIds).toEqual([]);
+
+    fixture.maintenanceError = undefined;
+    fixture.publish(integrationEvent("later"));
+    await vi.waitFor(() =>
+      expect(fixture.state.handledIntegrationActivityIds).toEqual([
+        "integration-source",
+        "integration-later",
+      ])
+    );
+    expect(fixture.checkedRepositories).toEqual([
+      "/workspace/product",
+      "/workspace/product",
+    ]);
+    await fixture.coordinator.stop();
+  });
+
+  it("finishes the event without creating a task when no maintenance is required", async () => {
+    const fixture = coordinatorFixture();
+    await fixture.coordinator.start();
+
+    fixture.publish(integrationEvent("source"));
+
+    await vi.waitFor(() =>
+      expect(fixture.state.handledIntegrationActivityIds).toEqual(["integration-source"])
+    );
+    expect(fixture.checkedRepositories).toEqual(["/workspace/product"]);
+    expect(fixture.ensuredProjectIds).toEqual([]);
+    await fixture.coordinator.stop();
+  });
+
+  it("does not query or create while the current project already has open maintenance", async () => {
+    const fixture = coordinatorFixture([
+      task("source", "done"),
+      task("maintenance", "backlog", { kind: "semantic_atlas_maintenance" }),
+    ]);
+    fixture.maintenanceRequired = true;
+    await fixture.coordinator.start();
+
+    fixture.publish(integrationEvent("source"));
+
+    await vi.waitFor(() =>
+      expect(fixture.state.handledIntegrationActivityIds).toEqual(["integration-source"])
+    );
+    expect(fixture.checkedRepositories).toEqual([]);
+    expect(fixture.ensuredProjectIds).toEqual([]);
+    await fixture.coordinator.stop();
+  });
+
+  it("replays an unhandled persisted integration once when Codrive starts", async () => {
+    const fixture = coordinatorFixture();
+    fixture.maintenanceRequired = true;
+    fixture.persistedActivities.push(integrationActivity("source"));
+
+    await fixture.coordinator.start();
+    expect(fixture.ensuredProjectIds).toEqual(["project-1"]);
+    await fixture.coordinator.stop();
+    fixture.completeOpenMaintenanceTasks();
+
+    const restarted = fixture.restart();
+    await restarted.coordinator.start();
+    expect(restarted.checkedRepositories).toEqual([]);
+    expect(restarted.ensuredProjectIds).toEqual([]);
+    await restarted.coordinator.stop();
+  });
+
+  it("checks again after a maintenance task itself completes integration", async () => {
+    const fixture = coordinatorFixture([
+      task("source", "done"),
+      task("maintenance", "done", { kind: "semantic_atlas_maintenance" }),
+    ]);
+    fixture.maintenanceRequired = true;
+    await fixture.coordinator.start();
+
+    fixture.publish(integrationEvent("maintenance"));
+
+    await vi.waitFor(() => expect(fixture.ensuredProjectIds).toEqual(["project-1"]));
+    expect(fixture.checkedRepositories).toEqual(["/workspace/product"]);
+    await fixture.coordinator.stop();
+  });
+
+  it("drains an accepted integration event before shutdown completes", async () => {
+    const fixture = coordinatorFixture();
+    fixture.maintenanceRequired = true;
+    const releaseCheck = fixture.holdMaintenanceCheck();
+    await fixture.coordinator.start();
+
+    fixture.publish(integrationEvent("source"));
+    await vi.waitFor(() =>
+      expect(fixture.checkedRepositories).toEqual(["/workspace/product"])
     );
 
-    await coordinator.reconcile();
-    expect(state.requests).toEqual([]);
+    let stopped = false;
+    const stopping = fixture.coordinator.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(stopped).toBe(false);
+
+    releaseCheck();
+    await stopping;
+    expect(fixture.ensuredProjectIds).toEqual(["project-1"]);
   });
 });
+
+function coordinatorFixture(initialTasks: Task[] = [task("source", "done")]) {
+  const snapshot = projectSnapshot(initialTasks);
+  const state = {
+    schemaVersion: 1 as const,
+    handledIntegrationActivityIds: [] as string[],
+    requests: [] as Array<{
+      id: string;
+      projectId: string;
+      sourceTaskId: string;
+      createdAt: string;
+    }>,
+  };
+  const persistedActivities: TaskActivity[] = [];
+  const checkedRepositories: string[] = [];
+  const ensuredProjectIds: string[] = [];
+  let listener: ((event: CodriveEvent) => void) | undefined;
+  let maintenanceRequired = false;
+  let maintenanceError: Error | undefined;
+  let maintenanceCheckGate: Promise<void> | undefined;
+  let listProjectsCalls = 0;
+  const activityReads: string[] = [];
+
+  const create = () => new SemanticAtlasMaintenanceCoordinator(
+    { read: async () => enabledConfig() },
+    {
+      subscribe: (nextListener) => {
+        listener = nextListener;
+        return () => {
+          if (listener === nextListener) listener = undefined;
+        };
+      },
+      listProjects: async () => {
+        listProjectsCalls += 1;
+        return [snapshot];
+      },
+      listTaskActivities: async (projectId) => {
+        activityReads.push(projectId);
+        return persistedActivities;
+      },
+      getProject: async (projectId) => projectId === snapshot.project.id ? snapshot : null,
+    },
+    { read: async () => state, save: async () => undefined },
+    {
+      readInstallation: async () => ({ installed: true }),
+      maintenanceRequired: async (repositoryPath) => {
+        checkedRepositories.push(repositoryPath);
+        await maintenanceCheckGate;
+        if (maintenanceError) throw maintenanceError;
+        return maintenanceRequired;
+      },
+    },
+    {
+      ensureSemanticAtlasMaintenanceTask: async (projectId) => {
+        ensuredProjectIds.push(projectId);
+        const maintenance = task(
+          `maintenance-${ensuredProjectIds.length}`,
+          "backlog",
+          { kind: "semantic_atlas_maintenance" },
+        );
+        snapshot.tasks.push(maintenance);
+        return maintenance;
+      },
+    },
+  );
+
+  const fixture = {
+    coordinator: create(),
+    state,
+    persistedActivities,
+    checkedRepositories,
+    ensuredProjectIds,
+    activityReads,
+    get listProjectsCalls() {
+      return listProjectsCalls;
+    },
+    publish(event: CodriveEvent) {
+      listener?.(event);
+    },
+    completeOpenMaintenanceTasks() {
+      for (const currentTask of snapshot.tasks) {
+        if (currentTask.origin?.kind === "semantic_atlas_maintenance") {
+          currentTask.status = "done";
+        }
+      }
+    },
+    holdMaintenanceCheck() {
+      let release!: () => void;
+      maintenanceCheckGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return () => {
+        maintenanceCheckGate = undefined;
+        release();
+      };
+    },
+    restart() {
+      checkedRepositories.splice(0);
+      ensuredProjectIds.splice(0);
+      fixture.coordinator = create();
+      return fixture;
+    },
+    get maintenanceRequired() {
+      return maintenanceRequired;
+    },
+    set maintenanceRequired(value: boolean) {
+      maintenanceRequired = value;
+    },
+    get maintenanceError() {
+      return maintenanceError;
+    },
+    set maintenanceError(value: Error | undefined) {
+      maintenanceError = value;
+    },
+  };
+  return fixture;
+}
 
 function enabledConfig() {
   return {
@@ -155,5 +335,18 @@ function integrationActivity(taskId: string): TaskActivity {
     type: "integration_completed",
     summary: "Integrated",
     occurredAt: "2026-08-31T01:00:00.000Z",
+  };
+}
+
+function integrationEvent(taskId: string): CodriveEvent {
+  const activity = integrationActivity(taskId);
+  return {
+    schemaVersion: 1,
+    eventId: `event-${activity.id}`,
+    type: "task.activity_recorded",
+    projectId: "project-1",
+    taskId,
+    occurredAt: activity.occurredAt,
+    data: { activity },
   };
 }

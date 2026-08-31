@@ -217,7 +217,7 @@ export class CodriveServer {
     this.updateRecoveryTimer = null;
     this.versionChecks?.stop();
     this.versionChecks = null;
-    this.semanticAtlasMaintenance?.stop();
+    await this.semanticAtlasMaintenance?.stop();
     this.semanticAtlasMaintenance = null;
     this.recovery?.stop();
     this.recovery = null;

@@ -87,8 +87,7 @@ export function assertCurrentTask(task: Task): Task {
   }
   if (
     task.origin &&
-    (task.origin.kind !== "semantic_atlas_maintenance" ||
-      !task.origin.businessDomainId?.trim())
+    task.origin.kind !== "semantic_atlas_maintenance"
   ) {
     throw new Error(`Task ${task.id} has an invalid origin in schema v4`);
   }
