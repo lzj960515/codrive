@@ -42,13 +42,13 @@ compatibility: Requires Node.js 24+ and a running local Codrive service.
 
 ## 执行
 
-将 JSON 通过标准输入传给：
+把完整注册对象序列化为单行 JSON，通过唯一的 `--json` 参数提交：
 
 ```text
-node <skill-directory>/scripts/codrive-forge.mjs register
+node <skill-directory>/scripts/codrive-forge.mjs register --json '<registration-json>'
 ```
 
-服务不可用时保留生成的 JSON，并告诉用户运行 `npx codrive`。
+脚本只在 Codrive 成功接受注册后输出 `ok: true` 和 `result`，并以退出码 `0` 结束。HTTP 或 JSON 校验失败时以非零状态退出。服务不可用时保留生成的 JSON，并告诉用户运行 `npx codrive`。
 
 ## 结果交接
 

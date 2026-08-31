@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const handoffSkills = ["codrive-forge", "codrive-work", "codrive-control"];
+const managedSkills = [...handoffSkills, "codrive-task"];
 
 describe("non-execution Skill handoff", () => {
   it.each(handoffSkills)(
@@ -71,5 +72,19 @@ describe("non-execution Skill handoff", () => {
     expect(task).not.toContain("## 开发 `develop`");
     expect(task).not.toContain("## 返工 `rework`");
     expect(task).toContain("codrive-task.mjs report");
+  });
+
+  it("documents one explicit JSON argument contract across every managed Skill", async () => {
+    for (const skillName of managedSkills) {
+      const instructions = await readFile(
+        resolve("skills", skillName, "SKILL.md"),
+        "utf8",
+      );
+
+      expect(instructions).toContain("--json");
+      expect(instructions).toContain("`ok: true`");
+      expect(instructions).not.toContain("标准输入");
+      expect(instructions).not.toContain("stdin");
+    }
   });
 });

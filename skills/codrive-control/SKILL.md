@@ -25,10 +25,10 @@ node <skill-directory>/scripts/codrive-control.mjs task <task-id>
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs settings
-node <skill-directory>/scripts/codrive-control.mjs update-settings
+node <skill-directory>/scripts/codrive-control.mjs update-settings --json '{"maxConcurrentTasks":4,"models":{"primary":"<primary-model-id>","fallback":"<fallback-model-id>"}}'
 ```
 
-`update-settings` 通过标准输入接收完整设置：
+`update-settings` 的 `--json` 参数接收完整设置：
 
 ```json
 {
@@ -59,18 +59,22 @@ node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> retry
 node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> continue
-node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> reschedule
-node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel
+node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> reschedule --json '<schedule-json>'
+node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel --json '<decision-json>'
 ```
 
 模型容量失败会在原 attempt 和原对话中按 5 秒、10 秒、20 秒自动重试三次，然后切换到 fallback 模型继续恢复。Fallback 同样重试三次；全部耗尽后任务才进入 `blocked`。此时任务级 `retry` 创建新的 attempt。`waiting_for_input` 由用户在原开发对话中回复，随后继续同一个 attempt。
 
-`waiting_for_resume` 是计划等待：保留原阶段、attempt、thread、模型路由和 AI 编写的 `resumePrompt` 检查点，同时释放项目容量与 integrate 的仓库资格。`continue` 提前继续同一执行；`reschedule` 通过标准输入接收新的未来 RFC 3339 绝对时间：
+`waiting_for_resume` 是计划等待：保留原阶段、attempt、thread、模型路由和 AI 编写的 `resumePrompt` 检查点，同时释放项目容量与 integrate 的仓库资格。`continue` 提前继续同一执行；`reschedule` 通过唯一的 `--json` 参数接收新的未来 RFC 3339 绝对时间：
 
 ```json
 {
   "resumeAt": "2026-08-13T18:30:00+08:00"
 }
+```
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> reschedule --json '{"resumeAt":"2026-08-13T18:30:00+08:00"}'
 ```
 
 重新安排只改变恢复时间；提前继续和到期恢复都会先重新取得当前项目容量与仓库合入资格，再在原对话启动唯一的新 turn。项目暂停会保留等待，恢复项目后处理已经到期的任务。
@@ -82,13 +86,18 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel
 - 需要产品取舍、停止范围或现场保留决定时，通过当前任务或项目报告提交 `needs_input`，在 `question` 中写清建议取消的原因和需要用户回答的问题。用户在原 Codex 对话明确答复后，以 `user_confirmed` 执行取消。
 - 当前事实已经证明目标重复、已被替代或不再可执行，并且取消不需要新的产品选择或外部授权时，以 `agent_decision` 直接执行取消。
 
-项目和任务的取消命令都通过标准输入接收判断依据与取消理由：
+项目和任务的取消命令都通过唯一的 `--json` 参数接收判断依据与取消理由：
 
 ```json
 {
   "decisionBasis": "<user_confirmed|agent_decision>",
   "reason": "<具体取消理由及其事实或用户决定>"
 }
+```
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> cancel --json '{"decisionBasis":"agent_decision","reason":"<具体取消理由>"}'
+node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel --json '{"decisionBasis":"agent_decision","reason":"<具体取消理由>"}'
 ```
 
 `user_confirmed` 的取消理由概括用户同意的范围和原因；`agent_decision` 的取消理由写明支持直接取消的事实。取消命令作为这次处理的最后一个副作用，完成后报告新的终态。
@@ -98,10 +107,10 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> cancel
 `PROJECT.md` 是 Agent 读取的唯一当前产品事实。修改前读取 project context，保存 `productFacts.revision` 和 `productFacts.acceptedDigest`；使用普通文件编辑工具局部修改返回的 `projectDocument`，然后立即发送轻量通知：
 
 ```text
-node <skill-directory>/scripts/codrive-control.mjs product-document-changed <project-id>
+node <skill-directory>/scripts/codrive-control.mjs product-document-changed <project-id> --json '{"decisionSummary":"<本次决定>","expectedRevision":3,"expectedDigest":"sha256:<修改前哈希>"}'
 ```
 
-标准输入只传文档修改前的身份和本次决定摘要，不传完整文档：
+`--json` 只传文档修改前的身份和本次决定摘要，不传完整文档：
 
 ```json
 {
@@ -114,6 +123,8 @@ node <skill-directory>/scripts/codrive-control.mjs product-document-changed <pro
 脚本读取当前磁盘文件并计算新哈希；Codrive 再次读取并验证非空文档、预期版本、预期哈希和新哈希，随后记录决定摘要、推进规划修订、终止失效的项目选择并重新调度。版本或哈希冲突时重新读取项目，不覆盖磁盘内容，并根据当前事实重新整理修改。文件内容没有变化时不创建新的产品事实版本。
 
 任务级问题直接在原开发或审查对话中回答。Codex 使用当前对话继续同一个执行阶段，并在完成后通过 `$codrive-task` 汇报，不把原始聊天内容复制到 Codrive。
+
+所有写命令只在 Codrive 返回成功响应后输出 `ok: true` 和 `result`，并以退出码 `0` 结束；HTTP 或 JSON 校验失败时以非零状态退出。读取命令继续直接输出查询结果。
 
 ## 结果交接
 

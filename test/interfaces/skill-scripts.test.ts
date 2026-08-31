@@ -13,7 +13,13 @@ import { createHttpServer } from "../../src/interfaces/http/server.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  testModelRouting,
 } from "../support/recording-executors.js";
+
+interface CommandSuccess<T> {
+  ok: true;
+  result: T;
+}
 
 describe("bundled Skill scripts", () => {
   let stateDirectory: string;
@@ -102,23 +108,23 @@ describe("bundled Skill scripts", () => {
       tasks: [{ title: "Later", description: "Backlog", acceptanceCriteria: [] }],
     });
 
-    const archived = JSON.parse(
+    const archived = commandResult<{ archivedAt: string; scheduling: string }>(
       await runSkill("codrive-control", [
         "project-control",
         created.project.id,
         "archive",
       ]),
-    ) as { archivedAt: string; scheduling: string };
+    );
     const archivedProjects = JSON.parse(
       await runSkill("codrive-control", ["archived"]),
     ) as { count: number; projects: Array<{ project: { id: string } }> };
-    const restored = JSON.parse(
+    const restored = commandResult<{ archivedAt?: string; scheduling: string }>(
       await runSkill("codrive-control", [
         "project-control",
         created.project.id,
         "unarchive",
       ]),
-    ) as { archivedAt?: string; scheduling: string };
+    );
 
     expect(archived).toMatchObject({
       archivedAt: expect.stringMatching(/^\d{4}-/),
@@ -133,7 +139,7 @@ describe("bundled Skill scripts", () => {
   });
 
   it("uses the context and command APIs across all four Skills", async () => {
-    const created = JSON.parse(
+    const created = commandResult<ProjectSnapshot>(
       await runSkill("codrive-forge", ["register"], {
         name: "Game",
         repositoryPath: "/workspace/game",
@@ -141,7 +147,7 @@ describe("bundled Skill scripts", () => {
         productDocument: "# Game\n",
         tasks: [{ title: "Loop", description: "Build loop", acceptanceCriteria: [] }],
       }),
-    ) as ProjectSnapshot;
+    );
 
     const projectContext = JSON.parse(
       await runSkill("codrive-task", ["project-context", created.project.id]),
@@ -159,21 +165,30 @@ describe("bundled Skill scripts", () => {
     expect(projectContext.taskDocuments).toHaveLength(1);
     expect(projectContext.productFacts.status).toBe("current");
 
-    const reported = JSON.parse(
+    const reportedOutput = JSON.parse(
       await runSkill("codrive-task", ["project-report", created.project.id], {
         attemptId: created.project.currentExecution!.attemptId,
         outcome: "selected",
         summary: "Start the first task",
         taskIds: [created.tasks[0]!.id],
       }),
-    ) as { currentExecution: { result: { outcome: string } } };
+    ) as CommandSuccess<{ currentExecution: { result: { outcome: string } } }> & {
+      attemptId: string;
+      outcome: string;
+    };
+    expect(reportedOutput).toMatchObject({
+      ok: true,
+      attemptId: created.project.currentExecution!.attemptId,
+      outcome: "selected",
+    });
+    const reported = reportedOutput.result;
     expect(reported.currentExecution.result.outcome).toBe("selected");
 
     await writeFile(
       projectContext.projectDocument,
       "# Game\n\n## Audio\n\nAdd an audio milestone.\n",
     );
-    const added = JSON.parse(
+    const added = commandResult<ProjectSnapshot>(
       await runSkill("codrive-work", ["add", created.project.id], {
         decisionSummary: "Add the audio milestone.",
         expectedRevision: projectContext.productFacts.revision,
@@ -182,20 +197,20 @@ describe("bundled Skill scripts", () => {
           { title: "Audio", description: "Add audio", acceptanceCriteria: [] },
         ],
       }),
-    ) as ProjectSnapshot;
+    );
     expect(added.tasks).toHaveLength(2);
 
     await writeFile(
       projectContext.projectDocument,
       "# Game\n\n## Controls\n\nUse keyboard controls.\n\n## Audio\n\nAdd an audio milestone.\n",
     );
-    const controlled = JSON.parse(
+    const controlled = commandResult<{ productFacts: { revision: number } }>(
       await runSkill("codrive-control", ["product-document-changed", created.project.id], {
         decisionSummary: "Use keyboard controls.",
         expectedRevision: added.project.productFacts.revision,
         expectedDigest: added.project.productFacts.digest,
       }),
-    ) as { productFacts: { revision: number } };
+    );
     expect(controlled.productFacts).toMatchObject({
       revision: added.project.productFacts.revision + 1,
     });
@@ -205,7 +220,10 @@ describe("bundled Skill scripts", () => {
     ) as Array<{ tasks: unknown[] }>;
     expect(board[0]?.tasks).toHaveLength(2);
 
-    const cancelled = JSON.parse(
+    const cancelled = commandResult<{
+      status: string;
+      cancellation: { decisionBasis: string; reason: string };
+    }>(
       await runSkill(
         "codrive-control",
         ["task-control", added.tasks[1]!.id, "cancel"],
@@ -214,10 +232,7 @@ describe("bundled Skill scripts", () => {
           reason: "The feature is no longer part of the approved product scope",
         },
       ),
-    ) as {
-      status: string;
-      cancellation: { decisionBasis: string; reason: string };
-    };
+    );
     expect(cancelled.status).toBe("cancelled");
     expect(cancelled.cancellation).toMatchObject({
       decisionBasis: "agent_decision",
@@ -237,31 +252,58 @@ describe("bundled Skill scripts", () => {
     expect(task.activities).toEqual([]);
 
     const scheduledTask = added.tasks[0]!;
-    const scheduledExecution = scheduledTask.currentExecution;
-    if (scheduledExecution) {
-      const taskContext = JSON.parse(
-        await runSkill("codrive-task", ["context", scheduledTask.id]),
-      ) as { attemptId: string; reportOpportunityId: string };
-      const resumeAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
-      const blocked = JSON.parse(
-        await runSkill("codrive-task", ["report", scheduledTask.id], {
-          attemptId: taskContext.attemptId,
-          reportOpportunityId: taskContext.reportOpportunityId,
-          outcome: "blocked",
-          summary: "Wait for the external build",
-          resumeAt,
-          resumePrompt: "Inspect the external build and continue.",
-        }),
-      ) as { currentExecution: { status: string } };
-      expect(blocked.currentExecution.status).toBe("running");
-    }
+    await store.saveTask(added.project.id, {
+      ...scheduledTask,
+      status: "working",
+      requestedAction: "work",
+      currentExecution: {
+        attemptId: "attempt_skill_report",
+        reportOpportunityId: "report_opportunity_skill_report",
+        action: "work",
+        status: "running",
+        startedAt: new Date().toISOString(),
+        modelRouting: testModelRouting(),
+      },
+    });
+    const taskContext = JSON.parse(
+      await runSkill("codrive-task", ["context", scheduledTask.id]),
+    ) as { attemptId: string; reportOpportunityId: string };
+    const resumeAt = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    const reportPayload = {
+      attemptId: taskContext.attemptId,
+      reportOpportunityId: taskContext.reportOpportunityId,
+      outcome: "blocked",
+      summary: "Wait for the external build",
+      resumeAt,
+      resumePrompt: "Inspect the external build and continue.",
+    };
+    const blocked = JSON.parse(
+      await runSkill("codrive-task", ["report", scheduledTask.id], reportPayload),
+    ) as CommandSuccess<{ currentExecution: { status: string } }> & {
+      activityId: string;
+      reportOpportunityId: string;
+    };
+    expect(blocked).toMatchObject({
+      ok: true,
+      activityId: expect.stringMatching(/^activity_/),
+      reportOpportunityId: taskContext.reportOpportunityId,
+    });
+    expect(blocked.result.currentExecution.status).toBe("running");
+
+    const idempotent = JSON.parse(
+      await runSkill("codrive-task", ["report", scheduledTask.id], reportPayload),
+    ) as { ok: true; activityId: string };
+    expect(idempotent).toMatchObject({
+      ok: true,
+      activityId: blocked.activityId,
+    });
 
     const settings = JSON.parse(
       await runSkill("codrive-control", ["settings"]),
     ) as { settings: typeof runtimeSettings };
     expect(settings.settings.maxConcurrentTasks).toBe(2);
 
-    const updatedSettings = JSON.parse(
+    const updatedSettings = commandResult<{ settings: typeof runtimeSettings }>(
       await runSkill("codrive-control", ["update-settings"], {
         maxConcurrentTasks: 3,
         models: {
@@ -269,9 +311,48 @@ describe("bundled Skill scripts", () => {
           fallback: "gpt-5.6-sol",
         },
       }),
-    ) as { settings: typeof runtimeSettings };
+    );
     expect(updatedSettings.settings).toEqual(runtimeSettings);
     expect(runtimeSettings.maxConcurrentTasks).toBe(3);
+  });
+
+  it.each([
+    ["codrive-forge", ["register"]],
+    ["codrive-task", ["report", "task_missing"]],
+    ["codrive-work", ["add", "project_missing"]],
+    ["codrive-control", ["update-settings"]],
+  ])(
+    "%s requires explicit --json input and never accepts stdin payloads",
+    async (skill, args) => {
+      await expect(runSkill(skill, args)).rejects.toThrow(
+        "requires --json <payload>",
+      );
+      await expect(runSkillWithOpenStdin(skill, args, {})).rejects.toThrow(
+        "requires --json <payload>",
+      );
+    },
+  );
+
+  it.each([
+    ["codrive-forge", ["register"]],
+    ["codrive-task", ["report", "task_missing"]],
+    ["codrive-work", ["add", "project_missing"]],
+    ["codrive-control", ["update-settings"]],
+  ])("%s reports invalid --json input as a command-line error", async (skill, args) => {
+    await expect(
+      runSkill(skill, [...args, "--json", "not-json"]),
+    ).rejects.toThrow("Invalid JSON supplied to --json");
+  });
+
+  it("uses a nonzero exit when Codrive rejects an explicit JSON command", async () => {
+    await expect(
+      runSkill("codrive-task", ["report", "task_missing"], {
+        attemptId: "attempt_missing",
+        reportOpportunityId: "report_opportunity_missing",
+        outcome: "blocked",
+        summary: "Missing task",
+      }),
+    ).rejects.toThrow(/Codrive (404|500)/);
   });
 
   function runSkill(
@@ -279,11 +360,57 @@ describe("bundled Skill scripts", () => {
     args: string[],
     input?: Record<string, unknown>,
   ): Promise<string> {
+    const commandArgs = input
+      ? [...args, "--json", JSON.stringify(input)]
+      : args;
+    return runSkillProcess(skill, commandArgs);
+  }
+
+  function runSkillWithOpenStdin(
+    skill: string,
+    args: string[],
+    input: Record<string, unknown>,
+  ): Promise<string> {
     const script = resolve("skills", skill, "scripts", `${skill}.mjs`);
     return new Promise((resolveOutput, reject) => {
       const child = spawn(process.execPath, [script, ...args], {
         env: { ...process.env, CODEDRIVE_HOME: stateDirectory },
         stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error(`${skill} waited for stdin EOF`));
+      }, 1_000);
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+      });
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timeout);
+        if (code === 0) resolveOutput(stdout);
+        else reject(new Error(stderr || `Skill script exited with code ${code}`));
+      });
+      child.stdin.write(JSON.stringify(input));
+    });
+  }
+
+  function runSkillProcess(
+    skill: string,
+    args: string[],
+  ): Promise<string> {
+    const script = resolve("skills", skill, "scripts", `${skill}.mjs`);
+    return new Promise((resolveOutput, reject) => {
+      const child = spawn(process.execPath, [script, ...args], {
+        env: { ...process.env, CODEDRIVE_HOME: stateDirectory },
+        stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";
       let stderr = "";
@@ -298,7 +425,12 @@ describe("bundled Skill scripts", () => {
         if (code === 0) resolveOutput(stdout);
         else reject(new Error(stderr || `Skill script exited with code ${code}`));
       });
-      child.stdin.end(input ? JSON.stringify(input) : undefined);
     });
   }
 });
+
+function commandResult<T>(output: string): T {
+  const response = JSON.parse(output) as CommandSuccess<T>;
+  expect(response.ok).toBe(true);
+  return response.result;
+}

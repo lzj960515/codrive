@@ -1,5 +1,9 @@
 # Documentation log
 
+## 2026-08-31
+
+- Standardized every managed Skill write payload on one explicit `--json` argument, added successful-command envelopes, and made task reports return their persisted activity receipt.
+
 ## 2026-08-26
 
 - Defined `PROJECT.md` as the only current product-facts source.

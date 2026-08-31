@@ -26,7 +26,7 @@ node <skill-directory>/scripts/codrive-work.mjs show <project-id>
 
 ## 添加任务
 
-将以下 JSON 通过标准输入传给添加命令：
+构造以下 JSON：
 
 ```json
 {
@@ -46,8 +46,10 @@ node <skill-directory>/scripts/codrive-work.mjs show <project-id>
 脚本直接读取修改后的 `PROJECT.md` 并计算新哈希，不通过 API 传输完整文档。Codrive 把文档确认和任务追加作为一次规划事实变化处理；版本或哈希陈旧时拒绝命令，不覆盖本地文件。
 
 ```text
-node <skill-directory>/scripts/codrive-work.mjs add <project-id>
+node <skill-directory>/scripts/codrive-work.mjs add <project-id> --json '<work-json>'
 ```
+
+把完整对象序列化为单行 JSON，通过唯一的 `--json` 参数提交。脚本只在 Codrive 成功接受产品事实和新增任务后输出 `ok: true` 和 `result`，并以退出码 `0` 结束；HTTP 或 JSON 校验失败时以非零状态退出。
 
 ## 结果交接
 

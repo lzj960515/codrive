@@ -88,11 +88,19 @@ Codrive 将持久任务对话归属到产品仓库根目录，让工作和审查
 
 ## 汇报契约
 
-通过标准输入提交 JSON：
+把完整报告序列化为单行 JSON，通过唯一的 `--json` 参数提交：
 
 ```text
-node <skill-directory>/scripts/codrive-task.mjs report <task-id>
+node <skill-directory>/scripts/codrive-task.mjs report <task-id> --json '<report-json>'
 ```
+
+项目选择结果使用相同输入契约：
+
+```text
+node <skill-directory>/scripts/codrive-task.mjs project-report <project-id> --json '<report-json>'
+```
+
+脚本在 Codrive 接受报告后输出 `ok: true`。任务报告同时回读刚写入的不可变活动并返回非空 `activityId` 和本次 `reportOpportunityId`；项目报告返回 `attemptId` 和 `outcome`。以进程退出码 `0`、`ok: true` 及对应回执字段作为提交成功依据，再结束当前回合。HTTP、JSON、执行身份或回执验证失败时，脚本以非零状态退出并输出错误。
 
 每份报告包含刚刚读取的 `context` 返回的 `attemptId` 和非空 `reportOpportunityId`，以及当前阶段允许的 `outcome` 和简明 `summary`。直接原样使用这两个执行身份，不从 turn、活动或历史 context 推导。缺少任一身份时停止提交并重新读取 context。Codrive 将每个报告机会的首次成功报告追加为一条不可变活动；同一机会的完全相同报告幂等返回，不追加活动。各阶段同时提供后续流程依赖的事实：
 
