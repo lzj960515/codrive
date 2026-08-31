@@ -2170,6 +2170,137 @@ describe("HTTP API", () => {
     expect(page.body).not.toContain("<textarea");
   });
 
+  it("shows an integrate candidate waiting for the repository lease", async () => {
+    const leaseOwner = await store.createProject({
+      name: "Influencer migration I2.2",
+      repositoryPath: "/workspace/social-analysis",
+      defaultBranch: "main",
+      productDocument: "# Influencer migration I2.2\n",
+      tasks: [
+        {
+          title: "I2.2 migrate influencer reads",
+          description: "Migrate the shared read path",
+          acceptanceCriteria: [],
+        },
+      ],
+    });
+    const waitingProject = await store.createProject({
+      name: "Influencer migration I2.3",
+      repositoryPath: "/workspace/social-analysis",
+      defaultBranch: "main",
+      productDocument: "# Influencer migration I2.3\n",
+      tasks: [
+        {
+          title: "I2.3 add Store-safe analytics",
+          description: "Add the Store-scoped analytics views",
+          acceptanceCriteria: [],
+        },
+      ],
+    });
+    const ownerTask = leaseOwner.tasks[0]!;
+    const waitingTask = waitingProject.tasks[0]!;
+    await store.saveTask(leaseOwner.project.id, {
+      ...ownerTask,
+      status: "waiting_for_input",
+      requestedAction: "integrate",
+      workActivityId: "activity_i2_2_work",
+      currentExecution: {
+        attemptId: "attempt_i2_2",
+        reportOpportunityId: "report_opportunity_i2_2",
+        action: "integrate",
+        status: "waiting_for_input",
+        workActivityId: "activity_i2_2_work",
+        startedAt: "2026-08-30T00:00:00.000Z",
+        modelRouting: testModelRouting(),
+      },
+    });
+    await store.saveTask(waitingProject.project.id, {
+      ...waitingTask,
+      status: "integrating",
+      requestedAction: "integrate",
+      workActivityId: "activity_i2_3_work",
+    });
+
+    const board = await server.inject({
+      method: "GET",
+      url: "/api/board",
+      headers: { "x-codrive-token": "secret" },
+    });
+    const detail = await server.inject({
+      method: "GET",
+      url: `/api/tasks/${waitingTask.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const page = await server.inject({ method: "GET", url: "/" });
+    const waitingBoardTask = board
+      .json()
+      .flatMap(({ tasks }: ProjectSnapshot) => tasks)
+      .find(({ id }: { id: string }) => id === waitingTask.id);
+
+    expect(waitingBoardTask).toMatchObject({
+      status: "integrating",
+      requestedAction: "integrate",
+      executionStatus: null,
+      displayStatus: "waiting_for_integration",
+      integrationWait: {
+        taskId: ownerTask.id,
+        taskTitle: "I2.2 migrate influencer reads",
+        message:
+          "「I2.2 migrate influencer reads」完成合入后，本任务将自动开始合入。",
+      },
+    });
+    expect(detail.json().task).toMatchObject({
+      id: waitingTask.id,
+      displayStatus: "waiting_for_integration",
+      integrationWait: {
+        taskId: ownerTask.id,
+        taskTitle: "I2.2 migrate influencer reads",
+        message:
+          "「I2.2 migrate influencer reads」完成合入后，本任务将自动开始合入。",
+      },
+    });
+    expect(page.body).toContain('waiting_for_integration: "等待合入"');
+    expect(page.body).toContain("task.integrationWait?.message");
+
+    await store.saveTask(waitingProject.project.id, {
+      ...waitingTask,
+      status: "integrating",
+      requestedAction: "integrate",
+      workActivityId: "activity_i2_3_work",
+      currentExecution: {
+        attemptId: "attempt_i2_3",
+        reportOpportunityId: "report_opportunity_i2_3",
+        action: "integrate",
+        status: "running",
+        workActivityId: "activity_i2_3_work",
+        startedAt: "2026-08-31T00:00:00.000Z",
+        modelRouting: testModelRouting(),
+      },
+    });
+
+    const startedBoard = await server.inject({
+      method: "GET",
+      url: `/api/board/projects/${waitingProject.project.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+    const startedDetail = await server.inject({
+      method: "GET",
+      url: `/api/tasks/${waitingTask.id}`,
+      headers: { "x-codrive-token": "secret" },
+    });
+
+    expect(startedBoard.json().tasks[0]).toMatchObject({
+      displayStatus: "integrating",
+      integrationWait: null,
+      executionStatus: "running",
+    });
+    expect(startedDetail.json().task).toMatchObject({
+      displayStatus: "integrating",
+      integrationWait: null,
+      executionStatus: "running",
+    });
+  });
+
   it("keeps current and historical task conversations attached to their lifecycle owners", async () => {
     const created = await registerProject();
     const task = created.tasks[0]!;

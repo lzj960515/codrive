@@ -30,6 +30,7 @@ export function renderBoardClient(accessToken: string): string {
       waiting_for_resume: "计划等待",
       blocked: "已阻塞", cancelled: "已取消", backlog: "待安排", working: "工作中",
       reviewing: "审查中", integrating: "合入中", done: "已完成",
+      waiting_for_integration: "等待合入",
       running: "自动推进", paused: "已暂停", work: "工作", review: "审查",
       integrate: "合入", pending: "待开始", awaiting_report: "等待汇报", failed: "执行失败",
       interrupted: "已中断", approved: "审查通过", needs_review: "等待审查",
@@ -805,10 +806,10 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     function taskCard(task) {
-      const copy = task.status === "cancelled" ? task.cancellation.reason : task.description;
-      const alert = ["waiting_for_input", "blocked"].includes(task.status) ? "task-alert" : "";
-      const visibleStatus = ["retry_scheduled", "waiting_for_resume"].includes(task.executionStatus) ? task.executionStatus : task.status;
-      return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.status)+'">'+
+      const copy = task.status === "cancelled" ? task.cancellation.reason : task.integrationWait?.message || task.description;
+      const alert = ["waiting_for_input", "blocked", "waiting_for_integration"].includes(task.displayStatus) ? "task-alert" : "";
+      const visibleStatus = ["retry_scheduled", "waiting_for_resume"].includes(task.executionStatus) ? task.executionStatus : task.displayStatus;
+      return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.displayStatus)+'">'+
         '<span class="task-card-top"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(visibleStatus))+'</span></span>'+
         '<h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(copy)+'</p>'+
         '<span class="task-card-footer"><span class="task-action">'+escapeHtml(label(task.requestedAction || task.status || "queued"))+'</span><span>'+escapeHtml(formatTime(task.updatedAt))+'</span></span>'+
@@ -937,7 +938,7 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     function productTask(task) {
-      const executionStatus = task.executionStatus === "retry_scheduled" ? task.executionStatus : task.status;
+      const executionStatus = task.executionStatus === "retry_scheduled" ? task.executionStatus : task.displayStatus;
       return '<article class="product-task"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><div><h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(task.description)+'</p></div><span class="status-pill">'+escapeHtml(label(executionStatus))+'</span></article>';
     }
 
@@ -987,6 +988,9 @@ export function renderBoardClient(accessToken: string): string {
       const scheduledResume = task.currentExecution?.scheduledResume
         ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="action-button" type="button" data-continue-now>提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at></label><button class="action-button" type="button" data-reschedule>保存时间</button></div></section>'
         : '';
+      const integrationWait = task.integrationWait
+        ? '<section class="integration-wait-card"><p>'+escapeHtml(task.integrationWait.message)+'</p></section>'
+        : '';
       const currentConversation = task.currentExecution
         ? '<section class="current-conversation">'+
             '<div class="current-conversation-copy"><span>当前对话</span><div><b>'+escapeHtml(label(task.currentExecution.action))+'</b><i aria-hidden="true">·</i><strong>'+escapeHtml(label(task.currentExecution.status))+'</strong></div></div>'+
@@ -1003,13 +1007,13 @@ export function renderBoardClient(accessToken: string): string {
       host.innerHTML =
         '<header class="detail-head"><strong>任务详情</strong><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
         '<div class="detail-body">'+
-          '<div class="detail-status"><span></span>'+escapeHtml(label(task.status))+'</div>'+
+          '<div class="detail-status"><span></span>'+escapeHtml(label(task.displayStatus))+'</div>'+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
-          (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+scheduledResume+currentConversation+
+          (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+scheduledResume+integrationWait+currentConversation+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+
-          '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.requestedAction || task.status))+'</dd>'+
+          '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.displayStatus))+'</dd>'+
             (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd>'+(task.modelRouting.circuitBreaker ? '<dt>主模型熔断</dt><dd>'+escapeHtml(label(task.modelRouting.circuitBreaker.state))+(task.modelRouting.circuitBreaker.primaryProbeAt ? ' · '+escapeHtml(formatTime(task.modelRouting.circuitBreaker.primaryProbeAt)) : '')+'</dd>' : '')+'<dt>容量重试</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+
             '<dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
         '</div>';

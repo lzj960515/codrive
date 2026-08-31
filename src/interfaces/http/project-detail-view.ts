@@ -8,8 +8,9 @@ import { createBoardView } from "./board-view.js";
 export function createProjectDetailView(
   snapshot: ProjectSnapshot,
   productDocument: string,
+  schedulingSnapshots: ProjectSnapshot[] = [snapshot],
 ) {
-  const board = createBoardView([snapshot])[0]!;
+  const board = createBoardView([snapshot], schedulingSnapshots)[0]!;
   const { project } = snapshot;
   const { attention, ...projectView } = board.project;
   const tasksById = new Map(snapshot.tasks.map((task) => [task.id, task]));

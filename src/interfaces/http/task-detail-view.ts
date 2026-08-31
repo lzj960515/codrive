@@ -1,11 +1,13 @@
 import { projectTaskActivities } from "../../domain/task-activity.js";
-import type { Project, Task } from "../../domain/types.js";
+import type { Project, ProjectSnapshot, Task } from "../../domain/types.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
+import { createTaskDisplay } from "./task-display.js";
 
 export async function createTaskDetailView(
   store: ProjectStore,
   project: Project,
   task: Task,
+  schedulingSnapshots: ProjectSnapshot[],
 ) {
   const activities = await store.listTaskActivities(project.id, task.id);
   const publicActivities = activities.map((activity) => {
@@ -52,6 +54,7 @@ export async function createTaskDetailView(
       acceptanceCriteria: task.acceptanceCriteria,
       order: task.order,
       status: task.status,
+      ...createTaskDisplay(schedulingSnapshots, project, task),
       requestedAction: task.requestedAction,
       executionStatus: task.currentExecution?.status ?? null,
       currentExecution,

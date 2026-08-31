@@ -1,6 +1,10 @@
 import type { ProjectSnapshot } from "../../domain/types.js";
+import { createTaskDisplay } from "./task-display.js";
 
-export function createBoardView(snapshots: ProjectSnapshot[]) {
+export function createBoardView(
+  snapshots: ProjectSnapshot[],
+  schedulingSnapshots: ProjectSnapshot[] = snapshots,
+) {
   return snapshots.map(({ project, tasks }) => {
     const planning = createPlanningView(project, tasks);
     return {
@@ -31,6 +35,7 @@ export function createBoardView(snapshots: ProjectSnapshot[]) {
         acceptanceCriteria: task.acceptanceCriteria,
         order: task.order,
         status: task.status,
+        ...createTaskDisplay(schedulingSnapshots, project, task),
         requestedAction: task.requestedAction,
         executionStatus: task.currentExecution?.status ?? null,
         modelRouting: task.currentExecution?.modelRouting ?? null,

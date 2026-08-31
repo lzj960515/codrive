@@ -50,6 +50,10 @@ import {
   projectLifecycleState,
   taskLifecycleState,
 } from "./lifecycle-recorder.js";
+import {
+  activeIntegrationRepositories,
+  findCompetingIntegrationLease,
+} from "./integration-lease.js";
 import { ProjectExecutionCoordinator } from "./project-execution-coordinator.js";
 import type { ProjectExecutor } from "./project-executor.js";
 import type { DispatchRequest, TaskDispatcher } from "./task-dispatcher.js";
@@ -107,11 +111,6 @@ const reportSubmissionStatuses = new Set([
   "awaiting_report",
   "waiting_for_input",
 ]);
-const integrationLeaseStatuses = new Set([
-  ...activeExecutionStatuses,
-  "waiting_for_input",
-]);
-
 export class WorkflowEngine {
   readonly lifecycle: LifecycleRecorder;
   private readonly now: () => string;
@@ -929,7 +928,7 @@ export class WorkflowEngine {
       }
       if (
         execution!.action === "integrate" &&
-        hasCompetingIntegrationLease(snapshots, found.project, found.task.id)
+        findCompetingIntegrationLease(snapshots, found.project, found.task.id)
       ) {
         await this.recordRecoverySuppressed(
           found.project.id,
@@ -2847,23 +2846,6 @@ function matchesRecoveryTarget(
   );
 }
 
-function hasCompetingIntegrationLease(
-  snapshots: ProjectSnapshot[],
-  project: Project,
-  taskId: string,
-): boolean {
-  const repository = resolve(project.repositoryPath);
-  return snapshots.some(({ project: candidateProject, tasks }) =>
-    resolve(candidateProject.repositoryPath) === repository &&
-    tasks.some(
-      (task) =>
-        (candidateProject.id !== project.id || task.id !== taskId) &&
-        task.currentExecution?.action === "integrate" &&
-        integrationLeaseStatuses.has(task.currentExecution.status),
-    ),
-  );
-}
-
 function hasOngoingTaskExecution(task: Task): boolean {
   return task.currentExecution
     ? reportableExecutionStatuses.has(task.currentExecution.status)
@@ -2878,20 +2860,6 @@ function hasActiveProjectExecution(project: Project): boolean {
 
 function countActiveTasks(tasks: Task[]): number {
   return tasks.filter(hasActiveTaskExecution).length;
-}
-
-function activeIntegrationRepositories(snapshots: ProjectSnapshot[]): Set<string> {
-  return new Set(
-    snapshots.flatMap(({ project, tasks }) =>
-      tasks.some(
-        ({ currentExecution }) =>
-          currentExecution?.action === "integrate" &&
-          integrationLeaseStatuses.has(currentExecution.status),
-      )
-        ? [resolve(project.repositoryPath)]
-        : [],
-    ),
-  );
 }
 
 function availableProjectPlanningCapacity(

@@ -283,7 +283,7 @@ export const boardStyles = `
   .task-card[data-status="working"]::before { background: var(--signal); }
   .task-card[data-status="reviewing"]::before { background: var(--sky); }
   .task-card[data-status="integrating"]::before, .task-card[data-status="done"]::before { background: var(--mint); }
-  .task-card[data-status="waiting_for_input"]::before, .task-card[data-status="blocked"]::before { background: var(--amber); }
+  .task-card[data-status="waiting_for_input"]::before, .task-card[data-status="blocked"]::before, .task-card[data-status="waiting_for_integration"]::before { background: var(--amber); }
   .task-card[data-status="cancelled"]::before { background: var(--rose); }
   .task-card-top, .task-card-footer { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
   .task-index { color: #929b96; font: 800 9px/1 var(--condensed); letter-spacing: .1em; }
@@ -335,6 +335,8 @@ export const boardStyles = `
   .scheduled-resume-card { display: grid; gap: 14px; margin-top: 20px; padding: 16px; color: #6d4a15; background: linear-gradient(135deg, #fff8e5, #f8e9c4); border: 1px solid #e5cb87; border-radius: 13px; }
   .scheduled-resume-card p { margin: 7px 0; color: #705c37; font-size: 12px; line-height: 1.55; }
   .scheduled-resume-card time { font: 800 11px/1.4 var(--condensed); letter-spacing: .035em; }
+  .integration-wait-card { margin-top: 20px; padding: 16px; color: #6d4a15; background: linear-gradient(135deg, #fff8e5, #f8e9c4); border: 1px solid #e5cb87; border-radius: 13px; }
+  .integration-wait-card p { margin: 0; color: #705c37; font-size: 12px; line-height: 1.55; }
   .scheduled-resume-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
   .scheduled-resume-actions label { display: grid; gap: 5px; color: #78653f; font: 800 9px/1 var(--condensed); letter-spacing: .08em; text-transform: uppercase; }
   .scheduled-resume-actions input { min-height: 34px; padding: 6px 9px; color: var(--ink); background: rgba(255,255,255,.78); border: 1px solid #d8bf80; border-radius: 8px; font: 700 11px/1 var(--condensed); }

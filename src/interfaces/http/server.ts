@@ -310,18 +310,20 @@ export function createHttpServer(
       ),
   );
 
-  server.get("/api/board", async () =>
-    createBoardView(
-      (await dependencies.store.listProjects()).filter(
-        ({ project }) => !isProjectArchived(project),
-      ),
-    ),
-  );
+  server.get("/api/board", async () => {
+    const snapshots = await dependencies.store.listProjects();
+    return createBoardView(
+      snapshots.filter(({ project }) => !isProjectArchived(project)),
+      snapshots,
+    );
+  });
   server.get("/api/board/archived", async () => {
+    const snapshots = await dependencies.store.listProjects();
     const projects = createBoardView(
-      (await dependencies.store.listProjects()).filter(({ project }) =>
+      snapshots.filter(({ project }) =>
         isProjectArchived(project),
       ),
+      snapshots,
     );
     return { count: projects.length, projects };
   });
@@ -330,7 +332,10 @@ export function createHttpServer(
     async (request, reply) => {
       const snapshot = await dependencies.store.getProject(request.params.projectId);
       if (!snapshot) return reply.code(404).send({ error: "Project not found" });
-      return createBoardView([snapshot])[0]!;
+      return createBoardView(
+        [snapshot],
+        await dependencies.store.listProjects(),
+      )[0]!;
     },
   );
   server.get<{ Params: { projectId: string } }>(
@@ -341,6 +346,7 @@ export function createHttpServer(
       return createProjectDetailView(
         snapshot,
         await dependencies.store.readProductDocument(snapshot.project.id),
+        await dependencies.store.listProjects(),
       );
     },
   );
@@ -380,6 +386,7 @@ export function createHttpServer(
         dependencies.store,
         found.project,
         found.task,
+        await dependencies.store.listProjects(),
       );
     },
   );
