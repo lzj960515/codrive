@@ -45,6 +45,7 @@ export type PlanningChangeReason =
   | "project_registered"
   | "work_added"
   | "system_work_added"
+  | "task_definition_updated"
   | "task_completed"
   | "task_cancelled"
   | "product_document_updated"
@@ -364,6 +365,20 @@ export interface CreateTaskInput {
   origin?: TaskOrigin;
 }
 
+export interface TaskDefinitionChanges {
+  title?: string;
+  description?: string;
+  acceptanceCriteria?: string[];
+}
+
+export interface UpdateTaskDefinitionInput {
+  taskId: string;
+  expectedUpdatedAt: string;
+  decisionSummary: string;
+  changes: TaskDefinitionChanges;
+  productDocumentChange?: Omit<ProductDocumentChange, "decisionSummary">;
+}
+
 export interface CreateProjectInput {
   name: string;
   repositoryPath: string;
@@ -399,6 +414,10 @@ export type CodriveCommand =
   | {
       type: "project.update_product_document";
       payload: { projectId: string } & ProductDocumentChange;
+    }
+  | {
+      type: "task.update_definition";
+      payload: UpdateTaskDefinitionInput;
     }
   | {
       type: "task.control";

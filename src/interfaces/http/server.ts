@@ -135,6 +135,20 @@ const productDocumentChangeSchema = z.object({
   documentDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
 });
 
+const taskDefinitionChangesSchema = z
+  .object({
+    title: z.string().min(1).optional(),
+    description: z.string().optional(),
+    acceptanceCriteria: z.array(z.string()).optional(),
+  })
+  .refine(
+    ({ title, description, acceptanceCriteria }) =>
+      title !== undefined ||
+      description !== undefined ||
+      acceptanceCriteria !== undefined,
+    "Task definition changes must include at least one field",
+  );
+
 const commandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("system.install_resources"),
@@ -207,6 +221,18 @@ const commandSchema = z.discriminatedUnion("type", [
     type: z.literal("project.update_product_document"),
     payload: productDocumentChangeSchema.extend({
       projectId: z.string().min(1),
+    }),
+  }),
+  z.object({
+    type: z.literal("task.update_definition"),
+    payload: z.object({
+      taskId: z.string().min(1),
+      expectedUpdatedAt: z.iso.datetime(),
+      decisionSummary: z.string().trim().min(1).max(2_000),
+      changes: taskDefinitionChangesSchema,
+      productDocumentChange: productDocumentChangeSchema
+        .omit({ decisionSummary: true })
+        .optional(),
     }),
   }),
   z.object({

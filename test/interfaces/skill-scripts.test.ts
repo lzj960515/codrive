@@ -206,7 +206,9 @@ describe("bundled Skill scripts", () => {
       projectContext.projectDocument,
       "# Game\n\n## Controls\n\nUse keyboard controls.\n\n## Audio\n\nAdd an audio milestone.\n",
     );
-    const controlled = commandResult<{ productFacts: { revision: number } }>(
+    const controlled = commandResult<{
+      productFacts: { revision: number; digest: string };
+    }>(
       await runSkill("codrive-control", ["product-document-changed", created.project.id], {
         decisionSummary: "Use keyboard controls.",
         expectedRevision: added.project.productFacts.revision,
@@ -215,6 +217,38 @@ describe("bundled Skill scripts", () => {
     );
     expect(controlled.productFacts).toMatchObject({
       revision: added.project.productFacts.revision + 1,
+    });
+
+    await writeFile(
+      projectContext.projectDocument,
+      "# Game\n\n## Controls\n\nUse keyboard controls.\n\n## Audio\n\nAdd audible gameplay feedback.\n",
+    );
+
+    const updated = commandResult<ProjectSnapshot>(
+      await runSkill(
+        "codrive-control",
+        ["task-update", added.tasks[1]!.id],
+        {
+          expectedUpdatedAt: added.tasks[1]!.updatedAt,
+          decisionSummary: "Clarify the audio task contract.",
+          changes: {
+            description: "Add one complete audio milestone.",
+            acceptanceCriteria: ["Gameplay has audible feedback."],
+          },
+          productDocumentChange: {
+            expectedRevision: controlled.productFacts.revision,
+            expectedDigest: controlled.productFacts.digest,
+          },
+        },
+      ),
+    );
+    expect(updated.project.productFacts.revision).toBe(
+      controlled.productFacts.revision + 1,
+    );
+    expect(updated.tasks.find(({ id }) => id === added.tasks[1]!.id)).toMatchObject({
+      description: "Add one complete audio milestone.",
+      acceptanceCriteria: ["Gameplay has audible feedback."],
+      status: "backlog",
     });
 
     const board = JSON.parse(
@@ -245,7 +279,7 @@ describe("bundled Skill scripts", () => {
       await runSkill("codrive-control", ["project", created.project.id]),
     ) as { productDocument: string };
     expect(project.productDocument).toContain("Use keyboard controls.");
-    expect(project.productDocument).toContain("Add an audio milestone.");
+    expect(project.productDocument).toContain("Add audible gameplay feedback.");
 
     const task = JSON.parse(
       await runSkill("codrive-control", ["task", created.tasks[0]!.id]),
@@ -323,6 +357,7 @@ describe("bundled Skill scripts", () => {
     ["codrive-task", ["report", "task_missing"]],
     ["codrive-work", ["add", "project_missing"]],
     ["codrive-control", ["update-settings"]],
+    ["codrive-control", ["task-update", "task_missing"]],
   ])(
     "%s requires explicit --json input and never accepts stdin payloads",
     async (skill, args) => {
@@ -340,6 +375,7 @@ describe("bundled Skill scripts", () => {
     ["codrive-task", ["report", "task_missing"]],
     ["codrive-work", ["add", "project_missing"]],
     ["codrive-control", ["update-settings"]],
+    ["codrive-control", ["task-update", "task_missing"]],
   ])("%s reports invalid --json input as a command-line error", async (skill, args) => {
     await expect(
       runSkill(skill, [...args, "--json", "not-json"]),

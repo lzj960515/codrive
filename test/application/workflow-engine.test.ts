@@ -1755,6 +1755,218 @@ describe("WorkflowEngine", () => {
     expect(projectExecutor.started).toHaveLength(0);
   });
 
+  it("updates a backlog task definition and replaces stale task selection", async () => {
+    const created = await registerProject(1);
+    const originalTask = created.tasks[0]!;
+    const previousExecution = created.project.currentExecution!;
+    now = new Date("2026-08-03T00:01:00.000Z");
+
+    const updated = await workflow.updateTaskDefinition({
+      taskId: originalTask.id,
+      expectedUpdatedAt: originalTask.updatedAt,
+      decisionSummary: "Clarify the playable loop contract.",
+      changes: {
+        title: "Playable flight loop",
+        description: "Deliver one complete keyboard-controlled flight loop.",
+        acceptanceCriteria: ["The player can finish and restart the loop."],
+      },
+    });
+
+    expect(updated.tasks[0]).toMatchObject({
+      id: originalTask.id,
+      title: "Playable flight loop",
+      description: "Deliver one complete keyboard-controlled flight loop.",
+      acceptanceCriteria: ["The player can finish and restart the loop."],
+      status: "backlog",
+      requestedAction: null,
+      updatedAt: now.toISOString(),
+    });
+    expect(updated.project).toMatchObject({
+      status: "active",
+      planning: { revision: 2, changeReason: "task_definition_updated" },
+      currentExecution: {
+        action: "select_tasks",
+        planningRevision: 2,
+      },
+    });
+    expect(updated.project.currentExecution?.attemptId).not.toBe(
+      previousExecution.attemptId,
+    );
+    expect(projectExecutor.interrupted).toHaveLength(1);
+    expect(projectExecutor.started).toHaveLength(2);
+
+    const events = await readProjectEvents(store, created.project.id);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "task.definition_updated",
+        taskId: originalTask.id,
+        decision: "Clarify the playable loop contract.",
+        data: expect.objectContaining({
+          changedFields: ["title", "description", "acceptanceCriteria"],
+          previousUpdatedAt: originalTask.updatedAt,
+          updatedAt: now.toISOString(),
+        }),
+      }),
+    );
+  });
+
+  it("accepts a product document change with a task definition update", async () => {
+    const created = await registerProject(1);
+    const originalTask = created.tasks[0]!;
+    const productDocument = "# Tiny Game\n\nSupport keyboard controls.\n";
+    await writeFile(store.productDocumentPath(created.project.id), productDocument);
+    now = new Date("2026-08-03T00:01:00.000Z");
+
+    const updated = await workflow.updateTaskDefinition({
+      taskId: originalTask.id,
+      expectedUpdatedAt: originalTask.updatedAt,
+      decisionSummary: "Make keyboard controls part of the confirmed scope.",
+      changes: {
+        acceptanceCriteria: ["Arrow keys control the player."],
+      },
+      productDocumentChange: {
+        expectedRevision: created.project.productFacts.revision,
+        expectedDigest: created.project.productFacts.digest,
+        documentDigest: digest(productDocument),
+      },
+    });
+
+    expect(updated.project).toMatchObject({
+      productFacts: {
+        revision: 2,
+        digest: digest(productDocument),
+      },
+      planning: { revision: 2, changeReason: "task_definition_updated" },
+    });
+    expect(updated.tasks[0]?.acceptanceCriteria).toEqual([
+      "Arrow keys control the player.",
+    ]);
+    expect(await store.readProductDocument(created.project.id)).toBe(productDocument);
+
+    const events = await readProjectEvents(store, created.project.id);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "project.product_document_updated",
+        decision: "Make keyboard controls part of the confirmed scope.",
+      }),
+    );
+  });
+
+  it("rejects stale, unchanged, active, archived, and system task updates", async () => {
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath: "/workspace/game",
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [
+        { title: "Backlog", description: "Build it", acceptanceCriteria: [] },
+        { title: "Active", description: "Build it", acceptanceCriteria: [] },
+        {
+          title: "Maintenance",
+          description: "Maintain it",
+          acceptanceCriteria: [],
+          origin: {
+            kind: "semantic_atlas_maintenance",
+            repositoryPath: "/workspace/game",
+          },
+        },
+      ],
+    });
+    const [backlog, active, maintenance] = created.tasks;
+    await store.saveTask(created.project.id, {
+      ...active!,
+      status: "working",
+      requestedAction: "work",
+      currentExecution: {
+        attemptId: "attempt_active",
+        reportOpportunityId: "report_opportunity_active",
+        action: "work",
+        status: "running",
+        startedAt: now.toISOString(),
+        modelRouting: testModelRouting(),
+      },
+    });
+
+    await expect(
+      workflow.updateTaskDefinition({
+        taskId: backlog!.id,
+        expectedUpdatedAt: "2026-08-02T23:59:00.000Z",
+        decisionSummary: "Use stale context.",
+        changes: { description: "Stale update" },
+      }),
+    ).rejects.toThrow(/stale/i);
+    await expect(
+      workflow.updateTaskDefinition({
+        taskId: backlog!.id,
+        expectedUpdatedAt: backlog!.updatedAt,
+        decisionSummary: "Repeat the same definition.",
+        changes: { description: backlog!.description },
+      }),
+    ).rejects.toThrow(/does not change/i);
+    await expect(
+      workflow.updateTaskDefinition({
+        taskId: backlog!.id,
+        expectedUpdatedAt: backlog!.updatedAt,
+        decisionSummary: "Remove the task title.",
+        changes: { title: "" },
+      }),
+    ).rejects.toThrow(/title/i);
+    await expect(
+      workflow.updateTaskDefinition({
+        taskId: active!.id,
+        expectedUpdatedAt: active!.updatedAt,
+        decisionSummary: "Rewrite active work.",
+        changes: { description: "Changed while active" },
+      }),
+    ).rejects.toThrow(/backlog/i);
+    await expect(
+      workflow.updateTaskDefinition({
+        taskId: maintenance!.id,
+        expectedUpdatedAt: maintenance!.updatedAt,
+        decisionSummary: "Rewrite generated work.",
+        changes: { description: "Changed maintenance" },
+      }),
+    ).rejects.toThrow(/system-generated/i);
+
+    await store.saveProject({
+      ...created.project,
+      scheduling: "paused",
+      archivedAt: now.toISOString(),
+    });
+    await expect(
+      workflow.updateTaskDefinition({
+        taskId: backlog!.id,
+        expectedUpdatedAt: backlog!.updatedAt,
+        decisionSummary: "Rewrite archived work.",
+        changes: { description: "Changed while archived" },
+      }),
+    ).rejects.toThrow(/archived/i);
+
+    expect((await store.findTask(backlog!.id))!.task).toEqual(backlog);
+  });
+
+  it("requires product-document metadata when task scope edits PROJECT.md", async () => {
+    const created = await registerProject(1);
+    const task = created.tasks[0]!;
+    await writeFile(
+      store.productDocumentPath(created.project.id),
+      "# Tiny Game\n\nUnrecorded scope change.\n",
+    );
+
+    await expect(
+      workflow.updateTaskDefinition({
+        taskId: task.id,
+        expectedUpdatedAt: task.updatedAt,
+        decisionSummary: "Change the task without accepting product facts.",
+        changes: { description: "Use the changed scope" },
+      }),
+    ).rejects.toThrow(/PROJECT\.md.*productDocumentChange/i);
+
+    expect((await store.findTask(task.id))!.task).toEqual(task);
+    expect((await store.getProject(created.project.id))!.project.productFacts)
+      .toEqual(created.project.productFacts);
+  });
+
   it("accepts a locally edited product document and replaces stale task selection", async () => {
     const created = await store.createProject({
       name: "Tiny Game",

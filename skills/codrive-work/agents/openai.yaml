@@ -1,5 +1,5 @@
 interface:
   display_name: "Codrive Work"
-  short_description: "Add a confirmed feature or milestone to Codrive"
+  short_description: "Add or revise confirmed work in Codrive"
   brand_color: "#F2B53D"
-  default_prompt: "Use $codrive-work to add this requirement to an existing Codrive project."
+  default_prompt: "Use $codrive-work to add or revise this requirement in an existing Codrive project."

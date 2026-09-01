@@ -88,6 +88,8 @@ Codrive persists lifecycle state and enforces scheduling boundaries; Codex handl
 
 `PROJECT.md` is the single current product-facts source for every project and task turn. After registration, Agents edit that local file directly and send a small change notification containing document revisions and digests instead of retransmitting the full document. Codrive validates the file, records the decision summary in its append-only event history, replaces stale task selection, and replans.
 
+An ordinary unstarted backlog task can change its title, result boundary, and acceptance criteria through a command guarded by the task's current `updatedAt`. When that revision also changes product facts, the same command accepts the edited `PROJECT.md` and advances planning once. Started tasks continue through their current execution lifecycle, changes after completion or cancellation become follow-up tasks, and Codrive remains the sole writer of task lifecycle JSON.
+
 Task state has three distinct layers: the board-visible business status, the next `work | review | integrate` action, and the attempt's runtime status. Every completed work result owns one immutable activity and an optional `candidateCommit`; Review and integration bind that exact activity instead of scanning older candidates. Integration completion is a separate decision from Git merge completion, so one task can continue into release, migration, or verification work after code is merged.
 
 State schema v4 persists that model. Only the stopped upgrade command performs historical migration: Codrive backs up v3, migrates task snapshots and recovery events in a temporary tree, reconstructs work-activity bindings, validates counts and open execution identities, then atomically switches projects and the marker. Migration failure leaves v3 authoritative. A schema-v2 installation first performs the existing v3 upgrade and then this v4 migration. Ordinary startup only validates current state and managed-resource markers before recovery. See [Product facts lifecycle](./docs/architecture/product-facts.md).
@@ -113,8 +115,8 @@ Task details link each execution and activity to its source conversation. They a
 | --- | --- |
 | `$codrive-forge` | Turn a product idea into a confirmed plan and initial task set |
 | `$codrive-task` | Select project work or execute the current task stage |
-| `$codrive-work` | Edit the local product document and add confirmed work in one planning revision |
-| `$codrive-control` | Inspect progress, record local product-document changes, and control execution |
+| `$codrive-work` | Add confirmed work or revise an existing unstarted task |
+| `$codrive-control` | Inspect progress, revise backlog tasks, record product-document changes, and control execution |
 
 Skills read live context from Codrive, so task messages stay short and product state remains consistent across conversations.
 

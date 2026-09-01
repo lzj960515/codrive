@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   InvalidTaskReportError,
@@ -34,8 +35,10 @@ import type {
   ProjectSnapshot,
   Task,
   TaskActivity,
+  TaskDefinitionChanges,
   TaskExecutionIdentity,
   TaskReport,
+  UpdateTaskDefinitionInput,
   LifecycleEventSource,
   ModelRoutingSettings,
 } from "../domain/types.js";
@@ -257,6 +260,8 @@ export class WorkflowEngine {
           command.payload.projectId,
           command.payload,
         );
+      case "task.update_definition":
+        return this.updateTaskDefinition(command.payload);
       case "task.control":
         switch (command.payload.action) {
           case "retry":
@@ -568,6 +573,106 @@ export class WorkflowEngine {
       await this.reconcileInternal();
       return (await this.requireSnapshot(projectId)).project;
     });
+  }
+
+  updateTaskDefinition(
+    input: UpdateTaskDefinitionInput,
+  ): Promise<ProjectSnapshot> {
+    return this.enqueue(async () => {
+      const found = await this.requireTask(input.taskId);
+      const { project, task } = found;
+      const { decisionSummary, changedFields } = validateTaskDefinitionUpdate(
+        project,
+        task,
+        input,
+      );
+      const acceptedDocument = await this.acceptTaskDefinitionProductFacts(
+        project,
+        input,
+        decisionSummary,
+      );
+
+      const currentProject = hasActiveProjectExecution(project)
+        ? await this.requireProjectExecutions().cancel(project)
+        : project;
+      const changedAt = this.now();
+      const updatedTask = applyTaskDefinitionChanges(task, input.changes, changedAt);
+      const updatedProject: Project = {
+        ...currentProject,
+        ...(acceptedDocument
+          ? {
+              productFacts: {
+                revision: currentProject.productFacts.revision + 1,
+                digest: acceptedDocument.digest,
+                changedAt,
+              },
+            }
+          : {}),
+        status: "active",
+        requestedAction: null,
+        planning: advancePlanning(
+          currentProject.planning,
+          "task_definition_updated",
+          changedAt,
+          this.maxConcurrentTasks,
+        ),
+        updatedAt: changedAt,
+      };
+
+      await this.store.saveTask(project.id, updatedTask);
+      await this.store.saveProject(updatedProject);
+      if (acceptedDocument) {
+        await this.recordProductDocumentChange(
+          project,
+          updatedProject,
+          acceptedDocument,
+        );
+      }
+      await this.recordEvent({
+        type: "task.definition_updated",
+        projectId: project.id,
+        taskId: task.id,
+        decision: decisionSummary,
+        before: taskLifecycleState(task),
+        after: taskLifecycleState(updatedTask),
+        data: {
+          changedFields,
+          previousUpdatedAt: task.updatedAt,
+          updatedAt: updatedTask.updatedAt,
+          ...(acceptedDocument
+            ? { productDocumentRevision: updatedProject.productFacts.revision }
+            : {}),
+        },
+      });
+      await this.recordSupersededSelection(
+        project,
+        updatedProject,
+        updatedProject.planning.changeReason,
+      );
+      await this.recordPlanningRevision(
+        updatedProject,
+        project.planning.revision,
+      );
+      await this.reconcileInternal();
+      return this.requireSnapshot(project.id);
+    });
+  }
+
+  private async acceptTaskDefinitionProductFacts(
+    project: Project,
+    input: UpdateTaskDefinitionInput,
+    decisionSummary: string,
+  ): Promise<AcceptedProductDocumentChange | undefined> {
+    if (input.productDocumentChange) {
+      return this.acceptProductDocumentChange(project, {
+        decisionSummary,
+        ...input.productDocumentChange,
+      });
+    }
+    if (await this.productDocumentIsCurrent(project)) return undefined;
+    throw new WorkflowConflictError(
+      "PROJECT.md has unrecorded changes; include productDocumentChange with the task definition update",
+    );
   }
 
   submitReport(report: TaskReport): Promise<Task> {
@@ -3179,7 +3284,98 @@ function commandSummary(command: CodriveCommand): Record<string, unknown> {
   if (command.type === "project.update_product_document") {
     summary.expectedDocumentRevision = command.payload.expectedRevision;
   }
+  if (command.type === "task.update_definition") {
+    summary.changedFields = Object.keys(command.payload.changes);
+    summary.updatesProductDocument = Boolean(
+      command.payload.productDocumentChange,
+    );
+  }
   return summary;
+}
+
+function changedTaskDefinitionFields(
+  task: Task,
+  changes: TaskDefinitionChanges,
+): Array<keyof TaskDefinitionChanges> {
+  return (["title", "description", "acceptanceCriteria"] as const).filter(
+    (field) =>
+      changes[field] !== undefined &&
+      !isDeepStrictEqual(task[field], changes[field]),
+  );
+}
+
+function validateTaskDefinitionUpdate(
+  project: Project,
+  task: Task,
+  input: UpdateTaskDefinitionInput,
+): {
+  decisionSummary: string;
+  changedFields: Array<keyof TaskDefinitionChanges>;
+} {
+  if (project.status === "cancelled") {
+    throw new WorkflowConflictError(
+      `Cancelled project ${project.id} cannot update task definitions`,
+    );
+  }
+  if (isProjectArchived(project)) {
+    throw new WorkflowConflictError(
+      `Archived project ${project.id} cannot update task definitions`,
+    );
+  }
+  if (task.origin) {
+    throw new WorkflowConflictError(
+      `System-generated task ${task.id} cannot update its definition`,
+    );
+  }
+  if (
+    task.status !== "backlog" ||
+    task.requestedAction !== null ||
+    task.currentExecution
+  ) {
+    throw new WorkflowConflictError(
+      `Task ${task.id} must remain an unstarted backlog task before its definition can change`,
+    );
+  }
+  if (task.updatedAt !== input.expectedUpdatedAt) {
+    throw new WorkflowConflictError(
+      `Task ${task.id} definition is stale; current updatedAt is ${task.updatedAt}`,
+    );
+  }
+
+  const decisionSummary = input.decisionSummary.trim();
+  if (!decisionSummary) {
+    throw new WorkflowConflictError(
+      "Task definition changes require a decision summary",
+    );
+  }
+  if (input.changes.title !== undefined && input.changes.title.length === 0) {
+    throw new WorkflowConflictError("Task definition title must not be empty");
+  }
+  const changedFields = changedTaskDefinitionFields(task, input.changes);
+  if (changedFields.length === 0) {
+    throw new WorkflowConflictError(
+      `Task ${task.id} definition update does not change any fields`,
+    );
+  }
+  return { decisionSummary, changedFields };
+}
+
+function applyTaskDefinitionChanges(
+  task: Task,
+  changes: TaskDefinitionChanges,
+  updatedAt: string,
+): Task {
+  return {
+    ...task,
+    ...(changes.title === undefined ? {} : { title: changes.title }),
+    ...(changes.description === undefined
+      ? {}
+      : { description: changes.description }),
+    ...(changes.acceptanceCriteria === undefined
+      ? {}
+      : { acceptanceCriteria: changes.acceptanceCriteria }),
+    updatedAt,
+  };
 }
 
 function cancellationInput(

@@ -49,6 +49,12 @@ if (command === "board" && args.length === 0) {
         : noJsonInput(inputArgs, "task-control");
   result = await sendCommand("task.control", { taskId: id, action, ...details });
   isWrite = true;
+} else if (command === "task-update" && args[0]) {
+  const [id, ...inputArgs] = args;
+  const payload = parseJsonArgument(inputArgs, "task-update");
+  const update = await taskDefinitionUpdate(id, payload);
+  result = await sendCommand("task.update_definition", update);
+  isWrite = true;
 } else if (command === "product-document-changed" && args[0]) {
   const [id, ...inputArgs] = args;
   const payload = parseJsonArgument(inputArgs, "product-document-changed");
@@ -60,7 +66,7 @@ if (command === "board" && args.length === 0) {
   isWrite = true;
 } else {
   fail(
-    "Usage: codrive-control <board|archived|project|task|settings|update-settings|project-control|task-control|product-document-changed> ...",
+    "Usage: codrive-control <board|archived|project|task|settings|update-settings|project-control|task-control|task-update|product-document-changed> ...",
   );
 }
 print(isWrite ? { ok: true, result } : result);
@@ -125,6 +131,54 @@ function readResumeSchedule(payload) {
     fail("Scheduled resumeAt is required");
   }
   return { resumeAt: payload.resumeAt.trim() };
+}
+
+async function taskDefinitionUpdate(taskId, payload) {
+  if (
+    typeof payload.expectedUpdatedAt !== "string" ||
+    !payload.expectedUpdatedAt
+  ) {
+    fail("Task update expectedUpdatedAt is required");
+  }
+  if (
+    typeof payload.decisionSummary !== "string" ||
+    !payload.decisionSummary.trim()
+  ) {
+    fail("Task update decisionSummary is required");
+  }
+  if (
+    !payload.changes ||
+    typeof payload.changes !== "object" ||
+    Array.isArray(payload.changes)
+  ) {
+    fail("Task update changes must be a JSON object");
+  }
+
+  let documentChange;
+  if (payload.productDocumentChange !== undefined) {
+    if (
+      !payload.productDocumentChange ||
+      typeof payload.productDocumentChange !== "object" ||
+      Array.isArray(payload.productDocumentChange)
+    ) {
+      fail("Task update productDocumentChange must be a JSON object");
+    }
+    const detail = await request(`/api/tasks/${encodeURIComponent(taskId)}`);
+    const acceptedChange = await productDocumentChange(detail.task.projectId, {
+      ...payload.productDocumentChange,
+      decisionSummary: payload.decisionSummary,
+    });
+    const { decisionSummary: _decisionSummary, ...change } = acceptedChange;
+    documentChange = change;
+  }
+
+  return {
+    taskId,
+    expectedUpdatedAt: payload.expectedUpdatedAt,
+    decisionSummary: payload.decisionSummary.trim(),
+    changes: payload.changes,
+    ...(documentChange ? { productDocumentChange: documentChange } : {}),
+  };
 }
 
 async function productDocumentChange(projectId, payload) {

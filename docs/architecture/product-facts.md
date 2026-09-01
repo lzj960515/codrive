@@ -40,6 +40,14 @@ After validation, Codrive:
 
 `project.add_work` uses the same document-change metadata and adds the confirmed tasks inside one serialized workflow operation. The document and new tasks therefore create one planning revision and one replacement selection.
 
+## Task definition changes
+
+An ordinary task remains editable while it is an unstarted `backlog` task with no requested action or execution. The update command carries the task's current `updatedAt`, one decision summary, and a partial replacement of `title`, `description`, or `acceptanceCriteria`. Codrive rejects stale versions, no-op changes, system-generated tasks, archived or cancelled projects, and tasks whose lifecycle has already started.
+
+A task-only clarification requires the accepted `PROJECT.md` digest to remain current. When a task revision also changes product facts, the Agent edits `PROJECT.md` first and includes the prior product revision and digest in the same task update. The bundled CLI computes the new document digest. `WorkflowEngine` then accepts both changes in one serialized operation, records `task.definition_updated` and the product decision, supersedes active task selection, advances planning once with `task_definition_updated`, and reconciles scheduling.
+
+Task snapshot JSON combines the current definition with lifecycle and execution state, so it remains an internal persistence format. Agents use `task.update_definition` instead of writing that file. Started work keeps the definition evaluated by its current execution; later scope changes use that lifecycle or a follow-up task, preserving completed and cancelled task history.
+
 ## Registration and recovery
 
 Registration is the only operation that carries a complete `productDocument`, because the project has no Codrive-owned `PROJECT.md` yet. Codrive writes the initial file and creates product-facts revision 1.

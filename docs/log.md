@@ -2,6 +2,9 @@
 
 ## 2026-09-01
 
+- Added optimistic backlog task-definition updates through the unified command
+  boundary, including optional atomic `PROJECT.md` acceptance, lifecycle audit,
+  stale selection replacement, and managed Skill support.
 - Made the enabled integration load `$semantic-atlas` for every ordinary task
   turn while leaving business applicability and no-op decisions inside the Skill.
 - Resolved each code-backed Work delivery from its worktree to one persistent

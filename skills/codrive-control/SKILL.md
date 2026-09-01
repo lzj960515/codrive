@@ -1,6 +1,6 @@
 ---
 name: codrive-control
-description: 查询和控制本地 Codrive 项目、任务与运行设置，包括产品详情、产品文档事实、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、产品事实更新、模型容量恢复或要求干预自动流程时使用。
+description: 查询和控制本地 Codrive 项目、任务与运行设置，包括产品详情、产品文档事实、已确认的未开始任务定义修改、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、要求执行已经确认的 backlog 任务修改、更新产品事实、恢复模型容量或干预自动流程时使用；新的任务需求和修改判断由 codrive-work 负责。
 compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
@@ -78,6 +78,45 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> resche
 ```
 
 重新安排只改变恢复时间；提前继续和到期恢复都会先重新取得当前项目容量与仓库合入资格，再在原对话启动唯一的新 turn。项目暂停会保留等待，恢复项目后处理已经到期的任务。
+
+## 修改未开始任务
+
+用户提出新的任务需求或要求改变任务定义时，先读取 `$codrive-work` 完成范围判断、变化展示和用户确认。本节负责执行已经确认的修改。
+
+执行前读取任务与项目详情，保存任务当前的 `updatedAt`。任务仍是普通 `backlog`、`requestedAction=null`、没有执行，并且项目仍未取消和未归档时，使用定义修改命令。系统生成任务由其所有者维护；已经开始、完成或取消的任务返回 `$codrive-work` 选择当前生命周期、取消替换或后续任务。
+
+纯任务澄清直接提交任务字段：
+
+```json
+{
+  "expectedUpdatedAt": "2026-09-01T10:00:00.000Z",
+  "decisionSummary": "本次任务定义为什么变化",
+  "changes": {
+    "title": "可选的新名称",
+    "description": "新的结果和责任边界",
+    "acceptanceCriteria": ["新的可观察标准"]
+  }
+}
+```
+
+`changes` 至少包含 `title`、`description` 或 `acceptanceCriteria` 之一。只发送需要改变的字段：
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs task-update <task-id> --json '<task-update-json>'
+```
+
+任务变化同时改变当前产品事实时，先读取项目 context 并保存 `productFacts.revision` 和 `productFacts.acceptedDigest`，再局部编辑 `PROJECT.md`，然后在同一任务修改中增加：
+
+```json
+{
+  "productDocumentChange": {
+    "expectedRevision": 3,
+    "expectedDigest": "sha256:<修改前哈希>"
+  }
+}
+```
+
+脚本读取磁盘上的 `PROJECT.md` 并计算新哈希；Codrive 在一个序列化命令中接受产品事实和任务定义，记录决定摘要，替换失效的任务选择并推进一个规划版本。任务版本、产品文档版本或生命周期已经变化时，重新读取当前状态并根据最新事实整理修改。任务 JSON 保存 Codrive 的运行状态，所有任务定义变化都通过本命令进入工作流。
 
 ## 取消判断
 
