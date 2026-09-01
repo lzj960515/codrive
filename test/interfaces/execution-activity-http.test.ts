@@ -14,6 +14,7 @@ import { createHttpServer } from "../../src/interfaces/http/server.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  TestRepositoryPathResolver,
   testModelRouting,
   testModels,
 } from "../support/recording-executors.js";
@@ -33,6 +34,7 @@ describe("execution activity HTTP and realtime boundary", () => {
       store,
       new RecordingTaskDispatcher(),
       { maxConcurrentTasks: 1, models: testModels },
+      new TestRepositoryPathResolver(),
       new RecordingProjectExecutor(),
     );
     bridge = new ExecutionActivityBridge({

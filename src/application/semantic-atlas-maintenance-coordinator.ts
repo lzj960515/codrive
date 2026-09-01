@@ -14,7 +14,10 @@ import type {
 } from "../infrastructure/semantic-atlas-maintenance-store.js";
 
 export interface SemanticAtlasMaintenanceTaskScheduler {
-  ensureSemanticAtlasMaintenanceTask(projectId: string): Promise<Task>;
+  ensureSemanticAtlasMaintenanceTask(
+    projectId: string,
+    repositoryPath: string,
+  ): Promise<Task>;
 }
 
 export interface SemanticAtlasMaintenanceCoordinatorOptions {
@@ -176,21 +179,27 @@ export class SemanticAtlasMaintenanceCoordinator {
       completeRequests(state, requests);
       return;
     }
-    if (hasOpenMaintenanceTask(snapshot)) {
-      completeRequests(state, requests);
-      return;
-    }
-
-    try {
-      const required = await this.semanticAtlas.maintenanceRequired(
-        snapshot.project.repositoryPath,
-      );
-      if (required) {
-        await this.tasks.ensureSemanticAtlasMaintenanceTask(projectId);
+    for (const [repositoryPath, repositoryRequests] of requestsByRepository(
+      requests,
+      snapshot.project.repositoryPath,
+    )) {
+      if (hasOpenMaintenanceTask(snapshot, repositoryPath)) {
+        completeRequests(state, repositoryRequests);
+        continue;
       }
-      completeRequests(state, requests);
-    } catch (error) {
-      this.onError(error);
+
+      try {
+        const required = await this.semanticAtlas.maintenanceRequired(repositoryPath);
+        if (required) {
+          await this.tasks.ensureSemanticAtlasMaintenanceTask(
+            projectId,
+            repositoryPath,
+          );
+        }
+        completeRequests(state, repositoryRequests);
+      } catch (error) {
+        this.onError(error);
+      }
     }
   }
 }
@@ -229,6 +238,9 @@ function requestFrom(activity: TaskActivity): SemanticAtlasMaintenanceRequest {
     projectId: activity.projectId,
     sourceTaskId: activity.taskId,
     createdAt: activity.occurredAt,
+    ...(activity.evidence?.repositoryPath
+      ? { repositoryPath: activity.evidence.repositoryPath }
+      : {}),
   };
 }
 
@@ -240,11 +252,30 @@ function requestIsKnown(
     state.requests.some(({ id }) => id === activityId);
 }
 
-function hasOpenMaintenanceTask(snapshot: ProjectSnapshot): boolean {
+function hasOpenMaintenanceTask(
+  snapshot: ProjectSnapshot,
+  repositoryPath: string,
+): boolean {
   return snapshot.tasks.some((task) =>
     task.origin?.kind === "semantic_atlas_maintenance" &&
+    (task.origin.repositoryPath ?? snapshot.project.repositoryPath) ===
+      repositoryPath &&
     !["done", "cancelled"].includes(task.status)
   );
+}
+
+function requestsByRepository(
+  requests: readonly SemanticAtlasMaintenanceRequest[],
+  projectRepositoryPath: string,
+): Map<string, SemanticAtlasMaintenanceRequest[]> {
+  const grouped = new Map<string, SemanticAtlasMaintenanceRequest[]>();
+  for (const request of requests) {
+    const repositoryPath = request.repositoryPath ?? projectRepositoryPath;
+    const repositoryRequests = grouped.get(repositoryPath) ?? [];
+    repositoryRequests.push(request);
+    grouped.set(repositoryPath, repositoryRequests);
+  }
+  return grouped;
 }
 
 function completeRequests(

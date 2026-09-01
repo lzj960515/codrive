@@ -265,6 +265,7 @@ export type TaskActivityType =
   | "cancelled";
 
 export interface TaskActivityEvidence {
+  repositoryPath?: string;
   workspacePath?: string;
   baseCommit?: string;
   candidateCommit?: string;
@@ -315,6 +316,7 @@ export interface Task {
 
 export interface TaskOrigin {
   kind: "semantic_atlas_maintenance";
+  repositoryPath?: string;
 }
 
 export interface LifecycleEvent {

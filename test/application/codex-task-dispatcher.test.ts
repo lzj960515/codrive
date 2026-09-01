@@ -118,10 +118,18 @@ function request(currentTask: Task, activity = {}) {
   };
 }
 
+function createDispatcher(gateway: CodexGateway, semanticAtlas = false) {
+  return new CodexTaskDispatcher(gateway, {
+    read: async () => semanticAtlas
+      ? { semanticAtlas: { automaticMaintenance: true } }
+      : {},
+  });
+}
+
 describe("CodexTaskDispatcher", () => {
-  it("creates a development task and sends only its Skill reference", async () => {
+  it("loads Semantic Atlas for an ordinary task when automatic maintenance is enabled", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway, true);
     const currentRequest = request(task());
 
     const conversation = await dispatcher.attachConversation(currentRequest);
@@ -141,7 +149,7 @@ describe("CodexTaskDispatcher", () => {
         args: [
           "thread_1",
           "/workspace/game",
-          "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+          "请使用 $codrive-task 处理任务 task_1 的当前阶段，并加载 $semantic-atlas；由该 Skill 根据任务内容决定是否执行业务理解与记录。",
           "gpt-5.6-sol",
         ],
       },
@@ -150,7 +158,7 @@ describe("CodexTaskDispatcher", () => {
 
   it("keeps review, follow-up work, and integration conversations attached to the project", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway);
     const reviewing = task({
       status: "reviewing",
       requestedAction: "review",
@@ -218,7 +226,7 @@ describe("CodexTaskDispatcher", () => {
 
   it("reuses the saved review conversation for later reviews of the same task", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway);
     const reviewing = task({
       status: "reviewing",
       requestedAction: "review",
@@ -254,7 +262,7 @@ describe("CodexTaskDispatcher", () => {
 
   it("does not share a review conversation between different tasks", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway);
     const reviewing = task({
       status: "reviewing",
       requestedAction: "review",
@@ -304,7 +312,7 @@ describe("CodexTaskDispatcher", () => {
 
   it("reattaches the persisted task thread during interrupted execution recovery", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway);
     const currentRequest = request(task());
 
     await dispatcher.resumeThread(currentRequest, "persisted_thread");
@@ -319,7 +327,7 @@ describe("CodexTaskDispatcher", () => {
 
   it("starts task and report turns under the project while preserving the task worktree", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway);
     const currentRequest = request(task());
 
     await dispatcher.startTurn(currentRequest, "thread_1");
@@ -347,9 +355,9 @@ describe("CodexTaskDispatcher", () => {
     ]);
   });
 
-  it("leaves optional capability selection to Codex for review and work turns", async () => {
+  it("keeps the ordinary task prompt when Semantic Atlas is disabled", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway);
     const reviewing = task({
       status: "reviewing",
       requestedAction: "review",
@@ -383,9 +391,26 @@ describe("CodexTaskDispatcher", () => {
     ]);
   });
 
+  it("keeps dedicated maintenance tasks on their specialized Skill", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = createDispatcher(gateway, true);
+    const maintenance = task({
+      origin: {
+        kind: "semantic_atlas_maintenance",
+        repositoryPath: "/workspace/game/apps/api",
+      },
+    });
+
+    await dispatcher.startTurn(request(maintenance), "maintenance_thread");
+
+    expect(gateway.calls[0]?.args[2]).toBe(
+      "请使用 $codrive-task 处理任务 task_1 的当前阶段，并加载 $semantic-atlas-maintenance 处理该维护任务。",
+    );
+  });
+
   it("uses the saved AI checkpoint and stable task identity for a scheduled resume", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway, true);
     const reviewing = task({
       status: "reviewing",
       requestedAction: "review",
@@ -418,6 +443,7 @@ describe("CodexTaskDispatcher", () => {
       },
     ]);
     expect(String(gateway.calls[0]!.args[2])).toContain("$codrive-task");
+    expect(String(gateway.calls[0]!.args[2])).toContain("$semantic-atlas");
     expect(String(gateway.calls[0]!.args[2])).toContain(
       "Inspect build 42, retain the current worktree, and continue the review.",
     );
@@ -426,7 +452,7 @@ describe("CodexTaskDispatcher", () => {
   it("leaves task and report messages pending while the conversation is active", async () => {
     const gateway = new RecordingGateway();
     gateway.threadActive = true;
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway);
     const currentRequest = request(
       task({
         currentExecution: {
@@ -452,7 +478,7 @@ describe("CodexTaskDispatcher", () => {
 
   it("interrupts the active App Server turn when a task is cancelled", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = new CodexTaskDispatcher(gateway);
+    const dispatcher = createDispatcher(gateway);
     const active = task({
       currentExecution: {
         attemptId: "attempt_1",

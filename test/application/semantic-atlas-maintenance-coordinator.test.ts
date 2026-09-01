@@ -9,15 +9,18 @@ import type {
 } from "../../src/domain/types.js";
 
 describe("SemanticAtlasMaintenanceCoordinator", () => {
-  it("checks only the project from a persisted integration event and creates one task", async () => {
+  it("checks only the repository recorded by the completed integration", async () => {
     const fixture = coordinatorFixture();
     fixture.maintenanceRequired = true;
     await fixture.coordinator.start();
 
-    fixture.publishCompletedIntegration("source");
+    fixture.publishCompletedIntegration("source", "/workspace/product/apps/api");
 
     await vi.waitFor(() => expect(fixture.ensuredProjectIds).toEqual(["project-1"]));
-    expect(fixture.checkedRepositories).toEqual(["/workspace/product"]);
+    expect(fixture.checkedRepositories).toEqual(["/workspace/product/apps/api"]);
+    expect(fixture.ensuredRepositories).toEqual([
+      "/workspace/product/apps/api",
+    ]);
     expect(fixture.listProjectsCalls).toBe(1);
     expect(fixture.activityReads).toEqual(["project-1", "project-1"]);
     expect(fixture.state).toEqual({
@@ -88,6 +91,33 @@ describe("SemanticAtlasMaintenanceCoordinator", () => {
     );
     expect(fixture.checkedRepositories).toEqual([]);
     expect(fixture.ensuredProjectIds).toEqual([]);
+    await fixture.coordinator.stop();
+  });
+
+  it("lets an open maintenance task for one repository trigger another repository", async () => {
+    const fixture = coordinatorFixture([
+      task("source", "done"),
+      task("maintenance", "backlog", {
+        kind: "semantic_atlas_maintenance",
+        repositoryPath: "/workspace/product/apps/api",
+      }),
+    ]);
+    fixture.maintenanceRequired = true;
+    await fixture.coordinator.start();
+
+    fixture.publishCompletedIntegration(
+      "source",
+      "/workspace/product/apps/web",
+    );
+
+    await vi.waitFor(() =>
+      expect(fixture.ensuredRepositories).toEqual([
+        "/workspace/product/apps/web",
+      ])
+    );
+    expect(fixture.checkedRepositories).toEqual([
+      "/workspace/product/apps/web",
+    ]);
     await fixture.coordinator.stop();
   });
 
@@ -207,11 +237,13 @@ function coordinatorFixture(initialTasks: Task[] = [task("source", "done")]) {
       projectId: string;
       sourceTaskId: string;
       createdAt: string;
+      repositoryPath?: string;
     }>,
   };
   const persistedActivities: TaskActivity[] = [];
   const checkedRepositories: string[] = [];
   const ensuredProjectIds: string[] = [];
+  const ensuredRepositories: string[] = [];
   let listener: ((event: CodriveEvent) => void) | undefined;
   let maintenanceRequired = false;
   let maintenanceError: Error | undefined;
@@ -249,12 +281,13 @@ function coordinatorFixture(initialTasks: Task[] = [task("source", "done")]) {
       },
     },
     {
-      ensureSemanticAtlasMaintenanceTask: async (projectId) => {
+      ensureSemanticAtlasMaintenanceTask: async (projectId, repositoryPath) => {
         ensuredProjectIds.push(projectId);
+        ensuredRepositories.push(repositoryPath);
         const maintenance = task(
           `maintenance-${ensuredProjectIds.length}`,
           "backlog",
-          { kind: "semantic_atlas_maintenance" },
+          { kind: "semantic_atlas_maintenance", repositoryPath },
         );
         snapshot.tasks.push(maintenance);
         return maintenance;
@@ -268,6 +301,7 @@ function coordinatorFixture(initialTasks: Task[] = [task("source", "done")]) {
     persistedActivities,
     checkedRepositories,
     ensuredProjectIds,
+    ensuredRepositories,
     activityReads,
     get listProjectsCalls() {
       return listProjectsCalls;
@@ -284,8 +318,8 @@ function coordinatorFixture(initialTasks: Task[] = [task("source", "done")]) {
       }
       listener?.(event);
     },
-    publishCompletedIntegration(taskId: string) {
-      fixture.publish(integrationEvent(taskId));
+    publishCompletedIntegration(taskId: string, repositoryPath?: string) {
+      fixture.publish(integrationEvent(taskId, repositoryPath));
       fixture.publish(taskCompletedEvent(taskId));
     },
     completeOpenMaintenanceTasks() {
@@ -308,6 +342,7 @@ function coordinatorFixture(initialTasks: Task[] = [task("source", "done")]) {
     restart() {
       checkedRepositories.splice(0);
       ensuredProjectIds.splice(0);
+      ensuredRepositories.splice(0);
       fixture.coordinator = create();
       return fixture;
     },
@@ -390,7 +425,10 @@ function task(
   };
 }
 
-function integrationActivity(taskId: string): TaskActivity {
+function integrationActivity(
+  taskId: string,
+  repositoryPath?: string,
+): TaskActivity {
   return {
     id: `integration-${taskId}`,
     projectId: "project-1",
@@ -398,11 +436,12 @@ function integrationActivity(taskId: string): TaskActivity {
     type: "integration_completed",
     summary: "Integrated",
     occurredAt: "2026-08-31T01:00:00.000Z",
+    ...(repositoryPath ? { evidence: { repositoryPath } } : {}),
   };
 }
 
-function integrationEvent(taskId: string): CodriveEvent {
-  const activity = integrationActivity(taskId);
+function integrationEvent(taskId: string, repositoryPath?: string): CodriveEvent {
+  const activity = integrationActivity(taskId, repositoryPath);
   return {
     schemaVersion: 1,
     eventId: `event-${activity.id}`,

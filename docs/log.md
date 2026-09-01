@@ -1,5 +1,16 @@
 # Documentation log
 
+## 2026-09-01
+
+- Made the enabled integration load `$semantic-atlas` for every ordinary task
+  turn while leaving business applicability and no-op decisions inside the Skill.
+- Resolved each code-backed Work delivery from its worktree to one persistent
+  Git repository and carried that identity through Review and Integration.
+- Scoped post-integration checks and open maintenance-task reuse by repository,
+  including independent child repositories inside one registered product.
+- Kept the Agent report contract single-repository and unchanged; no historical
+  candidate compensation or multi-repository delivery payload was added.
+
 ## 2026-08-31
 
 - Added the opt-in Semantic Atlas integration card with installed/uninstalled

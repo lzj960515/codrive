@@ -9,6 +9,7 @@ import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  TestRepositoryPathResolver,
 } from "../support/recording-executors.js";
 
 describe("AI task selection", () => {
@@ -26,6 +27,7 @@ describe("AI task selection", () => {
           fallback: "gpt-5.6-terra",
         },
       },
+      new TestRepositoryPathResolver(),
       projectExecutor,
     );
 

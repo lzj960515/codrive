@@ -65,7 +65,7 @@ codrive upgrade
 
 Hook 的审核和信任由 Codex 管理。首次 setup 后，或新版本改变 Hook 定义后，请在 Codex 中运行 `/hooks`，审核并信任新的 hash。Codex 没有提供让 Codrive 代替用户持久化单条 Hook 信任的公共 API；进程级绕过还会同时信任无关的用户和项目 Hook，因此 Codrive 不使用它。更新窗口会持续提示，直到四条 Codrive 定义都已启用并信任；`codrive doctor` 会分别报告静态安装状态和运行时信任状态。
 
-看板还提供运行设置，用于调整每个项目的并发上限、默认模型、备用模型，以及可选的 Semantic Atlas 自动维护。检测到公开的 `semantic-atlas` 命令并由用户启用后，每条已经持久化的合入完成活动都会立即询问 Semantic Atlas 当前项目是否需要维护。Codrive 为该项目最多创建一个正常的、需要独立审查的维护任务，候选和业务域判断全部留在 Semantic Atlas 内部。Codrive 不负责安装或诊断 Semantic Atlas。每个项目默认继承全局模型，也可以在项目详情中单独覆盖；新配置从该项目下一次 Codex turn 开始生效。“已完成”和“已取消”两列可以按终止时间从新到旧或从旧到新排序。完整流程见 [Semantic Atlas 自动维护](./docs/architecture/semantic-atlas-maintenance.md)。
+看板还提供运行设置，用于调整每个项目的并发上限、默认模型、备用模型，以及可选的 Semantic Atlas 自动维护。检测到公开的 `semantic-atlas` 命令并由用户启用后，每个普通任务都会显式加载 `$semantic-atlas`；是否涉及业务理解、是否需要查询或记录由 Skill 根据实际任务自行判断，纯机械任务会直接停止。对于包含代码的工作，Codrive 会在合入前把 Agent 汇报的工作树解析成一个持久的 Git 仓库，合入完成后只检查这个仓库，并为每个仓库最多创建一个正常的、需要独立审查的维护任务。一次 Work 交付目前只代表一个 Git 仓库，不支持一个报告同时交付多个仓库。候选和业务域判断全部留在 Semantic Atlas 内部，Codrive 不负责安装或诊断 Semantic Atlas。每个项目默认继承全局模型，也可以在项目详情中单独覆盖；新配置从该项目下一次 Codex turn 开始生效。“已完成”和“已取消”两列可以按终止时间从新到旧或从旧到新排序。完整流程见 [Semantic Atlas 自动维护](./docs/architecture/semantic-atlas-maintenance.md)。
 
 项目归档独立于 `active`、`idle` 和 `cancelled` 生命周期状态。只有项目及其任务都没有正在启动、运行、重试、等待汇报、等待输入或计划等待的执行时才能归档。归档会暂停后续调度并把项目移出默认看板，但本机的 `PROJECT.md`、任务、活动历史、执行证据和 Codex 对话引用都会保留；可以从侧栏的“已归档”入口继续查看和恢复。恢复后项目仍保持暂停，需要你明确点击继续才会重新调度。第一版不提供永久删除，也不会联动归档 Codex 对话。
 

@@ -20,6 +20,7 @@ import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  TestRepositoryPathResolver,
   testModelRouting,
   testModels,
 } from "../support/recording-executors.js";
@@ -86,12 +87,17 @@ async function createTaskConversationFixture(conversationActive = false) {
   const dispatcher = new RecordingTaskDispatcher();
   dispatcher.conversationActive = conversationActive;
   let sequence = 0;
-  const workflow = new WorkflowEngine(store, dispatcher, {
-    maxConcurrentTasks: 1,
-    models: testModels,
-    now: () => "2026-08-03T00:00:00.000Z",
-    createId: (prefix) => `${prefix}_${++sequence}`,
-  });
+  const workflow = new WorkflowEngine(
+    store,
+    dispatcher,
+    {
+      maxConcurrentTasks: 1,
+      models: testModels,
+      now: () => "2026-08-03T00:00:00.000Z",
+      createId: (prefix) => `${prefix}_${++sequence}`,
+    },
+    new TestRepositoryPathResolver(),
+  );
   await workflow.reconcile();
   return { store, workflow, dispatcher, taskId };
 }
@@ -121,12 +127,17 @@ describe("RecoveryManager", () => {
     });
     createId = 0;
     taskDispatcher = new RecordingTaskDispatcher();
-    workflow = new WorkflowEngine(store, taskDispatcher, {
-      maxConcurrentTasks: 1,
-      models: testModels,
-      now: () => "2026-08-03T00:00:00.000Z",
-      createId: (prefix) => `${prefix}_${++createId}`,
-    });
+    workflow = new WorkflowEngine(
+      store,
+      taskDispatcher,
+      {
+        maxConcurrentTasks: 1,
+        models: testModels,
+        now: () => "2026-08-03T00:00:00.000Z",
+        createId: (prefix) => `${prefix}_${++createId}`,
+      },
+      new TestRepositoryPathResolver(),
+    );
     await workflow.reconcile();
     notifications = new StubNotifications();
     recovery = new RecoveryManager(store, workflow, notifications);
@@ -193,6 +204,7 @@ describe("RecoveryManager", () => {
         now: () => "2026-08-03T00:00:00.000Z",
         createId: (prefix) => `${prefix}_project_recovery`,
       },
+      new TestRepositoryPathResolver(),
       projectExecutor,
     );
     const created = await projectWorkflow.registerProject({
@@ -304,11 +316,16 @@ describe("RecoveryManager", () => {
       requestedAction: "work",
     });
     const dispatcher = new RecordingTaskDispatcher();
-    const timedWorkflow = new WorkflowEngine(timedStore, dispatcher, {
-      maxConcurrentTasks: 1,
-      models: testModels,
-      now: () => new Date(Date.now()).toISOString(),
-    });
+    const timedWorkflow = new WorkflowEngine(
+      timedStore,
+      dispatcher,
+      {
+        maxConcurrentTasks: 1,
+        models: testModels,
+        now: () => new Date(Date.now()).toISOString(),
+      },
+      new TestRepositoryPathResolver(),
+    );
     await timedWorkflow.reconcile();
     const first = (await timedStore.findTask(created.tasks[0]!.id))!.task
       .currentExecution!;
@@ -317,11 +334,16 @@ describe("RecoveryManager", () => {
       message: "Selected model is at capacity. Please try a different model.",
       codexErrorInfo: "serverOverloaded",
     });
-    const restartedWorkflow = new WorkflowEngine(timedStore, dispatcher, {
-      maxConcurrentTasks: 1,
-      models: testModels,
-      now: () => new Date(Date.now()).toISOString(),
-    });
+    const restartedWorkflow = new WorkflowEngine(
+      timedStore,
+      dispatcher,
+      {
+        maxConcurrentTasks: 1,
+        models: testModels,
+        now: () => new Date(Date.now()).toISOString(),
+      },
+      new TestRepositoryPathResolver(),
+    );
     const restartedRecovery = new RecoveryManager(
       timedStore,
       restartedWorkflow,
@@ -401,11 +423,16 @@ describe("RecoveryManager", () => {
       },
     });
     const dispatcher = new RecordingTaskDispatcher();
-    const restartedWorkflow = new WorkflowEngine(timedStore, dispatcher, {
-      maxConcurrentTasks: 1,
-      models: testModels,
-      now: () => new Date(Date.now()).toISOString(),
-    });
+    const restartedWorkflow = new WorkflowEngine(
+      timedStore,
+      dispatcher,
+      {
+        maxConcurrentTasks: 1,
+        models: testModels,
+        now: () => new Date(Date.now()).toISOString(),
+      },
+      new TestRepositoryPathResolver(),
+    );
     const resumeScheduledTasks = vi.spyOn(
       restartedWorkflow,
       "resumeScheduledTasks",
@@ -484,11 +511,16 @@ describe("RecoveryManager", () => {
     const dispatcher = new RecordingTaskDispatcher();
     const restartedRecovery = new RecoveryManager(
       timedStore,
-      new WorkflowEngine(timedStore, dispatcher, {
-        maxConcurrentTasks: 1,
-        models: testModels,
-        now: () => new Date(Date.now()).toISOString(),
-      }),
+      new WorkflowEngine(
+        timedStore,
+        dispatcher,
+        {
+          maxConcurrentTasks: 1,
+          models: testModels,
+          now: () => new Date(Date.now()).toISOString(),
+        },
+        new TestRepositoryPathResolver(),
+      ),
       new StubNotifications(),
     );
     type RetryScheduler = {
@@ -570,6 +602,7 @@ describe("RecoveryManager", () => {
         models: testModels,
         now: () => new Date(Date.now()).toISOString(),
       },
+      new TestRepositoryPathResolver(),
     );
     let releaseScan!: () => void;
     let markScanStarted!: () => void;
@@ -656,11 +689,16 @@ describe("RecoveryManager", () => {
       },
     });
     const dispatcher = new RecordingTaskDispatcher();
-    const capacityWorkflow = new WorkflowEngine(timedStore, dispatcher, {
-      maxConcurrentTasks: 1,
-      models: testModels,
-      now: () => new Date(Date.now()).toISOString(),
-    });
+    const capacityWorkflow = new WorkflowEngine(
+      timedStore,
+      dispatcher,
+      {
+        maxConcurrentTasks: 1,
+        models: testModels,
+        now: () => new Date(Date.now()).toISOString(),
+      },
+      new TestRepositoryPathResolver(),
+    );
     const capacityRecovery = new RecoveryManager(
       timedStore,
       capacityWorkflow,
@@ -1805,6 +1843,7 @@ describe("RecoveryManager", () => {
         now: () => "2026-08-03T00:00:00.000Z",
         createId: (prefix) => `${prefix}_idle`,
       },
+      new TestRepositoryPathResolver(),
       projectExecutor,
     );
     await idleWorkflow.reconcile();
@@ -1866,6 +1905,7 @@ describe("RecoveryManager", () => {
       timedStore,
       new RecordingTaskDispatcher(),
       { maxConcurrentTasks: 4, models: testModels },
+      new TestRepositoryPathResolver(),
       projectExecutor,
     );
     const timedRecovery = new RecoveryManager(
@@ -1928,7 +1968,11 @@ describe("RecoveryManager", () => {
       .toEqual([
         expect.objectContaining({
           type: "work_completed",
-          evidence: { workspacePath: "/workspace/game/.worktrees/loop", candidateCommit: "abc123" },
+          evidence: {
+            repositoryPath: "/workspace/game",
+            workspacePath: "/workspace/game/.worktrees/loop",
+            candidateCommit: "abc123",
+          },
         }),
       ]);
   });
@@ -1983,6 +2027,7 @@ describe("RecoveryManager", () => {
       idleStore,
       new RecordingTaskDispatcher(),
       { maxConcurrentTasks: 4, models: testModels },
+      new TestRepositoryPathResolver(),
       projectExecutor,
     );
     await idleWorkflow.reconcile();

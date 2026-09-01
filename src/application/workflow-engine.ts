@@ -56,6 +56,7 @@ import {
 } from "./integration-lease.js";
 import { ProjectExecutionCoordinator } from "./project-execution-coordinator.js";
 import type { ProjectExecutor } from "./project-executor.js";
+import type { RepositoryPathResolver } from "./repository-path-resolver.js";
 import type { DispatchRequest, TaskDispatcher } from "./task-dispatcher.js";
 import {
   type CodexTurnFailure,
@@ -128,6 +129,7 @@ export class WorkflowEngine {
     private readonly store: ProjectStore,
     private readonly dispatcher: TaskDispatcher,
     private readonly options: WorkflowEngineOptions,
+    private readonly repositoryPaths: RepositoryPathResolver,
     projectExecutor?: ProjectExecutor,
     lifecycle?: LifecycleRecorder,
   ) {
@@ -442,11 +444,18 @@ export class WorkflowEngine {
     });
   }
 
-  ensureSemanticAtlasMaintenanceTask(projectId: string): Promise<Task> {
+  ensureSemanticAtlasMaintenanceTask(
+    projectId: string,
+    repositoryPath: string,
+  ): Promise<Task> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
+      const targetRepositoryPath = resolve(repositoryPath);
       const openTask = snapshot.tasks.find((task) =>
         task.origin?.kind === "semantic_atlas_maintenance" &&
+        resolve(
+          task.origin.repositoryPath ?? snapshot.project.repositoryPath,
+        ) === targetRepositoryPath &&
         !["done", "cancelled"].includes(task.status)
       );
       if (openTask) return openTask;
@@ -459,14 +468,17 @@ export class WorkflowEngine {
       const createdTasks = await this.store.addTasks(projectId, [{
         title: "维护业务地图",
         description:
-          "使用 $semantic-atlas-maintenance 处理当前仓库的可行动候选。" +
+          `使用 $semantic-atlas-maintenance 处理目标仓库 ${targetRepositoryPath} 的可行动候选。` +
           "工作阶段选择一个业务域并准备地图改动或证据结论，独立审查后在合入阶段记录维护结果。",
         acceptanceCriteria: [
-          "选择一个业务域并核实当前证据。",
+          "只在目标仓库中选择一个业务域并核实当前证据。",
           "地图改动至多涉及一个 owning YAML，并通过完整验证与独立审查。",
           "合入阶段收到 Semantic Atlas recorded 或 idempotent 回执后才能完成。",
         ],
-        origin: { kind: "semantic_atlas_maintenance" as const },
+        origin: {
+          kind: "semantic_atlas_maintenance" as const,
+          repositoryPath: targetRepositoryPath,
+        },
       }]);
       const createdTask = createdTasks[0]!;
       const currentProject = hasActiveProjectExecution(snapshot.project)
@@ -595,6 +607,13 @@ export class WorkflowEngine {
       validateTaskReport(found.task, report, this.now());
       validateBoundWorkReport(execution, activities, report);
 
+      const repositoryPath = await this.repositoryPathForReport(
+        found.task,
+        execution,
+        activities,
+        report,
+      );
+
       const activity = createTaskReportActivity({
         activityId: this.createId("activity"),
         projectId: found.project.id,
@@ -604,6 +623,7 @@ export class WorkflowEngine {
           ? { workActivityId: execution.workActivityId }
           : {}),
         ...(execution.threadId ? { threadId: execution.threadId } : {}),
+        ...(repositoryPath ? { repositoryPath } : {}),
         occurredAt: this.now(),
       });
       const task: Task = {
@@ -2181,6 +2201,38 @@ export class WorkflowEngine {
       "conversation_became_active",
     );
     return previousTask;
+  }
+
+  private async repositoryPathForReport(
+    task: Task,
+    execution: NonNullable<Task["currentExecution"]>,
+    activities: readonly TaskActivity[],
+    report: TaskReport,
+  ): Promise<string | undefined> {
+    const createsWork =
+      (execution.action === "work" && report.outcome === "completed") ||
+      (execution.action === "integrate" && report.outcome === "needs_review");
+    if (createsWork && report.workspacePath) {
+      const repositoryPath = await this.repositoryPaths.resolveWorkspaceRepository(
+        report.workspacePath,
+      );
+      const maintenanceRepository = task.origin?.repositoryPath;
+      if (
+        task.origin?.kind === "semantic_atlas_maintenance" &&
+        maintenanceRepository &&
+        resolve(repositoryPath) !== resolve(maintenanceRepository)
+      ) {
+        throw new InvalidTaskReportError(
+          `Semantic Atlas maintenance for ${maintenanceRepository} cannot report work from ${repositoryPath}`,
+        );
+      }
+      return repositoryPath;
+    }
+
+    const boundWork = execution.workActivityId
+      ? activities.find(({ id }) => id === execution.workActivityId)
+      : undefined;
+    return boundWork?.evidence?.repositoryPath ?? task.origin?.repositoryPath;
   }
 
   private async finalizeTaskReport(

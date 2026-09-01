@@ -29,6 +29,7 @@ export interface CreateTaskReportActivityInput {
   workActivityId?: string;
   threadId?: string;
   occurredAt: string;
+  repositoryPath?: string;
 }
 
 export interface CreateTaskLifecycleActivityInput {
@@ -77,8 +78,9 @@ export function createTaskReportActivity({
   workActivityId,
   threadId,
   occurredAt,
+  repositoryPath,
 }: CreateTaskReportActivityInput): TaskActivity {
-  const evidence = reportEvidence(report);
+  const evidence = reportEvidence(report, repositoryPath);
   const type = activityType(action, report.outcome);
   return {
     id: activityId,
@@ -142,7 +144,7 @@ export function taskReportFromActivity(activity: TaskActivity): TaskReport {
     reportOpportunityId: activity.reportOpportunityId,
     outcome: activity.outcome,
     summary: activity.summary,
-    ...activity.evidence,
+    ...reportFieldsFromEvidence(activity.evidence),
   };
 }
 
@@ -238,13 +240,32 @@ function lastWorkActivityId(
   return undefined;
 }
 
-function reportEvidence(report: TaskReport): TaskActivityEvidence | undefined {
-  const entries = reportEvidenceFields.flatMap((field) =>
+function reportEvidence(
+  report: TaskReport,
+  repositoryPath?: string,
+): TaskActivityEvidence | undefined {
+  const reportEntries = reportEvidenceFields.flatMap((field) =>
     report[field] === undefined ? [] : [[field, report[field]] as const],
   );
-  return entries.length > 0
-    ? (Object.fromEntries(entries) as TaskActivityEvidence)
+  const fields = Object.fromEntries(reportEntries) as TaskActivityEvidence;
+  const evidence = {
+    ...(repositoryPath ? { repositoryPath } : {}),
+    ...fields,
+  };
+  return Object.keys(evidence).length > 0
+    ? evidence
     : undefined;
+}
+
+function reportFieldsFromEvidence(
+  evidence: TaskActivityEvidence | undefined,
+): Partial<TaskReport> {
+  if (!evidence) return {};
+  return Object.fromEntries(
+    reportEvidenceFields.flatMap((field) =>
+      evidence[field] === undefined ? [] : [[field, evidence[field]] as const],
+    ),
+  ) as Partial<TaskReport>;
 }
 
 function activityType(

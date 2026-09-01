@@ -1,4 +1,5 @@
 import type { ProjectExecutor } from "../../src/application/project-executor.js";
+import type { RepositoryPathResolver } from "../../src/application/repository-path-resolver.js";
 import type {
   DispatchRequest,
   TaskConversationAttachment,
@@ -18,6 +19,16 @@ export function testModelRouting() {
     route: "primary" as const,
     retryCount: 0,
   };
+}
+
+export class TestRepositoryPathResolver implements RepositoryPathResolver {
+  async resolveWorkspaceRepository(workspacePath: string): Promise<string> {
+    const worktreeMarker = "/.worktrees/";
+    const markerIndex = workspacePath.indexOf(worktreeMarker);
+    return markerIndex === -1
+      ? workspacePath
+      : workspacePath.slice(0, markerIndex);
+  }
 }
 
 export class RecordingTaskDispatcher implements TaskDispatcher {

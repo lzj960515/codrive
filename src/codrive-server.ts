@@ -17,8 +17,9 @@ import { WorkflowEngine } from "./application/workflow-engine.js";
 import { CodexAppServerClient } from "./infrastructure/codex-app-server-client.js";
 import { CodriveLog } from "./infrastructure/codrive-log.js";
 import { ConfigStore, type CodriveConfig } from "./infrastructure/config-store.js";
-import { InstanceLock } from "./infrastructure/instance-lock.js";
 import { DetachedUpgradeLauncher } from "./infrastructure/detached-upgrade-launcher.js";
+import { GitRepositoryPathResolver } from "./infrastructure/git-repository-path-resolver.js";
+import { InstanceLock } from "./infrastructure/instance-lock.js";
 import {
   isManagedResourceInstallationComplete,
   ManagedResourceInstaller,
@@ -90,7 +91,7 @@ export class CodriveServer {
       this.activityBridge = new ExecutionActivityBridge({
         store,
       });
-      const dispatcher = new CodexTaskDispatcher(this.codex);
+      const dispatcher = new CodexTaskDispatcher(this.codex, this.configStore);
       const projectExecutor = new CodexProjectExecutor(this.codex);
       const lifecycle = new LifecycleRecorder(store, {
         onEvent: (event) => this.log!.event(event),
@@ -102,6 +103,7 @@ export class CodriveServer {
           maxConcurrentTasks: this.config.maxConcurrentTasks,
           models: this.config.models,
         },
+        new GitRepositoryPathResolver(),
         projectExecutor,
         lifecycle,
       );

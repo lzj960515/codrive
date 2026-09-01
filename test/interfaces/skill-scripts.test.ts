@@ -13,6 +13,7 @@ import { createHttpServer } from "../../src/interfaces/http/server.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  TestRepositoryPathResolver,
   testModelRouting,
 } from "../support/recording-executors.js";
 
@@ -50,6 +51,7 @@ describe("bundled Skill scripts", () => {
           fallback: "gpt-5.6-terra",
         },
       },
+      new TestRepositoryPathResolver(),
       new RecordingProjectExecutor(),
     );
     server = createHttpServer({

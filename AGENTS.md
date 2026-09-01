@@ -12,9 +12,9 @@ Codrive is a local, single-user orchestration service that connects filesystem-b
 - `SystemSettingsService` owns validated runtime concurrency plus global and project model configuration changes.
 - `SemanticAtlasMaintenanceCoordinator` consumes a persisted Integration only
   after its source task reaches `done`, asks Semantic Atlas only whether the
-  current project requires maintenance, and ensures one open ordinary
-  maintenance task per project. Semantic Atlas owns all candidate,
-  business-domain, and completion interpretation.
+  repository recorded by that Work delivery requires maintenance, and ensures
+  one open ordinary maintenance task per repository. Semantic Atlas owns all
+  candidate, business-domain, and completion interpretation.
 - `src/infrastructure` owns filesystem persistence, App Server transport, and managed Skill/Hook installation.
 - `src/interfaces` owns the HTTP API, authenticated Socket.IO board transport, CLI, and local board.
 - `skills` contains the product's installable Codex Skills.
@@ -41,9 +41,14 @@ The HTTP surface has five read boundaries: board projection, product detail, pro
 
 Semantic Atlas automatic maintenance is a global opt-in. Settings expose only
 installed or uninstalled plus the toggle; Codrive does not install, upgrade, or
-diagnose that product. Generated maintenance work uses the ordinary task
-lifecycle. Its own Integration completion follows the same event path and asks
-Semantic Atlas whether another maintenance task is required. See
+diagnose that product. When enabled, ordinary task turns explicitly load
+`$semantic-atlas`; that Skill alone decides whether the task changes business
+behavior and whether to query or record anything. Code-backed Work reports are
+resolved from their worktree to one persistent Git repository before the
+worktree can be removed. Generated maintenance work uses the ordinary task
+lifecycle and stays bound to that repository. Its own Integration completion
+follows the same event path and asks Semantic Atlas whether another maintenance
+task is required. See
 [Semantic Atlas automatic maintenance](./docs/architecture/semantic-atlas-maintenance.md).
 
 Socket.IO carries scoped invalidation signals, while HTTP remains authoritative for data. `BoardRealtimeGateway` authenticates the handshake, derives `project:<id>`, `task:<id>`, and `system` rooms from validated watch requests, and maps Store or system events to `project:changed`, `task:changed`, and `system:changed`. Archive and restore additionally emit `projects:changed` to authenticated connections so browsers reread only the default and archived project collections. Browser reconnects restore only the current watches and reread only those HTTP scopes.

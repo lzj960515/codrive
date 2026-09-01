@@ -31,6 +31,7 @@ import { createHttpServer } from "../../src/interfaces/http/server.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  TestRepositoryPathResolver,
   testModelRouting,
   testModels,
 } from "../support/recording-executors.js";
@@ -65,6 +66,7 @@ describe("HTTP API", () => {
       store,
       taskDispatcher,
       { maxConcurrentTasks: 2, models: testModels },
+      new TestRepositoryPathResolver(),
       new RecordingProjectExecutor(),
     );
     skillInstaller = new SkillInstaller(

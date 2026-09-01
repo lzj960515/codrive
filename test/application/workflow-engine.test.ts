@@ -18,6 +18,7 @@ import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  TestRepositoryPathResolver,
   testModelRouting,
 } from "../support/recording-executors.js";
 
@@ -55,6 +56,7 @@ beforeEach(async () => {
       now: () => now.toISOString(),
       createId: (prefix) => `${prefix}_${++id}`,
     },
+    new TestRepositoryPathResolver(),
     projectExecutor,
   );
   id = 0;
@@ -277,27 +279,147 @@ async function failCapacityAndStartRetry(taskId: string, delayMs: number) {
 }
 
 describe("WorkflowEngine", () => {
-  it("creates one open Semantic Atlas maintenance task in one planning revision", async () => {
+  it("creates and reuses Semantic Atlas maintenance by repository", async () => {
     const created = await registerProject(1);
 
     const maintenance = await workflow.ensureSemanticAtlasMaintenanceTask(
       created.project.id,
+      "/workspace/game/apps/api",
     );
-    const replay = await workflow.ensureSemanticAtlasMaintenanceTask(created.project.id);
+    const replay = await workflow.ensureSemanticAtlasMaintenanceTask(
+      created.project.id,
+      "/workspace/game/apps/api",
+    );
+    const otherRepository = await workflow.ensureSemanticAtlasMaintenanceTask(
+      created.project.id,
+      "/workspace/game/apps/web",
+    );
     const snapshot = (await store.getProject(created.project.id))!;
 
     expect(replay.id).toBe(maintenance.id);
+    expect(otherRepository.id).not.toBe(maintenance.id);
     expect(snapshot.tasks.filter(({ origin }) =>
       origin?.kind === "semantic_atlas_maintenance"
-    )).toHaveLength(1);
+    )).toHaveLength(2);
     expect(maintenance).toMatchObject({
       status: "backlog",
-      origin: { kind: "semantic_atlas_maintenance" },
+      origin: {
+        kind: "semantic_atlas_maintenance",
+        repositoryPath: "/workspace/game/apps/api",
+      },
     });
     expect(snapshot.project.planning).toMatchObject({
-      revision: 2,
+      revision: 3,
       changeReason: "system_work_added",
     });
+  });
+
+  it("persists the Work repository on its later Integration activity", async () => {
+    const resolvedWorkspaces: string[] = [];
+    workflow = new WorkflowEngine(
+      store,
+      taskDispatcher,
+      {
+        maxConcurrentTasks: 2,
+        models,
+        now: () => now.toISOString(),
+        createId: (prefix) => `${prefix}_${++id}`,
+      },
+      {
+        resolveWorkspaceRepository: async (workspacePath) => {
+          resolvedWorkspaces.push(workspacePath);
+          return "/workspace/game/apps/api";
+        },
+      },
+      projectExecutor,
+    );
+    const created = await registerProject(1);
+    const taskId = created.tasks[0]!.id;
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the API work",
+      taskIds: [taskId],
+    });
+    const execution = (await store.findTask(taskId))!.task.currentExecution!;
+    const workReport = {
+      taskId,
+      attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
+      outcome: "completed" as const,
+      summary: "Implemented the API change",
+      workspacePath: "/workspace/game/apps/api/.worktrees/task",
+      candidateCommit: "candidate_1",
+    };
+
+    await workflow.submitReport(workReport);
+    await workflow.submitReport(workReport);
+    await workflow.completeTurn(taskId, execution.attemptId, execution.turnId!);
+    await finishTaskExecution(taskId, {
+      outcome: "approved",
+      summary: "Approved",
+      reviewedMainCommit: "main_1",
+    });
+    await finishTaskExecution(taskId, {
+      outcome: "completed",
+      summary: "Integrated",
+      mergedCommit: "main_2",
+    });
+
+    const activities = await store.listTaskActivities(created.project.id, taskId);
+    expect(resolvedWorkspaces).toEqual([
+      "/workspace/game/apps/api/.worktrees/task",
+    ]);
+    expect(
+      activities.find(({ type }) => type === "work_completed")?.evidence,
+    ).toMatchObject({ repositoryPath: "/workspace/game/apps/api" });
+    expect(
+      activities.find(({ type }) => type === "integration_completed")?.evidence,
+    ).toMatchObject({ repositoryPath: "/workspace/game/apps/api" });
+  });
+
+  it("rejects maintenance work reported from a different repository", async () => {
+    workflow = new WorkflowEngine(
+      store,
+      taskDispatcher,
+      {
+        maxConcurrentTasks: 2,
+        models,
+        now: () => now.toISOString(),
+        createId: (prefix) => `${prefix}_${++id}`,
+      },
+      {
+        resolveWorkspaceRepository: async () => "/workspace/game/apps/web",
+      },
+      projectExecutor,
+    );
+    const created = await registerProject(1);
+    const maintenance = await workflow.ensureSemanticAtlasMaintenanceTask(
+      created.project.id,
+      "/workspace/game/apps/api",
+    );
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start maintenance",
+      taskIds: [maintenance.id],
+    });
+    const execution = (await store.findTask(maintenance.id))!.task
+      .currentExecution!;
+
+    await expect(workflow.submitReport({
+      taskId: maintenance.id,
+      attemptId: execution.attemptId,
+      reportOpportunityId: requiredReportOpportunity(execution),
+      outcome: "completed",
+      summary: "Changed the wrong repository",
+      workspacePath: "/workspace/game/apps/web/.worktrees/maintenance",
+      candidateCommit: "candidate_1",
+    })).rejects.toThrow(/cannot report work from/);
+
+    expect(
+      await store.listTaskActivities(created.project.id, maintenance.id),
+    ).toEqual([]);
   });
 
   it("persists a project thread before starting its turn", async () => {
@@ -346,6 +468,7 @@ describe("WorkflowEngine", () => {
         now: () => "2026-08-03T00:00:00.000Z",
         createId: (prefix) => `${prefix}_${++id}`,
       },
+      new TestRepositoryPathResolver(),
       projectExecutor,
     );
     const created = await registerProject(4);
@@ -373,6 +496,7 @@ describe("WorkflowEngine", () => {
         now: () => "2026-08-03T00:00:00.000Z",
         createId: (prefix) => `${prefix}_${++id}`,
       },
+      new TestRepositoryPathResolver(),
       projectExecutor,
     );
     const created = await registerProject(4);
@@ -962,6 +1086,7 @@ describe("WorkflowEngine", () => {
       store,
       perProjectDispatcher,
       { maxConcurrentTasks: 1, models },
+      new TestRepositoryPathResolver(),
       new RecordingProjectExecutor(),
     );
 
@@ -1022,6 +1147,7 @@ describe("WorkflowEngine", () => {
       capacityStore,
       capacityDispatcher,
       { maxConcurrentTasks: 2, models },
+      new TestRepositoryPathResolver(),
       capacityExecutor,
     );
     const planned = await capacityStore.createProject({
@@ -1111,6 +1237,7 @@ describe("WorkflowEngine", () => {
       priorityStore,
       priorityDispatcher,
       { maxConcurrentTasks: 1, models },
+      new TestRepositoryPathResolver(),
       new RecordingProjectExecutor(),
     );
     const project = await priorityStore.createProject({
@@ -1209,6 +1336,7 @@ describe("WorkflowEngine", () => {
       store,
       new RecordingTaskDispatcher(),
       { maxConcurrentTasks: 1, models },
+      new TestRepositoryPathResolver(),
       new RecordingProjectExecutor(),
     );
     await singleTaskWorkflow.reconcile();
@@ -1218,6 +1346,7 @@ describe("WorkflowEngine", () => {
       store,
       new RecordingTaskDispatcher(),
       { maxConcurrentTasks: 4, models },
+      new TestRepositoryPathResolver(),
       expandedExecutor,
     );
     await expandedWorkflow.reconcile();
@@ -1271,6 +1400,7 @@ describe("WorkflowEngine", () => {
       store,
       new RecordingTaskDispatcher(),
       { maxConcurrentTasks: 1, models },
+      new TestRepositoryPathResolver(),
       singleSlotExecutor,
     );
 

@@ -11,6 +11,7 @@ import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
+  TestRepositoryPathResolver,
   testModels,
 } from "../support/recording-executors.js";
 
@@ -35,6 +36,7 @@ describe("SystemSettingsService", () => {
       projectStore,
       taskDispatcher,
       { maxConcurrentTasks: 4, models: testModels },
+      new TestRepositoryPathResolver(),
       projectExecutor,
     );
     service = new SystemSettingsService(configStore, workflow, {
