@@ -2,7 +2,7 @@ schemaVersion: 1
 map:
   id: codrive
   title: Codrive
-  summary: Codrive's opt-in path from task-time business understanding to reviewed, repository-scoped Semantic Atlas maintenance.
+  summary: Codrive's independent opt-in controls for task-time business understanding and reviewed, repository-scoped Semantic Atlas maintenance.
 
 nodes:
   - id: codrive
@@ -18,7 +18,7 @@ nodes:
   - id: codrive.semantic-atlas-automatic-maintenance
     kind: capability
     name: Semantic Atlas automatic maintenance
-    summary: Lets opted-in task execution retain business-understanding candidates and reconcile them for the repository delivered by completed work.
+    summary: Lets current settings independently enable task-time business understanding and repository reconciliation after completed integrations.
     notes: Semantic Atlas owns candidate and business-domain interpretation; Codrive owns the opt-in, completed-task trigger, and ordinary task lifecycle.
     aliases:
       - Automatic business-map maintenance
@@ -30,7 +30,7 @@ nodes:
   - id: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration
     kind: scenario
     name: Reconcile business map after integration
-    summary: A completed repository-backed task triggers one repository-scoped candidate check and, when required, one ordinary reviewed maintenance task.
+    summary: Every completed repository-backed task, including maintenance, rechecks the current opt-in and open maintenance state before any candidate query or follow-up work.
     aliases:
       - Post-integration business-map maintenance
     anchors:
@@ -55,22 +55,34 @@ relations:
 flows:
   - id: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration-flow
     name: Reconcile business map after integration
-    summary: Opted-in task-time business understanding produces repository-scoped, independently reviewed map maintenance only when actionable candidates remain.
+    summary: Automatic maintenance evaluates the opt-in independently for ordinary task turns and completed Integrations, then repeats reviewed one-domain maintenance until no actionable repository candidate remains.
     scenario: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration
-    startsAt: automatic-maintenance-enabled
+    startsAt: task-business-understanding-enabled
     steps:
-      - id: automatic-maintenance-enabled
+      - id: task-business-understanding-enabled
         kind: decision
-        name: Is automatic maintenance enabled?
-        summary: The global opt-in governs task-time business understanding and post-integration reconciliation.
+        name: Is business understanding enabled for this task turn?
+        summary: The current global opt-in decides whether an ordinary task turn receives Semantic Atlas guidance.
       - id: run-task-with-business-context
         kind: action
         name: Run task with business context
         summary: Semantic Atlas decides whether the ordinary task needs business-map queries or observations while Codrive retains its normal lifecycle.
+      - id: run-task-without-business-context
+        kind: action
+        name: Run task without automatic business context
+        summary: The ordinary task continues its normal lifecycle without automatic Semantic Atlas guidance.
       - id: complete-repository-work
         kind: action
         name: Complete repository work
         summary: Reviewed work completes integration with the persistent Git repository identity resolved from its delivery.
+      - id: completed-integration-eligible
+        kind: decision
+        name: Is this completed Integration eligible for maintenance?
+        summary: Codrive re-reads the current opt-in and accepts only completions within its enabled period.
+      - id: repository-maintenance-open
+        kind: decision
+        name: Does this repository already have open maintenance?
+        summary: An existing repository-bound maintenance task covers new completed-Integration signals without a duplicate candidate query or task.
       - id: actionable-candidates-remain
         kind: decision
         name: Do actionable candidates remain?
@@ -78,33 +90,63 @@ flows:
       - id: ensure-maintenance-task
         kind: action
         name: Ensure repository maintenance
-        summary: Codrive reuses or creates at most one open maintenance task for that repository.
+        summary: Codrive creates one repository-bound maintenance task after confirming that none is already open.
+      - id: reconcile-one-business-domain
+        kind: action
+        name: Reconcile one business domain
+        summary: Maintenance Work classifies every selected origin and prepares one domain's map change or evidence-only conclusion.
       - id: review-maintenance-result
         kind: action
-        name: Review and integrate maintenance
-        summary: One domain's map candidate or evidence-only conclusion follows ordinary independent Review and Integration.
-      - id: maintenance-recorded
+        name: Independently review maintenance
+        summary: Independent Review verifies one domain's proposed map change or evidence-only conclusion before Integration.
+      - id: integrate-maintenance-result
+        kind: action
+        name: Integrate maintenance result
+        summary: Integration merges an approved map candidate or verifies the approved evidence-only result.
+      - id: record-maintenance-result
+        kind: action
+        name: Record maintenance result
+        summary: Semantic Atlas retains the reviewed classification and any integrated business-map change.
+      - id: complete-maintenance-task
+        kind: action
+        name: Complete maintenance task
+        summary: Completing the maintenance Integration makes its repository eligible for another current-state check.
+      - id: follow-up-maintenance-disabled
         kind: outcome
-        name: Maintenance result recorded
-        summary: Semantic Atlas retains the reviewed result, and later completion can recheck the repository for remaining candidates.
-      - id: maintenance-not-activated
+        name: Follow-up maintenance disabled
+        summary: The completed task remains complete without an automatic repository check because its Integration is outside the current enabled period.
+      - id: existing-maintenance-covers-repository
         kind: outcome
-        name: Automatic maintenance not activated
-        summary: The task continues without automatic Semantic Atlas business understanding or follow-up maintenance.
+        name: Existing maintenance covers repository
+        summary: The completed-Integration signal ends without another query or task while the repository's open maintenance continues.
       - id: maintenance-not-required
         kind: outcome
         name: No maintenance required
         summary: The repository has no actionable candidate, so Codrive creates no maintenance task.
     transitions:
-      - from: automatic-maintenance-enabled
+      - from: task-business-understanding-enabled
         when: enabled
         to: run-task-with-business-context
-      - from: automatic-maintenance-enabled
+      - from: task-business-understanding-enabled
         when: disabled
-        to: maintenance-not-activated
+        to: run-task-without-business-context
       - from: run-task-with-business-context
         to: complete-repository-work
+      - from: run-task-without-business-context
+        to: complete-repository-work
       - from: complete-repository-work
+        to: completed-integration-eligible
+      - from: completed-integration-eligible
+        when: eligible
+        to: repository-maintenance-open
+      - from: completed-integration-eligible
+        when: not eligible
+        to: follow-up-maintenance-disabled
+      - from: repository-maintenance-open
+        when: open
+        to: existing-maintenance-covers-repository
+      - from: repository-maintenance-open
+        when: none open
         to: actionable-candidates-remain
       - from: actionable-candidates-remain
         when: candidates remain
@@ -113,6 +155,14 @@ flows:
         when: no candidates
         to: maintenance-not-required
       - from: ensure-maintenance-task
+        to: reconcile-one-business-domain
+      - from: reconcile-one-business-domain
         to: review-maintenance-result
       - from: review-maintenance-result
-        to: maintenance-recorded
+        to: integrate-maintenance-result
+      - from: integrate-maintenance-result
+        to: record-maintenance-result
+      - from: record-maintenance-result
+        to: complete-maintenance-task
+      - from: complete-maintenance-task
+        to: completed-integration-eligible
