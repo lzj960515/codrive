@@ -371,9 +371,18 @@ export const boardStyles = `
   .current-activity-waiting { color: #84908a; font-weight: 600; }
   .current-activity-waiting .current-activity-marker { background: #aeb8b2; box-shadow: 0 0 0 4px rgba(112,130,120,.09); }
   .activity-section { margin-inline: 0; }
+  .activity-history { min-width: 0; max-width: 100%; }
+  .activity-history-reveal { display: flex; width: calc(100% - 24px); min-height: 40px; align-items: center; gap: 9px; margin: 0 0 13px 24px; padding: 9px 11px; color: #58645e; background: linear-gradient(135deg, #fbfcf9, #f4f7f3); border: 1px solid #d9dfda; border-radius: 10px; box-shadow: 0 3px 10px rgba(25,39,33,.035); cursor: pointer; text-align: left; }
+  .activity-history-reveal > span { display: grid; width: 20px; height: 20px; flex: none; place-items: center; color: #397960; background: #e8f1eb; border-radius: 6px; font: 900 11px/1 var(--condensed); }
+  .activity-history-reveal b { color: #44514b; font: 900 9px/1 var(--condensed); letter-spacing: .08em; }
+  .activity-history-reveal small { margin-left: auto; color: #8b948f; font: 800 8px/1 var(--condensed); letter-spacing: .06em; }
+  .activity-history-reveal:hover { color: #2e6f56; border-color: #b9c9bf; box-shadow: 0 5px 14px rgba(25,39,33,.06); }
+  .activity-history-reveal:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
   .activity-timeline { position: relative; display: grid; min-width: 0; max-width: 100%; gap: 14px; margin: 0; padding: 2px 0 2px 24px; list-style: none; }
   .activity-timeline::before { content: ""; position: absolute; top: 5px; bottom: 5px; left: 7px; width: 1px; background: linear-gradient(#cfd6d1, #e3e7e3 90%, transparent); }
   .activity-item { position: relative; min-width: 0; max-width: 100%; animation: column-arrive .28s both; }
+  .activity-item:focus { outline: none; }
+  .activity-item:focus-visible .activity-card { outline: 2px solid var(--signal); outline-offset: 2px; }
   .activity-node { position: absolute; z-index: 1; top: 17px; left: -21px; width: 9px; height: 9px; background: #fff; border: 2px solid #9ca9a2; border-radius: 50%; box-shadow: 0 0 0 4px var(--surface); }
   .activity-card { min-width: 0; max-width: 100%; overflow: hidden; background: #fbfcf9; border: 1px solid #dfe4df; border-radius: 13px; box-shadow: 0 5px 16px rgba(25,39,33,.045); }
   .activity-card header { display: flex; min-width: 0; justify-content: space-between; gap: 12px; align-items: center; padding: 11px 13px 9px; border-bottom: 1px solid #e7ebe7; }

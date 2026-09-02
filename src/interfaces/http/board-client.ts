@@ -1,6 +1,7 @@
 import { createRealtimeWatchCoordinator } from "./board-realtime-client.js";
 import { createExecutionActivityRenderer } from "./execution-activity-renderer.js";
 import { createSystemUpdateRenderer } from "./system-update-renderer.js";
+import { createTaskActivityHistoryWindow } from "./task-activity-history.js";
 import {
   moveProjectInOrder,
   projectOrderStorageKey,
@@ -16,6 +17,7 @@ export function renderBoardClient(accessToken: string): string {
   const watchCoordinator = createRealtimeWatchCoordinator.toString();
   const activityRenderer = createExecutionActivityRenderer.toString();
   const systemUpdateRenderer = createSystemUpdateRenderer.toString();
+  const taskActivityHistoryWindow = createTaskActivityHistoryWindow.toString();
   const reorderProjects = moveProjectInOrder.toString();
   const reconcileProjects = reconcileProjectOrder.toString();
   const orderTerminalTasks = sortTerminalTasks.toString();
@@ -72,6 +74,7 @@ export function renderBoardClient(accessToken: string): string {
     let projectListRefreshQueue = Promise.resolve();
     let projectReadRevision = 0;
     let taskReadRevision = 0;
+    let shouldScrollTaskDetailToLatest = false;
     const terminalTaskSort = { done: null, cancelled: null };
     const socket = io({ auth: { token: TOKEN }, autoConnect: false });
     const createWatchCoordinator = ${watchCoordinator};
@@ -99,6 +102,8 @@ export function renderBoardClient(accessToken: string): string {
       formatTime,
       escapeHtml
     });
+    const createTaskActivityHistoryWindow = ${taskActivityHistoryWindow};
+    const taskActivityHistory = createTaskActivityHistoryWindow();
 
     async function api(path, options = {}) {
       const response = await fetch(path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
@@ -583,6 +588,8 @@ export function renderBoardClient(accessToken: string): string {
 
     async function openTask(taskId) {
       if (!taskId) return;
+      taskActivityHistory.open(taskId);
+      shouldScrollTaskDetailToLatest = true;
       selectedTaskId = taskId;
       taskDetail = null;
       currentActivity = null;
@@ -965,6 +972,8 @@ export function renderBoardClient(accessToken: string): string {
 
     function clearTaskDetail() {
       const hadSelectedTask = Boolean(selectedTaskId);
+      taskActivityHistory.close();
+      shouldScrollTaskDetailToLatest = false;
       selectedTaskId = null;
       taskDetail = null;
       currentActivity = null;
@@ -1008,9 +1017,7 @@ export function renderBoardClient(accessToken: string): string {
             '<div id="current-execution-activity" class="current-execution-activity" role="status" aria-live="polite" aria-atomic="true"></div>'+
           '</section>'
         : '';
-      const activityTimeline = activities.length
-        ? '<ol class="activity-timeline">'+activities.map((activity, index, all) => activityCard(activity, index, all, currentDecisionRequest?.id)).join("")+'</ol>'
-        : '<div class="activity-empty"><b>尚无进展记录</b><span>节点完成汇报后会按时间出现在这里。</span></div>';
+      const activityTimeline = renderActivityHistory(task.id, activities, currentDecisionRequest?.id);
       const controls = [
         task.status === "blocked" && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry>重试</button>' : ''
       ].filter(Boolean).join("");
@@ -1027,7 +1034,11 @@ export function renderBoardClient(accessToken: string): string {
             (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd>'+(task.modelRouting.circuitBreaker ? '<dt>主模型熔断</dt><dd>'+escapeHtml(label(task.modelRouting.circuitBreaker.state))+(task.modelRouting.circuitBreaker.primaryProbeAt ? ' · '+escapeHtml(formatTime(task.modelRouting.circuitBreaker.primaryProbeAt)) : '')+'</dd>' : '')+'<dt>容量重试</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+
             '<dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
         '</div>';
-      host.querySelector("[data-latest-activity]")?.scrollIntoView({ block: "end", inline: "nearest" });
+      if (shouldScrollTaskDetailToLatest) {
+        host.querySelector("[data-latest-activity]")?.scrollIntoView({ block: "end", inline: "nearest" });
+        shouldScrollTaskDetailToLatest = false;
+      }
+      bindActivityHistory(host, task.id, activities, currentDecisionRequest?.id);
       renderCurrentActivity();
       document.getElementById("close-detail").onclick = closeDetail;
       const copyTaskId = host.querySelector("[data-copy-task-id]");
@@ -1065,6 +1076,43 @@ export function renderBoardClient(accessToken: string): string {
       });
     }
 
+    function renderActivityHistory(taskId, activities, currentDecisionActivityId) {
+      const history = taskActivityHistory.view(taskId, activities);
+      if (!activities.length) {
+        return '<div class="activity-empty"><b>尚无进展记录</b><span>节点完成汇报后会按时间出现在这里。</span></div>';
+      }
+      const reveal = history.hiddenCount
+        ? '<button class="activity-history-reveal" type="button" data-reveal-activities aria-controls="task-activity-timeline" aria-label="查看更早进展，还有 '+history.hiddenCount+' 条未显示"><span aria-hidden="true">↑</span><b>查看更早进展</b><small>'+history.hiddenCount+' 条未显示</small></button>'
+        : '';
+      return '<div class="activity-history" data-activity-history>'+reveal+'<ol id="task-activity-timeline" class="activity-timeline" aria-label="任务进展记录">'+history.visibleActivities.map((activity, index, all) => activityCard(activity, index, all, currentDecisionActivityId)).join("")+'</ol></div>';
+    }
+
+    function bindActivityHistory(host, taskId, activities, currentDecisionActivityId) {
+      const reveal = host.querySelector("[data-reveal-activities]");
+      reveal?.addEventListener("click", () => {
+        const detailContent = document.getElementById("task-detail-content");
+        const timeline = host.querySelector("#task-activity-timeline");
+        const previousScrollTop = detailContent.scrollTop;
+        const currentVisibleCount = timeline.children.length;
+        const history = taskActivityHistory.revealEarlier(taskId, activities);
+        const revealedCount = history.visibleActivities.length - currentVisibleCount;
+        const revealedActivities = history.visibleActivities.slice(0, revealedCount);
+        const revealedMarkup = revealedActivities.map((activity, index) =>
+          activityCard(activity, index, history.visibleActivities, currentDecisionActivityId)
+        ).join("");
+        timeline.insertAdjacentHTML("afterbegin", revealedMarkup);
+        detailContent.scrollTop = previousScrollTop;
+        if (history.hiddenCount) {
+          reveal.setAttribute("aria-label", "查看更早进展，还有 "+history.hiddenCount+" 条未显示");
+          reveal.querySelector("small").textContent = history.hiddenCount+" 条未显示";
+          reveal.focus({ preventScroll: true });
+        } else {
+          reveal.remove();
+          timeline.firstElementChild?.focus({ preventScroll: true });
+        }
+      });
+    }
+
     function activityCard(activity, index, all, currentDecisionActivityId) {
       const evidence = activity.evidence || {};
       const isCurrentDecision = activity.id === currentDecisionActivityId;
@@ -1091,7 +1139,7 @@ export function renderBoardClient(accessToken: string): string {
       const conversation = activity.threadId
         ? '<a class="activity-conversation-link" data-activity-thread href="codex://threads/'+escapeHtml(activity.threadId)+'">打开对话 <span>↗</span></a>'
         : '';
-      return '<li class="activity-item '+escapeHtml(activity.type)+'" '+(index === all.length - 1 ? 'data-latest-activity' : '')+'><span class="activity-node"></span><article class="activity-card"><header><b>'+escapeHtml(label(activity.type))+'</b><div class="activity-card-actions">'+conversation+'<time>'+escapeHtml(formatTime(activity.occurredAt))+'</time></div></header><p class="activity-summary">'+escapeHtml(activity.summary)+'</p>'+(hasEvidence ? '<div class="activity-evidence">'+question+findings+tests+git+'</div>' : '')+'</article></li>';
+      return '<li class="activity-item '+escapeHtml(activity.type)+'" data-activity-entry="'+escapeHtml(activity.id)+'" tabindex="-1" '+(index === all.length - 1 ? 'data-latest-activity' : '')+'><span class="activity-node"></span><article class="activity-card"><header><b>'+escapeHtml(label(activity.type))+'</b><div class="activity-card-actions">'+conversation+'<time>'+escapeHtml(formatTime(activity.occurredAt))+'</time></div></header><p class="activity-summary">'+escapeHtml(activity.summary)+'</p>'+(hasEvidence ? '<div class="activity-evidence">'+question+findings+tests+git+'</div>' : '')+'</article></li>';
     }
 
     function setCurrentActivity(taskId, activity) {
@@ -1130,6 +1178,8 @@ export function renderBoardClient(accessToken: string): string {
 
     function closeDetail() {
       const viewState = captureViewState();
+      taskActivityHistory.close();
+      shouldScrollTaskDetailToLatest = false;
       selectedTaskId = null;
       taskDetail = null;
       currentActivity = null;

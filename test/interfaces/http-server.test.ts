@@ -2139,6 +2139,12 @@ describe("HTTP API", () => {
     expect(page.body).toContain('id="mobile-projects"');
     expect(page.body).toContain("验收标准");
     expect(page.body).toContain("进展记录");
+    expect(page.body).toContain("查看更早进展");
+    expect(page.body).toContain("data-reveal-activities");
+    expect(page.body).toContain(
+      'aria-controls="task-activity-timeline"',
+    );
+    expect(page.body).toContain("taskActivityHistory.revealEarlier");
     expect(page.body).toContain("请求决定");
     expect(page.body).toContain("提前继续");
     expect(page.body).toContain("重新安排");
