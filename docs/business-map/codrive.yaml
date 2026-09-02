@@ -1,0 +1,118 @@
+schemaVersion: 1
+map:
+  id: codrive
+  title: Codrive
+  summary: Codrive's opt-in path from task-time business understanding to reviewed, repository-scoped Semantic Atlas maintenance.
+
+nodes:
+  - id: codrive
+    kind: domain
+    name: Codrive
+    summary: Coordinates local product tasks and opt-in, reviewed business-map maintenance after their completed integrations.
+    aliases: []
+    anchors:
+      - kind: document
+        value: AGENTS.md
+        description: Current product and task-lifecycle contract.
+
+  - id: codrive.semantic-atlas-automatic-maintenance
+    kind: capability
+    name: Semantic Atlas automatic maintenance
+    summary: Lets opted-in task execution retain business-understanding candidates and reconcile them for the repository delivered by completed work.
+    notes: Semantic Atlas owns candidate and business-domain interpretation; Codrive owns the opt-in, completed-task trigger, and ordinary task lifecycle.
+    aliases:
+      - Automatic business-map maintenance
+    anchors:
+      - kind: document
+        value: docs/architecture/semantic-atlas-maintenance.md
+        description: Product boundary, lifecycle, and recovery contract for automatic maintenance.
+
+  - id: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration
+    kind: scenario
+    name: Reconcile business map after integration
+    summary: A completed repository-backed task triggers one repository-scoped candidate check and, when required, one ordinary reviewed maintenance task.
+    aliases:
+      - Post-integration business-map maintenance
+    anchors:
+      - kind: symbol
+        value: CodexTaskDispatcher.taskPrompt
+        description: Activates the appropriate Semantic Atlas guidance for task turns.
+      - kind: symbol
+        value: SemanticAtlasMaintenanceCoordinator.handleCompletedIntegration
+        description: Starts repository-scoped reconciliation after task completion.
+
+relations:
+  - from: codrive.semantic-atlas-automatic-maintenance
+    type: part_of
+    to: codrive
+    summary: Automatic business-map maintenance is a Codrive orchestration capability.
+
+  - from: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration
+    type: part_of
+    to: codrive.semantic-atlas-automatic-maintenance
+    summary: Post-integration reconciliation is the capability's repository-scoped maintenance scenario.
+
+flows:
+  - id: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration-flow
+    name: Reconcile business map after integration
+    summary: Opted-in task-time business understanding produces repository-scoped, independently reviewed map maintenance only when actionable candidates remain.
+    scenario: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration
+    startsAt: automatic-maintenance-enabled
+    steps:
+      - id: automatic-maintenance-enabled
+        kind: decision
+        name: Is automatic maintenance enabled?
+        summary: The global opt-in governs task-time business understanding and post-integration reconciliation.
+      - id: run-task-with-business-context
+        kind: action
+        name: Run task with business context
+        summary: Semantic Atlas decides whether the ordinary task needs business-map queries or observations while Codrive retains its normal lifecycle.
+      - id: complete-repository-work
+        kind: action
+        name: Complete repository work
+        summary: Reviewed work completes integration with the persistent Git repository identity resolved from its delivery.
+      - id: actionable-candidates-remain
+        kind: decision
+        name: Do actionable candidates remain?
+        summary: Semantic Atlas decides whether the delivered repository currently requires maintenance.
+      - id: ensure-maintenance-task
+        kind: action
+        name: Ensure repository maintenance
+        summary: Codrive reuses or creates at most one open maintenance task for that repository.
+      - id: review-maintenance-result
+        kind: action
+        name: Review and integrate maintenance
+        summary: One domain's map candidate or evidence-only conclusion follows ordinary independent Review and Integration.
+      - id: maintenance-recorded
+        kind: outcome
+        name: Maintenance result recorded
+        summary: Semantic Atlas retains the reviewed result, and later completion can recheck the repository for remaining candidates.
+      - id: maintenance-not-activated
+        kind: outcome
+        name: Automatic maintenance not activated
+        summary: The task continues without automatic Semantic Atlas business understanding or follow-up maintenance.
+      - id: maintenance-not-required
+        kind: outcome
+        name: No maintenance required
+        summary: The repository has no actionable candidate, so Codrive creates no maintenance task.
+    transitions:
+      - from: automatic-maintenance-enabled
+        when: enabled
+        to: run-task-with-business-context
+      - from: automatic-maintenance-enabled
+        when: disabled
+        to: maintenance-not-activated
+      - from: run-task-with-business-context
+        to: complete-repository-work
+      - from: complete-repository-work
+        to: actionable-candidates-remain
+      - from: actionable-candidates-remain
+        when: candidates remain
+        to: ensure-maintenance-task
+      - from: actionable-candidates-remain
+        when: no candidates
+        to: maintenance-not-required
+      - from: ensure-maintenance-task
+        to: review-maintenance-result
+      - from: review-maintenance-result
+        to: maintenance-recorded
