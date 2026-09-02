@@ -12,10 +12,15 @@ interface TaskDispatchConfigReader {
   }>;
 }
 
+export interface TaskDispatchSkillAvailability {
+  readonly codeReviewSkillAvailable: boolean;
+}
+
 export class CodexTaskDispatcher implements TaskDispatcher {
   constructor(
     private readonly codex: CodexGateway,
     private readonly config: TaskDispatchConfigReader,
+    private readonly skillAvailability: TaskDispatchSkillAvailability,
   ) {}
 
   async attachConversation(
@@ -24,16 +29,22 @@ export class CodexTaskDispatcher implements TaskDispatcher {
     const cwd = conversationDirectory(request);
     const existingThreadId = conversationThreadId(request);
     if (existingThreadId) {
-      await this.codex.resumeThread(existingThreadId, cwd);
+      await this.resumeThread(request, existingThreadId);
       return { threadId: existingThreadId, disposition: "resumed" };
     }
 
-    const threadId = await this.codex.startThread(cwd, request.task.title);
+    const threadId = await this.codex.startThread(
+      cwd,
+      conversationTitle(request),
+    );
     return { threadId, disposition: "created" };
   }
 
   async resumeThread(request: DispatchRequest, threadId: string): Promise<void> {
     await this.codex.resumeThread(threadId, conversationDirectory(request));
+    if (isReviewConversation(request)) {
+      await this.codex.setThreadName(threadId, conversationTitle(request));
+    }
   }
 
   async startTurn(
@@ -92,16 +103,27 @@ export class CodexTaskDispatcher implements TaskDispatcher {
     const instruction = scheduledResume
       ? `请使用 $codrive-task 重新读取任务 ${request.task.id} 的当前上下文并继续原阶段`
       : `请使用 $codrive-task 处理任务 ${request.task.id} 的当前阶段`;
+    const codeReviewAvailable =
+      isReviewConversation(request) &&
+      this.skillAvailability.codeReviewSkillAvailable;
     if (request.task.origin?.kind === "semantic_atlas_maintenance") {
-      return `${instruction}，并加载 $semantic-atlas-maintenance 处理该维护任务。`;
+      return codeReviewAvailable
+        ? `${instruction}，并加载 $code-review 执行独立审查；` +
+            "同时加载 $semantic-atlas-maintenance 处理该维护任务。"
+        : `${instruction}，并加载 $semantic-atlas-maintenance 处理该维护任务。`;
     }
 
     const config = await this.config.read();
     if (!(config.semanticAtlas?.automaticMaintenance ?? false)) {
-      return `${instruction}。`;
+      return codeReviewAvailable
+        ? `${instruction}，并加载 $code-review 执行独立审查。`
+        : `${instruction}。`;
     }
-    return `${instruction}，并加载 $semantic-atlas；` +
-      "由该 Skill 根据任务内容决定是否执行业务理解与记录。";
+    return codeReviewAvailable
+      ? `${instruction}，并加载 $code-review 执行独立审查；` +
+          "同时加载 $semantic-atlas，由该 Skill 根据任务内容决定是否执行业务理解与记录。"
+      : `${instruction}，并加载 $semantic-atlas；` +
+          "由该 Skill 根据任务内容决定是否执行业务理解与记录。";
   }
 
   private async startWhenConversationIsIdle(
@@ -121,10 +143,19 @@ export class CodexTaskDispatcher implements TaskDispatcher {
 }
 
 function conversationThreadId(request: DispatchRequest): string | undefined {
-  const action = request.task.currentExecution?.action;
-  return action === "review"
+  return isReviewConversation(request)
     ? request.activity.conversations.reviewThreadId
     : request.activity.conversations.workThreadId;
+}
+
+function conversationTitle(request: DispatchRequest): string {
+  return isReviewConversation(request)
+    ? `[review] ${request.task.title}`
+    : request.task.title;
+}
+
+function isReviewConversation(request: DispatchRequest): boolean {
+  return request.task.currentExecution?.action === "review";
 }
 
 function conversationDirectory({ project }: DispatchRequest): string {

@@ -20,6 +20,10 @@ class RecordingGateway implements CodexGateway {
     this.calls.push({ method: "resumeThread", args: [threadId, cwd] });
   }
 
+  async setThreadName(threadId: string, name: string): Promise<void> {
+    this.calls.push({ method: "setThreadName", args: [threadId, name] });
+  }
+
   async startTurn(
     threadId: string,
     cwd: string,
@@ -42,6 +46,9 @@ class RecordingGateway implements CodexGateway {
   }
   async listModels(): Promise<[]> {
     return [];
+  }
+  async hasSkill(): Promise<boolean> {
+    return false;
   }
 }
 

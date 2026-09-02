@@ -81,7 +81,7 @@ The same in-memory bridge keeps a Hook `lastSeen` window for the exact task exec
 
 1. **Plan.** Codex turns a product goal into tasks and selects the next work from the latest product and repository facts.
 2. **Work.** Each selected task runs in its own persistent Codex conversation. Code work uses an isolated Git worktree; releases, migrations, and verification can produce a reviewable result without a commit.
-3. **Review.** The first Review starts an independent conversation, and later rounds continue it. Findings return to the work conversation for an evidence-based next result.
+3. **Review.** The first Review starts an independent conversation named `[review] <task title>`, and later rounds continue it. Codrive checks once at startup for an enabled `code-review` Skill and keeps that result in memory for the process lifetime. When available at startup, initial, resumed, and scheduled-resume Review turns explicitly load `$code-review`; later Skill changes take effect after Codrive restarts. Findings return to the work conversation for an evidence-based next result.
 4. **Integrate.** The original task conversation merges a code-backed result or verifies a no-code result, then explicitly completes the task, requests more work, or sends a changed candidate back to Review. Each repository still has one integration lease.
 
 Codrive persists lifecycle state and enforces scheduling boundaries; Codex handles the work that requires judgment. Projects have independent concurrency limits, and planning runs again when its facts change rather than whenever a slot happens to become free.
@@ -104,7 +104,7 @@ Waiting and recovery are part of the same workflow. A task can pause until a spe
 | --- | --- |
 | Work | One persistent Codex conversation per task for code, release, migration, verification, and Review feedback |
 | Integration | Continues the work conversation and decides whether the whole task is complete |
-| Review | Uses one independent persistent review conversation per task |
+| Review | Uses one `[review]`-prefixed independent persistent conversation per task and loads the startup-detected `$code-review` Skill |
 | Task selection | Uses temporary conversations that stay out of the recent-task list |
 
 Task details link each execution and activity to its source conversation. They also show blockers, scheduled continuation, decision requests, test evidence, review findings, and Git results in one chronological timeline.

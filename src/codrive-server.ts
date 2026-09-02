@@ -88,10 +88,18 @@ export class CodriveServer {
         onStderr: (text) => this.log!.write("codex", text),
       });
       await this.codex.start();
+      const codeReviewSkillAvailable = await this.detectCodeReviewSkill(
+        this.codex,
+        this.config.stateDirectory,
+      );
       this.activityBridge = new ExecutionActivityBridge({
         store,
       });
-      const dispatcher = new CodexTaskDispatcher(this.codex, this.configStore);
+      const dispatcher = new CodexTaskDispatcher(
+        this.codex,
+        this.configStore,
+        { codeReviewSkillAvailable },
+      );
       const projectExecutor = new CodexProjectExecutor(this.codex);
       const lifecycle = new LifecycleRecorder(store, {
         onEvent: (event) => this.log!.event(event),
@@ -233,5 +241,22 @@ export class CodriveServer {
     this.log?.info("Codrive stopped");
     this.log?.close();
     this.log = null;
+  }
+
+  private async detectCodeReviewSkill(
+    codex: CodexAppServerClient,
+    cwd: string,
+  ): Promise<boolean> {
+    try {
+      return await codex.hasSkill(cwd, "code-review");
+    } catch (error) {
+      this.log?.error(
+        "skills",
+        `Unable to detect code-review Skill: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
   }
 }

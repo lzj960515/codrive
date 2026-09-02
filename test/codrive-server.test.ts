@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CodriveServer } from "../src/codrive-server.js";
+import { PackageVersionCheckScheduler } from "../src/application/package-version-check-scheduler.js";
 import { RecoveryManager } from "../src/application/recovery-manager.js";
+import { SemanticAtlasMaintenanceCoordinator } from "../src/application/semantic-atlas-maintenance-coordinator.js";
 import { CodexAppServerClient } from "../src/infrastructure/codex-app-server-client.js";
 import { ManagedResourceInstaller } from "../src/infrastructure/managed-resource-installer.js";
 
@@ -80,5 +82,56 @@ describe("CodriveServer startup readiness", () => {
     expect(appServerStart).not.toHaveBeenCalled();
     expect(recoveryStart).not.toHaveBeenCalled();
     await expect(readFile(markerPath, "utf8")).resolves.toBe(marker);
+  });
+
+  it("captures code-review availability once during server startup", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-startup-"));
+    vi.spyOn(ManagedResourceInstaller.prototype, "getStatus").mockResolvedValue({
+      state: "current",
+      bundledVersion: "0.11.1",
+      managedSkillCount: 4,
+      managedHookCount: 1,
+      conflictPaths: [],
+      skills: {
+        state: "current",
+        bundledVersion: "0.11.1",
+        installedVersion: "0.11.1",
+        managedSkillCount: 4,
+        conflictPaths: [],
+      },
+      hook: {
+        state: "current",
+        bundledVersion: "0.11.1",
+        installedVersion: "0.11.1",
+        managedHookCount: 1,
+        conflictPaths: [],
+      },
+    });
+    vi.spyOn(CodexAppServerClient.prototype, "start").mockResolvedValue();
+    const hasSkill = vi
+      .spyOn(CodexAppServerClient.prototype, "hasSkill")
+      .mockResolvedValue(true);
+    vi.spyOn(CodexAppServerClient.prototype, "stop").mockResolvedValue();
+    vi.spyOn(RecoveryManager.prototype, "start").mockResolvedValue();
+    vi.spyOn(RecoveryManager.prototype, "stop").mockImplementation(() => undefined);
+    vi.spyOn(
+      SemanticAtlasMaintenanceCoordinator.prototype,
+      "start",
+    ).mockResolvedValue();
+    vi.spyOn(
+      SemanticAtlasMaintenanceCoordinator.prototype,
+      "stop",
+    ).mockResolvedValue();
+    vi.spyOn(PackageVersionCheckScheduler.prototype, "start").mockResolvedValue();
+
+    const server = new CodriveServer(stateDirectory);
+    try {
+      await server.start();
+    } finally {
+      await server.stop();
+    }
+
+    expect(hasSkill).toHaveBeenCalledTimes(1);
+    expect(hasSkill).toHaveBeenCalledWith(stateDirectory, "code-review");
   });
 });

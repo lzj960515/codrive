@@ -1,5 +1,16 @@
 # Documentation log
 
+## 2026-09-02
+
+- Named new and resumed independent Review conversations
+  `[review] <task title>` so they remain distinguishable from each task's Work
+  conversation, including tasks created before this behavior.
+- Queried App Server once at Codrive startup and retained the enabled
+  `code-review` result as an in-memory process-lifetime capability snapshot.
+- Loaded `$code-review` for initial, resumed, and scheduled Review turns from
+  that snapshot, preserved ordinary Review when startup detection is absent or
+  fails, and composed it with existing Semantic Atlas task guidance.
+
 ## 2026-09-01
 
 - Added optimistic backlog task-definition updates through the unified command

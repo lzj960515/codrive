@@ -19,6 +19,10 @@ class RecordingGateway implements CodexGateway {
     this.calls.push({ method: "resumeThread", args: [threadId, cwd] });
   }
 
+  async setThreadName(threadId: string, name: string): Promise<void> {
+    this.calls.push({ method: "setThreadName", args: [threadId, name] });
+  }
+
   async startTurn(
     threadId: string,
     cwd: string,
@@ -43,6 +47,11 @@ class RecordingGateway implements CodexGateway {
 
   async listModels(): Promise<[]> {
     return [];
+  }
+
+  async hasSkill(cwd: string, skillName: string): Promise<boolean> {
+    this.calls.push({ method: "hasSkill", args: [cwd, skillName] });
+    return false;
   }
 
   async isThreadActive(): Promise<boolean> {
@@ -118,12 +127,20 @@ function request(currentTask: Task, activity = {}) {
   };
 }
 
-function createDispatcher(gateway: CodexGateway, semanticAtlas = false) {
-  return new CodexTaskDispatcher(gateway, {
-    read: async () => semanticAtlas
-      ? { semanticAtlas: { automaticMaintenance: true } }
-      : {},
-  });
+function createDispatcher(
+  gateway: CodexGateway,
+  semanticAtlas = false,
+  codeReviewSkillAvailable = false,
+) {
+  return new CodexTaskDispatcher(
+    gateway,
+    {
+      read: async () => semanticAtlas
+        ? { semanticAtlas: { automaticMaintenance: true } }
+        : {},
+    },
+    { codeReviewSkillAvailable },
+  );
 }
 
 describe("CodexTaskDispatcher", () => {
@@ -150,6 +167,49 @@ describe("CodexTaskDispatcher", () => {
           "thread_1",
           "/workspace/game",
           "请使用 $codrive-task 处理任务 task_1 的当前阶段，并加载 $semantic-atlas；由该 Skill 根据任务内容决定是否执行业务理解与记录。",
+          "gpt-5.6-sol",
+        ],
+      },
+    ]);
+  });
+
+  it("labels review conversations and loads the available code-review Skill", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = createDispatcher(gateway, true, true);
+    const reviewing = task({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        attemptId: "review_1",
+        reportOpportunityId: "report_opportunity_review_1",
+        action: "review",
+        status: "pending",
+        startedAt: timestamp,
+        modelRouting: modelRouting(),
+      },
+    });
+    const currentRequest = request(reviewing, {
+      workThreadId: "development_thread",
+    });
+
+    const conversation = await dispatcher.attachConversation(currentRequest);
+    const turn = await dispatcher.startTurn(currentRequest, conversation.threadId);
+
+    expect({ conversation, turn }).toEqual({
+      conversation: { threadId: "thread_1", disposition: "created" },
+      turn: { status: "started", turnId: "turn_1" },
+    });
+    expect(gateway.calls).toEqual([
+      {
+        method: "startThread",
+        args: [project.repositoryPath, "[review] Playable loop"],
+      },
+      {
+        method: "startTurn",
+        args: [
+          "thread_1",
+          project.repositoryPath,
+          "请使用 $codrive-task 处理任务 task_1 的当前阶段，并加载 $code-review 执行独立审查；同时加载 $semantic-atlas，由该 Skill 根据任务内容决定是否执行业务理解与记录。",
           "gpt-5.6-sol",
         ],
       },
@@ -210,7 +270,7 @@ describe("CodexTaskDispatcher", () => {
         method: "startThread",
         args: [
           project.repositoryPath,
-          "Playable loop",
+          "[review] Playable loop",
         ],
       },
       {
@@ -257,6 +317,10 @@ describe("CodexTaskDispatcher", () => {
         method: "resumeThread",
         args: ["review_thread", project.repositoryPath],
       },
+      {
+        method: "setThreadName",
+        args: ["review_thread", "[review] Playable loop"],
+      },
     ]);
   });
 
@@ -301,10 +365,14 @@ describe("CodexTaskDispatcher", () => {
         args: ["task_1_review", project.repositoryPath],
       },
       {
+        method: "setThreadName",
+        args: ["task_1_review", "[review] Playable loop"],
+      },
+      {
         method: "startThread",
         args: [
           project.repositoryPath,
-          "Second loop",
+          "[review] Second loop",
         ],
       },
     ]);
@@ -321,6 +389,41 @@ describe("CodexTaskDispatcher", () => {
       {
         method: "resumeThread",
         args: ["persisted_thread", project.repositoryPath],
+      },
+    ]);
+  });
+
+  it("restores the review title during interrupted execution recovery", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = createDispatcher(gateway);
+    const reviewing = task({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        attemptId: "review_recovery_1",
+        reportOpportunityId: "report_opportunity_review_recovery_1",
+        action: "review",
+        status: "running",
+        startedAt: timestamp,
+        modelRouting: modelRouting(),
+        threadId: "persisted_review_thread",
+        turnId: "interrupted_review_turn",
+      },
+    });
+
+    await dispatcher.resumeThread(
+      request(reviewing),
+      "persisted_review_thread",
+    );
+
+    expect(gateway.calls).toEqual([
+      {
+        method: "resumeThread",
+        args: ["persisted_review_thread", project.repositoryPath],
+      },
+      {
+        method: "setThreadName",
+        args: ["persisted_review_thread", "[review] Playable loop"],
       },
     ]);
   });
@@ -385,9 +488,25 @@ describe("CodexTaskDispatcher", () => {
     await dispatcher.startTurn(request(reviewing), "review_thread");
     await dispatcher.startTurn(request(followUpWork), "development_thread");
 
-    expect(gateway.calls.map((call) => call.args[2])).toEqual([
-      "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
-      "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+    expect(gateway.calls).toEqual([
+      {
+        method: "startTurn",
+        args: [
+          "review_thread",
+          project.repositoryPath,
+          "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+          "gpt-5.6-sol",
+        ],
+      },
+      {
+        method: "startTurn",
+        args: [
+          "development_thread",
+          project.repositoryPath,
+          "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
+          "gpt-5.6-sol",
+        ],
+      },
     ]);
   });
 
@@ -408,9 +527,47 @@ describe("CodexTaskDispatcher", () => {
     );
   });
 
+  it("combines code-review with specialized Semantic Atlas maintenance reviews", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = createDispatcher(gateway, true, true);
+    const maintenanceReview = task({
+      status: "reviewing",
+      requestedAction: "review",
+      currentExecution: {
+        attemptId: "review_maintenance_1",
+        reportOpportunityId: "report_opportunity_review_maintenance_1",
+        action: "review",
+        status: "pending",
+        startedAt: timestamp,
+        modelRouting: modelRouting(),
+      },
+      origin: {
+        kind: "semantic_atlas_maintenance",
+        repositoryPath: "/workspace/game/apps/api",
+      },
+    });
+
+    await dispatcher.startTurn(
+      request(maintenanceReview),
+      "maintenance_review_thread",
+    );
+
+    expect(gateway.calls).toEqual([
+      {
+        method: "startTurn",
+        args: [
+          "maintenance_review_thread",
+          project.repositoryPath,
+          "请使用 $codrive-task 处理任务 task_1 的当前阶段，并加载 $code-review 执行独立审查；同时加载 $semantic-atlas-maintenance 处理该维护任务。",
+          "gpt-5.6-sol",
+        ],
+      },
+    ]);
+  });
+
   it("uses the saved AI checkpoint and stable task identity for a scheduled resume", async () => {
     const gateway = new RecordingGateway();
-    const dispatcher = createDispatcher(gateway, true);
+    const dispatcher = createDispatcher(gateway, true, true);
     const reviewing = task({
       status: "reviewing",
       requestedAction: "review",
@@ -442,9 +599,11 @@ describe("CodexTaskDispatcher", () => {
         ],
       },
     ]);
-    expect(String(gateway.calls[0]!.args[2])).toContain("$codrive-task");
-    expect(String(gateway.calls[0]!.args[2])).toContain("$semantic-atlas");
-    expect(String(gateway.calls[0]!.args[2])).toContain(
+    const prompt = String(gateway.calls[0]!.args[2]);
+    expect(prompt).toContain("$codrive-task");
+    expect(prompt).toContain("$code-review");
+    expect(prompt).toContain("$semantic-atlas");
+    expect(prompt).toContain(
       "Inspect build 42, retain the current worktree, and continue the review.",
     );
   });

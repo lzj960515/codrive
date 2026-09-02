@@ -16,7 +16,8 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({ executable });
     try {
-      await client.startThread("/workspace/game", "Game task");
+      const threadId = await client.startThread("/workspace/game", "Game task");
+      await client.setThreadName(threadId, "[review] Game task");
     } finally {
       await client.stop();
     }
@@ -25,10 +26,14 @@ describe("CodexAppServerClient", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as { method: string; params: unknown });
-    expect(requests.find(({ method }) => method === "thread/name/set")?.params).toEqual({
-      threadId: "thread_1",
-      name: "Game task",
-    });
+    expect(
+      requests
+        .filter(({ method }) => method === "thread/name/set")
+        .map(({ params }) => params),
+    ).toEqual([
+      { threadId: "thread_1", name: "Game task" },
+      { threadId: "thread_1", name: "[review] Game task" },
+    ]);
   });
 
   it("grants autonomous turns the Git and local API access required by Codrive", async () => {
@@ -73,6 +78,12 @@ describe("CodexAppServerClient", () => {
           trustStatus: "trusted",
         },
       ]);
+      await expect(
+        client.hasSkill("/workspace/game", "code-review"),
+      ).resolves.toBe(true);
+      await expect(
+        client.hasSkill("/workspace/game", "disabled-review"),
+      ).resolves.toBe(false);
       await expect(client.isThreadActive(threadId)).resolves.toBe(true);
       await expect(client.readTurnStatus(threadId, turnId)).resolves.toBe(
         "inProgress",
@@ -151,6 +162,14 @@ describe("CodexAppServerClient", () => {
     expect(requests.find(({ method }) => method === "hooks/list")?.params).toEqual({
       cwds: ["/workspace/game"],
     });
+    expect(
+      requests
+        .filter(({ method }) => method === "skills/list")
+        .map(({ params }) => params),
+    ).toEqual([
+      { cwds: ["/workspace/game"] },
+      { cwds: ["/workspace/game"] },
+    ]);
     expect(interruptTurn?.params).toEqual({
       threadId: "thread_1",
       turnId: "turn_1",
@@ -198,6 +217,10 @@ lines.on("line", (line) => {
         nextCursor: "page_2"
       };
   if (request.method === "hooks/list") result = { data: [{ cwd: request.params.cwds[0], warnings: [], errors: [], hooks: [{ eventName: "preToolUse", command: "node \\\"/home/user/.codex/hooks/codrive/codrive-activity-hook.mjs\\\"", statusMessage: "Reporting Codrive activity", enabled: true, trustStatus: "trusted" }] }] };
+  if (request.method === "skills/list") result = { data: [{ cwd: request.params.cwds[0], errors: [], skills: [
+    { name: "code-review", description: "Review code", path: "/home/user/.agents/skills/code-review/SKILL.md", scope: "user", enabled: true },
+    { name: "disabled-review", description: "Disabled review", path: "/home/user/.agents/skills/disabled-review/SKILL.md", scope: "user", enabled: false }
+  ] }] };
   if (request.method === "thread/read") result = request.params.threadId === "thread_not_loaded"
     ? { thread: { status: { type: "notLoaded" }, turns: [
         { id: "turn_completed", status: "completed", startedAt: 1786841900, completedAt: 1786841950, items: [] }

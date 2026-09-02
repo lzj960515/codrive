@@ -11,6 +11,7 @@ import type {
 import type { InitializeResponse } from "./app-server-protocol/InitializeResponse.js";
 import type { ModelListResponse } from "./app-server-protocol/v2/ModelListResponse.js";
 import type { HooksListResponse } from "./app-server-protocol/v2/HooksListResponse.js";
+import type { SkillsListResponse } from "./app-server-protocol/v2/SkillsListResponse.js";
 import type { ThreadResumeResponse } from "./app-server-protocol/v2/ThreadResumeResponse.js";
 import type { ThreadReadResponse } from "./app-server-protocol/v2/ThreadReadResponse.js";
 import type { ThreadStartResponse } from "./app-server-protocol/v2/ThreadStartResponse.js";
@@ -109,10 +110,7 @@ export class CodexAppServerClient implements CodexGateway {
       ephemeral: options.ephemeral ?? false,
     });
     if (!options.ephemeral) {
-      await connection.request("thread/name/set", {
-        threadId: response.thread.id,
-        name: title,
-      });
+      await this.setThreadName(response.thread.id, title);
     }
     return response.thread.id;
   }
@@ -124,6 +122,14 @@ export class CodexAppServerClient implements CodexGateway {
       cwd,
       approvalPolicy: "never",
       sandbox: "danger-full-access",
+    });
+  }
+
+  async setThreadName(threadId: string, name: string): Promise<void> {
+    await this.start();
+    await this.requireConnection().request("thread/name/set", {
+      threadId,
+      name,
     });
   }
 
@@ -171,6 +177,17 @@ export class CodexAppServerClient implements CodexGateway {
       cursor = response.nextCursor ?? undefined;
     } while (cursor !== undefined);
     return models;
+  }
+
+  async hasSkill(cwd: string, skillName: string): Promise<boolean> {
+    await this.start();
+    const response = await this.requireConnection().request<SkillsListResponse>(
+      "skills/list",
+      { cwds: [cwd] },
+    );
+    return response.data.some(({ skills }) =>
+      skills.some(({ name, enabled }) => name === skillName && enabled),
+    );
   }
 
   async listHooks(cwds: string[]): Promise<RuntimeHookDefinition[]> {

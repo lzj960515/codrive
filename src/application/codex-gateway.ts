@@ -28,12 +28,14 @@ export interface CodexGateway {
     options?: { ephemeral?: boolean },
   ): Promise<string>;
   resumeThread(threadId: string, cwd: string): Promise<void>;
+  setThreadName(threadId: string, name: string): Promise<void>;
   startTurn(
     threadId: string,
     cwd: string,
     prompt: string,
     model: string,
   ): Promise<string>;
+  hasSkill(cwd: string, skillName: string): Promise<boolean>;
   listModels(): Promise<CodexModelOption[]>;
   interruptTurn(threadId: string, turnId: string): Promise<void>;
   isThreadActive(threadId: string): Promise<boolean>;
