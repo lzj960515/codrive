@@ -2,7 +2,7 @@ schemaVersion: 1
 map:
   id: codrive
   title: Codrive
-  summary: Codrive's independent opt-in controls for task-time business understanding and reviewed, repository-scoped Semantic Atlas maintenance.
+  summary: Codrive uses one global opt-in, read at ordinary task-turn dispatch and again when a completed Integration is consumed, to govern task-time business understanding and reviewed, repository-scoped Semantic Atlas maintenance.
 
 nodes:
   - id: codrive
@@ -18,7 +18,7 @@ nodes:
   - id: codrive.semantic-atlas-automatic-maintenance
     kind: capability
     name: Semantic Atlas automatic maintenance
-    summary: Lets current settings independently enable task-time business understanding and repository reconciliation after completed integrations.
+    summary: One global opt-in governs two lifecycle checks so ordinary task turns receive Semantic Atlas guidance when it is enabled at dispatch, while completed Integrations enter repository reconciliation only when they belong to its current enabled period.
     notes: Semantic Atlas owns candidate and business-domain interpretation; Codrive owns the opt-in, completed-task trigger, and ordinary task lifecycle.
     aliases:
       - Automatic business-map maintenance
@@ -30,7 +30,7 @@ nodes:
   - id: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration
     kind: scenario
     name: Reconcile business map after integration
-    summary: Every completed repository-backed task, including maintenance, rechecks the current opt-in and open maintenance state before any candidate query or follow-up work.
+    summary: Only a completed repository-backed Integration, including a maintenance Integration, within the global opt-in's current enabled period proceeds to the open-maintenance check and, when none is open, the actionable-candidate check.
     aliases:
       - Post-integration business-map maintenance
     anchors:
@@ -55,7 +55,7 @@ relations:
 flows:
   - id: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration-flow
     name: Reconcile business map after integration
-    summary: Automatic maintenance evaluates the opt-in independently for ordinary task turns and completed Integrations, then repeats reviewed one-domain maintenance until no actionable repository candidate remains.
+    summary: Codrive reads the same global opt-in at ordinary task-turn dispatch and again when each completed Integration is consumed; eligible completions ensure at most one reviewed, one-domain maintenance task, and each maintenance completion repeats the check only while the opt-in is enabled, stopping when it is disabled or no actionable repository candidate remains.
     scenario: codrive.semantic-atlas-automatic-maintenance.reconcile-after-integration
     startsAt: task-business-understanding-enabled
     steps:
