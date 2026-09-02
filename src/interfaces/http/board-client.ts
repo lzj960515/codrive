@@ -2,6 +2,7 @@ import { createRealtimeWatchCoordinator } from "./board-realtime-client.js";
 import { createExecutionActivityRenderer } from "./execution-activity-renderer.js";
 import { createSystemUpdateRenderer } from "./system-update-renderer.js";
 import { createTaskActivityHistoryWindow } from "./task-activity-history.js";
+import { createViewStateElementLocator } from "./view-state-element-locator.js";
 import {
   moveProjectInOrder,
   projectOrderStorageKey,
@@ -18,6 +19,7 @@ export function renderBoardClient(accessToken: string): string {
   const activityRenderer = createExecutionActivityRenderer.toString();
   const systemUpdateRenderer = createSystemUpdateRenderer.toString();
   const taskActivityHistoryWindow = createTaskActivityHistoryWindow.toString();
+  const viewStateElementLocator = createViewStateElementLocator.toString();
   const reorderProjects = moveProjectInOrder.toString();
   const reconcileProjects = reconcileProjectOrder.toString();
   const orderTerminalTasks = sortTerminalTasks.toString();
@@ -104,6 +106,11 @@ export function renderBoardClient(accessToken: string): string {
     });
     const createTaskActivityHistoryWindow = ${taskActivityHistoryWindow};
     const taskActivityHistory = createTaskActivityHistoryWindow();
+    const createViewStateElementLocator = ${viewStateElementLocator};
+    const viewStateElementLocator = createViewStateElementLocator({
+      findById: value => document.getElementById(value),
+      findByAttribute: attribute => Array.from(document.querySelectorAll("["+attribute+"]"))
+    });
 
     async function api(path, options = {}) {
       const response = await fetch(path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
@@ -424,26 +431,11 @@ export function renderBoardClient(accessToken: string): string {
 
     function elementIdentity(element) {
       if (!(element instanceof HTMLElement)) return null;
-      if (element.id) return { attribute: "id", value: element.id };
-      const attributes = [
-        "data-task", "data-project", "data-project-action", "data-copy-task-id",
-        "data-task-sort",
-        "data-retry", "data-continue-now", "data-reschedule", "data-reschedule-at",
-        "data-activity-thread", "name"
-      ];
-      for (const attribute of attributes) {
-        if (element.hasAttribute(attribute)) {
-          return { attribute, value: element.getAttribute(attribute) };
-        }
-      }
-      return null;
+      return viewStateElementLocator.identify(element);
     }
 
     function findIdentifiedElement(identity) {
-      if (!identity) return null;
-      if (identity.attribute === "id") return document.getElementById(identity.value);
-      return Array.from(document.querySelectorAll("["+identity.attribute+"]"))
-        .find(element => element.getAttribute(identity.attribute) === identity.value) || null;
+      return viewStateElementLocator.find(identity);
     }
 
     function readProjectOrder() {
