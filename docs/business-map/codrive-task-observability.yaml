@@ -1,0 +1,147 @@
+schemaVersion: 1
+map:
+  id: codrive.task-observability
+  title: Codrive task observability
+  summary: Codrive keeps each task's durable progress available as one chronological history while a temporary per-task viewing window focuses recent records and lets the user reveal earlier progress without losing context.
+
+nodes:
+  - id: codrive.task-observability
+    kind: domain
+    name: Codrive task observability
+    summary: Helps a user understand durable task progress without mixing the immutable history with the current conversation's temporary activity signal.
+    aliases: []
+    anchors:
+      - kind: document
+        value: AGENTS.md
+        description: Current contract separating durable task progress from temporary execution activity.
+
+  - id: codrive.task-observability.progress-history
+    kind: capability
+    name: Task progress history
+    summary: Presents the complete durable task history in chronological order while initially focusing the reader on recent progress.
+    aliases:
+      - Task activity history
+    anchors:
+      - kind: symbol
+        value: createTaskDetailView
+        description: Supplies the complete ordered task activity history to the task detail view.
+      - kind: symbol
+        value: createTaskActivityHistoryWindow
+        description: Maintains the temporary visible history window for the currently open task.
+
+  - id: codrive.task-observability.progress-history.browse
+    kind: scenario
+    name: Browse task progress history
+    summary: A user opens a task at its latest progress, reveals earlier records in small chronological batches, and can return to a fresh recent-progress view after leaving the task.
+    aliases:
+      - Reveal earlier task progress
+    anchors:
+      - kind: symbol
+        value: renderActivityHistory
+        description: Renders the visible chronological window and the remaining-history entry point.
+      - kind: file
+        value: test/interfaces/task-activity-history.test.ts
+        description: Verifies the initial window, progressive reveal, refresh, and reset behavior.
+
+relations:
+  - from: codrive.task-observability.progress-history
+    type: part_of
+    to: codrive.task-observability
+    summary: Durable progress history is the domain's task-detail reading capability.
+
+  - from: codrive.task-observability.progress-history.browse
+    type: part_of
+    to: codrive.task-observability.progress-history
+    summary: Browsing earlier progress is the capability's stable user scenario.
+
+flows:
+  - id: codrive.task-observability.progress-history.browse-flow
+    name: Browse task progress history
+    summary: Opening a task reads its complete oldest-to-newest progress history, shows at most the latest two records initially, reveals up to two earlier records per request, preserves the expanded view as the same task changes, and resets the temporary window after the user leaves the task.
+    scenario: codrive.task-observability.progress-history.browse
+    startsAt: open-task-history
+    steps:
+      - id: open-task-history
+        kind: action
+        name: Open task progress
+        summary: The task detail receives the complete durable progress history in chronological order and establishes a viewing window for this visit.
+      - id: progress-exists
+        kind: decision
+        name: Does the task have recorded progress?
+        summary: The presence of durable task activities decides whether the user sees a timeline or the empty-history state.
+      - id: no-progress-yet
+        kind: outcome
+        name: No progress recorded yet
+        summary: The detail explains that progress will appear after a task stage reports a result.
+      - id: history-exceeds-recent-focus
+        kind: decision
+        name: Does the history exceed two records?
+        summary: Short histories can be shown in full, while longer histories initially focus on the latest two records.
+      - id: show-complete-short-history
+        kind: outcome
+        name: Complete short history visible
+        summary: One or two records remain visible oldest to newest without an earlier-progress entry point.
+      - id: focus-latest-progress
+        kind: action
+        name: Focus on latest progress
+        summary: The latest two records appear in chronological order with an entry point showing that earlier progress remains.
+      - id: history-view-event
+        kind: decision
+        name: What happens while the history is open?
+        summary: The temporary window responds to a request for earlier progress, a refresh of the same task, or the user leaving the task.
+      - id: reveal-earlier-progress
+        kind: action
+        name: Reveal earlier progress
+        summary: Up to two immediately preceding records are added at the top without gaps, duplication, or reordering.
+      - id: earlier-progress-remains
+        kind: decision
+        name: Does earlier progress remain hidden?
+        summary: Remaining records keep the earlier-progress entry point available; exhausting the history removes it.
+      - id: preserve-expanded-history
+        kind: action
+        name: Preserve the expanded history
+        summary: A refresh or newly recorded progress for the same task keeps already revealed records visible and includes the new progress.
+      - id: complete-history-visible
+        kind: outcome
+        name: Complete history visible
+        summary: Every durable progress record is visible oldest to newest and the earlier-progress entry point is removed.
+      - id: reset-history-window
+        kind: outcome
+        name: History focus reset
+        summary: Switching tasks or closing the detail discards the temporary window so a later visit starts from recent progress again.
+    transitions:
+      - from: open-task-history
+        to: progress-exists
+      - from: progress-exists
+        when: no recorded progress
+        to: no-progress-yet
+      - from: progress-exists
+        when: progress exists
+        to: history-exceeds-recent-focus
+      - from: history-exceeds-recent-focus
+        when: one or two records
+        to: show-complete-short-history
+      - from: history-exceeds-recent-focus
+        when: more than two records
+        to: focus-latest-progress
+      - from: focus-latest-progress
+        to: history-view-event
+      - from: history-view-event
+        when: user requests earlier progress
+        to: reveal-earlier-progress
+      - from: history-view-event
+        when: same task refreshes or gains progress
+        to: preserve-expanded-history
+      - from: history-view-event
+        when: task changes or detail closes
+        to: reset-history-window
+      - from: reveal-earlier-progress
+        to: earlier-progress-remains
+      - from: earlier-progress-remains
+        when: earlier records remain
+        to: history-view-event
+      - from: earlier-progress-remains
+        when: all records are visible
+        to: complete-history-visible
+      - from: preserve-expanded-history
+        to: history-view-event
