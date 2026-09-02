@@ -224,6 +224,7 @@ export class RecoveryManager {
               preserveObservedTaskTurns &&
               execution.threadId &&
               execution.turnId &&
+              !execution.submittedActivityId &&
               !isDeferredTaskTurn(execution)
             ) {
               continue;

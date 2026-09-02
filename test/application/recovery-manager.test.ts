@@ -167,6 +167,44 @@ describe("RecoveryManager", () => {
     expect(taskDispatcher.resumed).toHaveLength(1);
   });
 
+  it("finalizes an approved review when its report-last turn is interrupted", async () => {
+    const work = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.submitReport({
+      taskId,
+      attemptId: work.attemptId,
+      reportOpportunityId: requiredReportOpportunity(work),
+      outcome: "completed",
+      summary: "Release evidence is ready for review.",
+    });
+    await workflow.completeTurn(taskId, work.attemptId, work.turnId!);
+
+    const review = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.submitReport({
+      taskId,
+      attemptId: review.attemptId,
+      reportOpportunityId: requiredReportOpportunity(review),
+      outcome: "approved",
+      summary: "The release evidence is approved.",
+    });
+
+    await recovery.handleNotification({
+      method: "turn/completed",
+      params: {
+        turn: { id: review.turnId, status: "interrupted", error: null },
+      },
+    });
+
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "integrating",
+      requestedAction: "integrate",
+      currentExecution: {
+        action: "integrate",
+        status: "running",
+      },
+    });
+    expect(taskDispatcher.resumed).toHaveLength(0);
+  });
+
   it("does not inspect or resume persisted executions for an archived project", async () => {
     const found = (await store.findTask(taskId))!;
     await store.saveProject({
@@ -1296,6 +1334,46 @@ describe("RecoveryManager", () => {
       expect(taskDispatcher.resumed).toHaveLength(1);
     } finally {
       silentRecovery.stop();
+      activityBridge.close();
+    }
+  });
+
+  it("finalizes a submitted review instead of deferring it during startup recovery", async () => {
+    const work = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.submitReport({
+      taskId,
+      attemptId: work.attemptId,
+      reportOpportunityId: requiredReportOpportunity(work),
+      outcome: "completed",
+      summary: "Release evidence is ready for review.",
+    });
+    await workflow.completeTurn(taskId, work.attemptId, work.turnId!);
+
+    const review = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.submitReport({
+      taskId,
+      attemptId: review.attemptId,
+      reportOpportunityId: requiredReportOpportunity(review),
+      outcome: "approved",
+      summary: "The release evidence is approved.",
+    });
+    notifications.turnStatus = "interrupted";
+    const activityBridge = new ExecutionActivityBridge({ store });
+    const startupRecovery = new RecoveryManager(store, workflow, notifications, {
+      activityBridge,
+    });
+
+    try {
+      await startupRecovery.start();
+
+      expect((await store.findTask(taskId))!.task).toMatchObject({
+        status: "integrating",
+        requestedAction: "integrate",
+        currentExecution: { action: "integrate", status: "running" },
+      });
+      expect(taskDispatcher.resumed).toHaveLength(0);
+    } finally {
+      startupRecovery.stop();
       activityBridge.close();
     }
   });

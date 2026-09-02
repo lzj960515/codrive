@@ -825,34 +825,7 @@ export class WorkflowEngine {
 
       const now = this.now();
       if (execution.submittedActivityId) {
-        const activity = await this.requireTaskActivity(
-          found.project.id,
-          taskId,
-          execution.submittedActivityId,
-        );
-        const taskWithCompletedTurn: Task = {
-          ...found.task,
-          currentExecution: { ...execution, turnCompletedAt: now },
-          updatedAt: now,
-        };
-        await this.recordEvent({
-          type: "turn.completed",
-          projectId: found.project.id,
-          taskId,
-          attemptId,
-          ...(execution.threadId ? { threadId: execution.threadId } : {}),
-          turnId,
-          before: taskLifecycleState(found.task),
-          after: taskLifecycleState(taskWithCompletedTurn),
-        });
-        const completed = await this.finalizeTaskReport(
-          found.project,
-          taskWithCompletedTurn,
-          taskReportFromActivity(activity),
-          activity.occurredAt,
-        );
-        await this.reconcileInternal();
-        return completed;
+        return this.finalizeSubmittedTaskReport(found.project, found.task);
       }
 
       const reportReminderCount = (execution.reportReminderCount ?? 0) + 1;
@@ -1079,6 +1052,10 @@ export class WorkflowEngine {
           "execution_changed",
         );
         return found.task;
+      }
+      if (execution?.submittedActivityId) {
+        // A report is the turn's final side effect, so its persisted result wins over a later interruption.
+        return this.finalizeSubmittedTaskReport(found.project, found.task);
       }
       if (
         !projectCanSchedule(found.project) ||
@@ -2373,6 +2350,45 @@ export class WorkflowEngine {
     if (completed.status === "done" && task.status !== "done") {
       await this.revisePlanning(project.id, "task_completed");
     }
+    return completed;
+  }
+
+  private async finalizeSubmittedTaskReport(
+    project: Project,
+    task: Task,
+  ): Promise<Task> {
+    const execution = task.currentExecution;
+    if (!execution?.submittedActivityId || !execution.turnId) {
+      throw new Error(`Task ${task.id} has no submitted report to finalize`);
+    }
+    const activity = await this.requireTaskActivity(
+      project.id,
+      task.id,
+      execution.submittedActivityId,
+    );
+    const now = this.now();
+    const taskWithCompletedTurn: Task = {
+      ...task,
+      currentExecution: { ...execution, turnCompletedAt: now },
+      updatedAt: now,
+    };
+    await this.recordEvent({
+      type: "turn.completed",
+      projectId: project.id,
+      taskId: task.id,
+      attemptId: execution.attemptId,
+      ...(execution.threadId ? { threadId: execution.threadId } : {}),
+      turnId: execution.turnId,
+      before: taskLifecycleState(task),
+      after: taskLifecycleState(taskWithCompletedTurn),
+    });
+    const completed = await this.finalizeTaskReport(
+      project,
+      taskWithCompletedTurn,
+      taskReportFromActivity(activity),
+      activity.occurredAt,
+    );
+    await this.reconcileInternal();
     return completed;
   }
 
