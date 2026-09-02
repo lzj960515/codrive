@@ -1,0 +1,45 @@
+schemaVersion: 1
+map:
+  id: codrive.task-orchestration
+  title: Codrive task orchestration
+  summary: Codrive gives each task an independent, persistent Review conversation and decides Review guidance from the code-review Skill availability captured at service startup.
+
+nodes:
+  - id: codrive.task-orchestration
+    kind: domain
+    name: Codrive task orchestration
+    summary: Coordinates each task's work, independent Review, and integration while preserving the conversation identity owned by each role.
+    aliases: []
+    anchors:
+      - kind: document
+        value: AGENTS.md
+        description: Current task lifecycle and independent Review conversation contract.
+
+  - id: codrive.task-orchestration.independent-review-conversation
+    kind: capability
+    name: Independent Review conversation
+    summary: Each task owns one persistent Review conversation separate from its work conversation; Codrive creates or restores it with the [review] task title and reuses it for later Review rounds.
+    notes: The code-review Skill availability captured once at service startup decides whether initial, resumed, and scheduled-resume Review turns explicitly load that Skill. A missing Skill or failed startup check keeps the ordinary codrive-task Review path, and later availability changes take effect after restart.
+    aliases:
+      - Persistent Review conversation
+    anchors:
+      - kind: symbol
+        value: CodexTaskDispatcher.attachConversation
+        description: Creates the task's Review conversation or resumes its persisted identity.
+      - kind: symbol
+        value: CodexTaskDispatcher.taskPrompt
+        description: Adds Review guidance according to the startup availability snapshot.
+      - kind: symbol
+        value: CodriveServer.detectCodeReviewSkill
+        description: Captures code-review Skill availability once while the service starts.
+      - kind: document
+        value: README.md
+        description: User-facing Review conversation and Skill-loading behavior.
+
+relations:
+  - from: codrive.task-orchestration.independent-review-conversation
+    type: part_of
+    to: codrive.task-orchestration
+    summary: The independent Review conversation is a stable task-orchestration capability.
+
+flows: []
