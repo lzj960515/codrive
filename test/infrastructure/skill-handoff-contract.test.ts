@@ -74,6 +74,15 @@ describe("non-execution Skill handoff", () => {
     expect(task).toContain("codrive-task.mjs report");
   });
 
+  it("selects stage-specific Skills after reading authoritative task context", async () => {
+    const task = await readFile(resolve("skills/codrive-task/SKILL.md"), "utf8");
+
+    expect(task).toContain("任务定义、验收标准、当前阶段和完整活动历史");
+    expect(task).toContain("开始执行当前阶段前");
+    expect(task).toContain("当前可用 Skill");
+    expect(task).toContain("与当前阶段实际工作匹配的 Skill");
+  });
+
   it("documents one explicit JSON argument contract across every managed Skill", async () => {
     for (const skillName of managedSkills) {
       const instructions = await readFile(

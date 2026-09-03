@@ -2,7 +2,7 @@ schemaVersion: 1
 map:
   id: codrive.task-orchestration
   title: Codrive task orchestration
-  summary: Codrive gives each task an independent, persistent Review conversation and decides Review guidance from the code-review Skill availability captured at service startup.
+  summary: Codrive gives each task an independent, persistent Review conversation, explicitly guides lifecycle-owned Skills, and lets codrive-task select content-specific Skills from authoritative stage context.
 
 nodes:
   - id: codrive.task-orchestration
@@ -36,10 +36,28 @@ nodes:
         value: README.md
         description: User-facing Review conversation and Skill-loading behavior.
 
+  - id: codrive.task-orchestration.stage-skill-selection
+    kind: capability
+    name: Stage-specific Skill selection
+    summary: Each task turn starts from a short codrive-task reference, then selects other available Skills after reading the current task definition, acceptance criteria, stage, complete activity history, and repository rules.
+    notes: Content-specific Skills match the actual work for the current stage. Tasks without another matching Skill continue through codrive-task, while lifecycle-owned requirements such as independent code-review remain explicit dispatch guidance.
+    aliases: []
+    anchors:
+      - kind: document
+        value: skills/codrive-task/SKILL.md
+        description: Defines the authoritative-context read and stage-specific Skill selection workflow.
+      - kind: document
+        value: README.md
+        description: Describes short task messages and context-driven Skill selection.
+
 relations:
   - from: codrive.task-orchestration.independent-review-conversation
     type: part_of
     to: codrive.task-orchestration
     summary: The independent Review conversation is a stable task-orchestration capability.
+  - from: codrive.task-orchestration.stage-skill-selection
+    type: part_of
+    to: codrive.task-orchestration
+    summary: Stage-specific Skill selection keeps content routing inside the task workflow while Codrive owns lifecycle guidance.
 
 flows: []

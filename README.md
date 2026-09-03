@@ -118,7 +118,7 @@ Task details link each execution and activity to its source conversation. They a
 | `$codrive-work` | Add confirmed work or revise an existing unstarted task |
 | `$codrive-control` | Inspect progress, revise backlog tasks, record product-document changes, and control execution |
 
-Skills read live context from Codrive, so task messages stay short and product state remains consistent across conversations.
+Skills read live context from Codrive, so task messages stay short and product state remains consistent across conversations. After `$codrive-task` reads the current task definition, acceptance criteria, stage, activity history, and repository rules, it loads other available Skills that match the actual work for that stage.
 
 ## Commands
 

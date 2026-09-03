@@ -1,5 +1,14 @@
 # Documentation log
 
+## 2026-09-03
+
+- Made `$codrive-task` select and load other available Skills only after reading
+  the authoritative task definition, acceptance criteria, current stage,
+  complete activity history, and repository rules.
+- Kept short task-reference messages and explicit lifecycle guidance such as
+  independent `$code-review`, while ordinary tasks without another matching
+  Skill continue through the existing workflow.
+
 ## 2026-09-02
 
 - Named new and resumed independent Review conversations

@@ -24,6 +24,8 @@ node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-
 
 读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities` 和仓库 `AGENTS.md`。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务定义、当前状态和已有证据恢复连续上下文。
 
+读取任务定义、验收标准、当前阶段和完整活动历史后，把这些内容与仓库规则共同作为本轮任务语义。开始执行当前阶段前，对照当前可用 Skill 的 `description`，加载与当前阶段实际工作匹配的 Skill，并遵循对应工作流。没有其他匹配 Skill 的任务继续按照本 Skill 完成。
+
 `productFacts.status` 为 `modified` 时，磁盘文件尚未完成 Codrive 通知；负责这次修改的对话先用 `$codrive-control` 记录文档变更。项目选择在状态恢复为 `current` 前保持停止。
 
 处理项目级任务选择时运行：
