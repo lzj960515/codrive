@@ -77,7 +77,7 @@ export function renderBoardClient(accessToken: string): string {
     let projectReadRevision = 0;
     let taskReadRevision = 0;
     let shouldScrollTaskDetailToLatest = false;
-    const terminalTaskSort = { done: null, cancelled: null };
+    const terminalTaskSort = { done: "desc", cancelled: null };
     const socket = io({ auth: { token: TOKEN }, autoConnect: false });
     const createWatchCoordinator = ${watchCoordinator};
     const projectOrderStorageKey = ${JSON.stringify(projectOrderStorageKey)};
