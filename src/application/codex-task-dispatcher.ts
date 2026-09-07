@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from "../domain/types.js";
 import type { CodexGateway } from "./codex-gateway.js";
 import type {
   DispatchRequest,
@@ -56,6 +57,7 @@ export class CodexTaskDispatcher implements TaskDispatcher {
       conversationDirectory(request),
       await this.taskPrompt(request),
       request.task.currentExecution!.modelRouting.model,
+      request.task.currentExecution!.modelRouting.reasoningEffort,
     );
   }
 
@@ -68,6 +70,7 @@ export class CodexTaskDispatcher implements TaskDispatcher {
       conversationDirectory(request),
       `请使用 $codrive-task 汇报任务 ${request.task.id} 的当前处理结果。`,
       request.task.currentExecution!.modelRouting.model,
+      request.task.currentExecution!.modelRouting.reasoningEffort,
     );
   }
 
@@ -86,6 +89,7 @@ export class CodexTaskDispatcher implements TaskDispatcher {
       conversationDirectory(request),
       prompt,
       request.task.currentExecution!.modelRouting.model,
+      request.task.currentExecution!.modelRouting.reasoningEffort,
     );
   }
 
@@ -131,13 +135,20 @@ export class CodexTaskDispatcher implements TaskDispatcher {
     cwd: string,
     prompt: string,
     model: string,
+    reasoningEffort?: ReasoningEffort,
   ): Promise<TurnDispatchResult> {
     if (await this.codex.isThreadActive(threadId)) {
       return { status: "conversation_active" };
     }
     return {
       status: "started",
-      turnId: await this.codex.startTurn(threadId, cwd, prompt, model),
+      turnId: await this.codex.startTurn(
+        threadId,
+        cwd,
+        prompt,
+        model,
+        reasoningEffort,
+      ),
     };
   }
 }

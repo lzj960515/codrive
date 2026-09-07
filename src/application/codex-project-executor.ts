@@ -24,6 +24,7 @@ export class CodexProjectExecutor implements ProjectExecutor {
       project.repositoryPath,
       `请使用 $codrive-task 为项目 ${project.id} 选择当前适合开始的任务。`,
       project.currentExecution!.modelRouting.model,
+      project.currentExecution!.modelRouting.reasoningEffort,
     );
   }
 
@@ -33,6 +34,7 @@ export class CodexProjectExecutor implements ProjectExecutor {
       project.repositoryPath,
       `请使用 $codrive-task 汇报项目 ${project.id} 的当前处理结果。`,
       project.currentExecution!.modelRouting.model,
+      project.currentExecution!.modelRouting.reasoningEffort,
     );
   }
 

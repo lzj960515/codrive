@@ -10,9 +10,13 @@ export type ProjectControlAction =
   | "archive"
   | "unarchive";
 
+export type ReasoningEffort = string;
+
 export interface ModelRoutingSettings {
   primary: string;
   fallback: string;
+  primaryReasoningEffort?: ReasoningEffort;
+  fallbackReasoningEffort?: ReasoningEffort;
 }
 
 export type ModelRoute = "primary" | "fallback";
@@ -34,6 +38,7 @@ export type ModelCircuitBreaker =
 
 export interface ExecutionModelRouting {
   model: string;
+  reasoningEffort?: ReasoningEffort;
   route: ModelRoute;
   retryCount: number;
   circuitBreaker?: ModelCircuitBreaker;

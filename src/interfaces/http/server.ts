@@ -149,6 +149,18 @@ const taskDefinitionChangesSchema = z
     "Task definition changes must include at least one field",
   );
 
+const modelRoutingSettingsSchema = z.object({
+  primary: z.string().min(1),
+  fallback: z.string().min(1),
+  primaryReasoningEffort: z.string().min(1).optional(),
+  fallbackReasoningEffort: z.string().min(1).optional(),
+}).transform(({ primary, fallback, primaryReasoningEffort, fallbackReasoningEffort }) => ({
+  primary,
+  fallback,
+  ...(primaryReasoningEffort === undefined ? {} : { primaryReasoningEffort }),
+  ...(fallbackReasoningEffort === undefined ? {} : { fallbackReasoningEffort }),
+}));
+
 const commandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("system.install_resources"),
@@ -168,10 +180,7 @@ const commandSchema = z.discriminatedUnion("type", [
     type: z.literal("system.update_settings"),
     payload: z.object({
       maxConcurrentTasks: z.number().int().positive(),
-      models: z.object({
-        primary: z.string().min(1),
-        fallback: z.string().min(1),
-      }),
+      models: modelRoutingSettingsSchema,
       semanticAtlasAutomaticMaintenance: z.boolean().optional(),
     }),
   }),
@@ -179,12 +188,7 @@ const commandSchema = z.discriminatedUnion("type", [
     type: z.literal("project.update_settings"),
     payload: z.object({
       projectId: z.string().min(1),
-      modelConfig: z
-        .object({
-          primary: z.string().min(1),
-          fallback: z.string().min(1),
-        })
-        .nullable(),
+      modelConfig: modelRoutingSettingsSchema.nullable(),
     }),
   }),
   z.object({ type: z.literal("project.register"), payload: projectInputSchema }),

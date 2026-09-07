@@ -347,7 +347,9 @@ export class WorkflowEngine {
       const current = snapshot.project.modelConfig ?? null;
       if (
         current?.primary === modelConfig?.primary &&
-        current?.fallback === modelConfig?.fallback
+        current?.fallback === modelConfig?.fallback &&
+        current?.primaryReasoningEffort === modelConfig?.primaryReasoningEffort &&
+        current?.fallbackReasoningEffort === modelConfig?.fallbackReasoningEffort
       ) {
         return snapshot.project;
       }
@@ -370,6 +372,8 @@ export class WorkflowEngine {
             ? {
                 primaryModel: modelConfig.primary,
                 fallbackModel: modelConfig.fallback,
+                primaryReasoningEffort: modelConfig.primaryReasoningEffort,
+                fallbackReasoningEffort: modelConfig.fallbackReasoningEffort,
               }
             : {}),
         },

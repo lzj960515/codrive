@@ -28,8 +28,12 @@ class RecordingGateway implements CodexGateway {
     cwd: string,
     prompt: string,
     model: string,
+    reasoningEffort?: string,
   ): Promise<string> {
-    this.calls.push({ method: "startTurn", args: [threadId, cwd, prompt, model] });
+    this.calls.push({
+      method: "startTurn",
+      args: [threadId, cwd, prompt, model, ...(reasoningEffort ? [reasoningEffort] : [])],
+    });
     return `turn_${++this.turn}`;
   }
 
@@ -144,6 +148,21 @@ function createDispatcher(
 }
 
 describe("CodexTaskDispatcher", () => {
+  it("preserves configured effort across initial, report and scheduled resume turns", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = createDispatcher(gateway);
+    const current = task();
+    current.currentExecution!.modelRouting.reasoningEffort = "ultra";
+    const currentRequest = request(current);
+
+    await dispatcher.startTurn(currentRequest, "thread_1");
+    await dispatcher.requestReport(currentRequest, "thread_1");
+    await dispatcher.resumeScheduledTurn(currentRequest, "thread_1", "Continue the original work.");
+
+    expect(gateway.calls.filter(({ method }) => method === "startTurn").map(({ args }) => args.slice(3)))
+      .toEqual(Array.from({ length: 3 }, () => ["gpt-5.6-sol", "ultra"]));
+  });
+
   it("loads Semantic Atlas for an ordinary task when automatic maintenance is enabled", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = createDispatcher(gateway, true);

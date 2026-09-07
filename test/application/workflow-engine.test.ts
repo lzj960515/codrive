@@ -279,6 +279,59 @@ async function failCapacityAndStartRetry(taskId: string, delayMs: number) {
 }
 
 describe("WorkflowEngine", () => {
+  it("applies global reasoning changes on the next planning retry while preserving the active turn", async () => {
+    await workflow.updateRuntimeSettings({ maxConcurrentTasks: 2, models: { ...models, primaryReasoningEffort: "high" } });
+    const created = await registerProject(1);
+    const active = created.project.currentExecution!;
+    expect(active.modelRouting.reasoningEffort).toBe("high");
+
+    await workflow.updateRuntimeSettings({ maxConcurrentTasks: 2, models: { ...models, primaryReasoningEffort: "ultra" } });
+    expect((await store.getProject(created.project.id))!.project.currentExecution!.modelRouting.reasoningEffort).toBe("high");
+
+    await workflow.failProjectTurn(created.project.id, active.attemptId, capacityFailure(active.turnId!));
+    now = new Date(now.getTime() + 5_000);
+    await workflow.retryScheduledExecutions(now);
+
+    expect((await store.getProject(created.project.id))!.project.currentExecution).toMatchObject({
+      attemptId: active.attemptId,
+      modelRouting: { reasoningEffort: "ultra", retryCount: 1 },
+    });
+    expect(projectExecutor.started.at(-1)?.project.currentExecution!.modelRouting.reasoningEffort).toBe("ultra");
+  });
+
+  it("persists effort-only project edits and uses them for scheduled task resumes", async () => {
+    const created = await registerProject(1);
+    await workflow.updateProjectModelConfig(created.project.id, { ...models, primaryReasoningEffort: "high", fallbackReasoningEffort: "low" });
+    await finishProjectExecution({ projectId: created.project.id, outcome: "selected", summary: "Start", taskIds: [created.tasks[0]!.id] });
+    const taskId = created.tasks[0]!.id;
+    const active = (await store.findTask(taskId))!.task.currentExecution!;
+    expect(active.modelRouting.reasoningEffort).toBe("high");
+
+    const updated = await workflow.updateProjectModelConfig(created.project.id, { ...models, primaryReasoningEffort: "ultra", fallbackReasoningEffort: "medium" });
+    expect(updated.modelConfig).toMatchObject({ primaryReasoningEffort: "ultra", fallbackReasoningEffort: "medium" });
+    expect((await store.findTask(taskId))!.task.currentExecution!.modelRouting.reasoningEffort).toBe("high");
+
+    await workflow.submitReport({
+      taskId,
+      attemptId: active.attemptId,
+      reportOpportunityId: requiredReportOpportunity(active),
+      outcome: "blocked",
+      summary: "Wait for the build",
+      resumeAt: "2026-08-03T01:00:00.000Z",
+      resumePrompt: "Inspect the build and continue.",
+    });
+    await workflow.completeTurn(taskId, active.attemptId, active.turnId!);
+    now = new Date("2026-08-03T01:00:00.000Z");
+    await workflow.resumeScheduledTasks(now);
+
+    expect(taskDispatcher.scheduledResumes.at(-1)?.task.currentExecution).toMatchObject({
+      attemptId: active.attemptId,
+      modelRouting: { reasoningEffort: "ultra" },
+    });
+    await workflow.updateProjectModelConfig(created.project.id, models);
+    expect((await store.getProject(created.project.id))!.project.modelConfig).toEqual(models);
+  });
+
   it("creates and reuses Semantic Atlas maintenance by repository", async () => {
     const created = await registerProject(1);
 

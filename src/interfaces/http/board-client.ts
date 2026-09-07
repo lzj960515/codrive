@@ -1,3 +1,4 @@
+import { createModelRoutingForm } from "./model-routing-form.js";
 import { createRealtimeWatchCoordinator } from "./board-realtime-client.js";
 import { createExecutionActivityRenderer } from "./execution-activity-renderer.js";
 import { createSystemUpdateRenderer } from "./system-update-renderer.js";
@@ -23,6 +24,7 @@ export function renderBoardClient(accessToken: string): string {
   const reorderProjects = moveProjectInOrder.toString();
   const reconcileProjects = reconcileProjectOrder.toString();
   const orderTerminalTasks = sortTerminalTasks.toString();
+  const modelRoutingForm = createModelRoutingForm.toString();
   return `<script>
     const TOKEN = ${token};
     const boardLayout = ${layout};
@@ -815,13 +817,13 @@ export function renderBoardClient(accessToken: string): string {
       '</button>';
     }
 
+    const createModelRoutingForm = ${modelRoutingForm};
+
     function renderSettings() {
       const host = document.getElementById("project");
       if (!systemSettings) return;
       const { settings, availableModels, semanticAtlas } = systemSettings;
-      const options = selected => availableModels.map(model =>
-        '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
-      ).join("");
+      const modelForm = createModelRoutingForm(availableModels, escapeHtml);
       host.innerHTML =
         '<div class="page-screen settings-screen">'+
           '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数、模型路由和产品集成。</p></div></header>'+
@@ -833,12 +835,16 @@ export function renderBoardClient(accessToken: string): string {
           '</section>'+
           '<form id="settings-form" class="settings-form settings-panel">'+
             '<label class="setting-field"><span><b>每个项目的并发任务数</b><small>每个项目独立计算容量，不同项目互不占用槽位。</small></span><input name="maxConcurrentTasks" type="number" min="1" max="32" required value="'+settings.maxConcurrentTasks+'"></label>'+
-            '<label class="setting-field"><span><b>默认模型</b><small>新任务、审查、合入与项目规划优先使用这个模型。</small></span><select name="primary">'+options(settings.models.primary)+'</select></label>'+
-            '<label class="setting-field"><span><b>备用模型</b><small>默认模型容量重试三次后切换到这里；冷却后会在下一次自然 turn 探测默认模型。</small></span><select name="fallback">'+options(settings.models.fallback)+'</select></label>'+
+            '<label class="setting-field"><span><b>默认模型</b><small>新任务、审查、合入与项目规划优先使用这个模型。</small></span><select name="primary">'+modelForm.modelOptions(settings.models.primary)+'</select></label>'+
+            '<label class="setting-field"><span><b>默认模型推理强度</b><small>按模型支持的强度选择；保留默认时由模型决定。</small></span><select name="primaryReasoningEffort">'+modelForm.reasoningOptions(settings.models.primary, settings.models.primaryReasoningEffort)+'</select></label>'+
+            '<label class="setting-field"><span><b>备用模型</b><small>默认模型容量重试三次后切换到这里；冷却后会在下一次自然 turn 探测默认模型。</small></span><select name="fallback">'+modelForm.modelOptions(settings.models.fallback)+'</select></label>'+
+            '<label class="setting-field"><span><b>备用模型推理强度</b><small>按模型支持的强度选择；保留默认时由模型决定。</small></span><select name="fallbackReasoningEffort">'+modelForm.reasoningOptions(settings.models.fallback, settings.models.fallbackReasoningEffort)+'</select></label>'+
             '<div class="settings-actions"><button class="primary-button" type="submit">保存并应用</button><span id="settings-status" role="status"></span></div>'+
           '</form>'+
         '</div>';
-      document.getElementById("settings-form").onsubmit = async event => {
+      const settingsForm = document.getElementById("settings-form");
+      modelForm.bind(settingsForm);
+      settingsForm.onsubmit = async event => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
         const status = document.getElementById("settings-status");
@@ -849,10 +855,7 @@ export function renderBoardClient(accessToken: string): string {
         try {
           systemSettings = await command("system.update_settings", {
             maxConcurrentTasks: Number(form.get("maxConcurrentTasks")),
-            models: {
-              primary: String(form.get("primary")),
-              fallback: String(form.get("fallback"))
-            },
+            models: modelForm.read(settingsForm),
             ...semanticAtlasSettings
           });
           status.textContent = "设置已保存并生效。";
@@ -871,9 +874,7 @@ export function renderBoardClient(accessToken: string): string {
       const { settings: scopedModels, globalModels, availableModels } = projectSettings;
       const inheritsGlobalModels = scopedModels.source === "global";
       const selectedModels = scopedModels.modelConfig || scopedModels.effectiveModels;
-      const modelOptions = selected => availableModels.map(model =>
-        '<option value="'+escapeHtml(model.id)+'" '+(model.id === selected ? 'selected' : '')+'>'+escapeHtml(model.displayName)+'</option>'
-      ).join("");
+      const modelForm = createModelRoutingForm(availableModels, escapeHtml);
       const cancellationReason = project.status === "cancelled" ? project.cancellation.reason : null;
       const archiveNotice = project.archivedAt
         ? '<section class="product-panel archive-notice"><div><span>已归档</span><h2>本地资料完整保留</h2><p>项目已从默认列表隐藏，PROJECT.md、任务、活动记录、执行证据和 Codex 对话引用仍保留。恢复后调度继续保持暂停。</p></div><time>'+escapeHtml(formatTime(project.archivedAt))+'</time></section>'
@@ -901,9 +902,11 @@ export function renderBoardClient(accessToken: string): string {
             '<aside class="product-rail">'+
               '<section class="product-panel compact project-model-panel"><div class="panel-heading"><span>项目模型</span><b>'+escapeHtml(inheritsGlobalModels ? "继承全局" : "项目专用")+'</b></div>'+
                 '<form id="project-model-form" class="project-model-form">'+
-                  '<label class="project-model-inherit"><input name="inheritGlobal" type="checkbox" '+(inheritsGlobalModels ? 'checked' : '')+'><span><b>继承全局设置</b><small>'+escapeHtml(globalModels.primary)+' / '+escapeHtml(globalModels.fallback)+'</small></span></label>'+
-                  '<label class="project-model-field"><span>默认模型</span><select name="primary" '+(inheritsGlobalModels ? 'disabled' : '')+'>'+modelOptions(selectedModels.primary)+'</select></label>'+
-                  '<label class="project-model-field"><span>备用模型</span><select name="fallback" '+(inheritsGlobalModels ? 'disabled' : '')+'>'+modelOptions(selectedModels.fallback)+'</select></label>'+
+                  '<label class="project-model-inherit"><input name="inheritGlobal" type="checkbox" '+(inheritsGlobalModels ? 'checked' : '')+'><span><b>继承全局设置</b><small>'+escapeHtml(modelForm.describe(globalModels, "primary"))+' / '+escapeHtml(modelForm.describe(globalModels, "fallback"))+'</small></span></label>'+
+                  '<label class="project-model-field"><span>默认模型</span><select name="primary" '+(inheritsGlobalModels ? 'disabled' : '')+'>'+modelForm.modelOptions(selectedModels.primary)+'</select></label>'+
+                  '<label class="project-model-field"><span>默认模型推理强度</span><select name="primaryReasoningEffort" '+(inheritsGlobalModels ? 'disabled' : '')+'>'+modelForm.reasoningOptions(selectedModels.primary, selectedModels.primaryReasoningEffort)+'</select></label>'+
+                  '<label class="project-model-field"><span>备用模型</span><select name="fallback" '+(inheritsGlobalModels ? 'disabled' : '')+'>'+modelForm.modelOptions(selectedModels.fallback)+'</select></label>'+
+                  '<label class="project-model-field"><span>备用模型推理强度</span><select name="fallbackReasoningEffort" '+(inheritsGlobalModels ? 'disabled' : '')+'>'+modelForm.reasoningOptions(selectedModels.fallback, selectedModels.fallbackReasoningEffort)+'</select></label>'+
                   '<div class="project-model-actions"><button class="primary-button" type="submit">保存模型</button><span id="project-model-status" role="status"></span></div>'+
                 '</form></section>'+
               '<section class="product-panel compact"><div class="panel-heading"><span>注册信息</span></div><dl class="detail-meta"><dt>项目 ID</dt><dd>'+escapeHtml(project.id)+'</dd><dt>仓库</dt><dd>'+escapeHtml(project.repositoryPath)+'</dd><dt>默认分支</dt><dd>'+escapeHtml(project.defaultBranch)+'</dd>'+(project.archivedAt ? '<dt>归档时间</dt><dd>'+escapeHtml(formatTime(project.archivedAt))+'</dd>' : '')+'<dt>注册时间</dt><dd>'+escapeHtml(formatTime(project.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(project.updatedAt))+'</dd></dl></section>'+
@@ -919,10 +922,8 @@ export function renderBoardClient(accessToken: string): string {
         void restoreArchivedProject(project.id, event.currentTarget);
       });
       const inheritGlobal = projectModelForm.elements.inheritGlobal;
-      const modelSelects = [projectModelForm.elements.primary, projectModelForm.elements.fallback];
-      inheritGlobal.onchange = () => {
-        for (const select of modelSelects) select.disabled = inheritGlobal.checked;
-      };
+      const modelControls = modelForm.bind(projectModelForm);
+      inheritGlobal.onchange = () => modelControls.setDisabled(inheritGlobal.checked);
       projectModelForm.onsubmit = async event => {
         event.preventDefault();
         const status = document.getElementById("project-model-status");
@@ -930,10 +931,7 @@ export function renderBoardClient(accessToken: string): string {
         try {
           const modelConfig = inheritGlobal.checked
             ? null
-            : {
-                primary: String(projectModelForm.elements.primary.value),
-                fallback: String(projectModelForm.elements.fallback.value)
-              };
+            : modelForm.read(projectModelForm);
           projectSettings = await command("project.update_settings", {
             projectId: project.id,
             modelConfig

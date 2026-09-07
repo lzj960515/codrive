@@ -53,20 +53,25 @@ describe("CodexAppServerClient", () => {
         threadId,
         "/workspace/game/.worktrees/task",
         "请使用 $codrive-task 处理任务 task_1 的当前阶段。",
-        "gpt-5.6-sol",
+        "gpt-6-astra",
+        "ultra",
       );
       await expect(client.listModels()).resolves.toEqual([
         {
-          id: "gpt-5.6-sol",
-          displayName: "GPT-5.6-Sol",
+          id: "gpt-6-astra",
+          displayName: "GPT-6-Astra",
           description: "Frontier coding model",
           isDefault: true,
+          supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Fast" }, { reasoningEffort: "ultra", description: "Deepest" }],
+          defaultReasoningEffort: "low",
         },
         {
           id: "gpt-5.6-terra",
           displayName: "GPT-5.6-Terra",
           description: "Balanced coding model",
           isDefault: false,
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }],
+          defaultReasoningEffort: "medium",
         },
       ]);
       await expect(client.listHooks(["/workspace/game"])).resolves.toEqual([
@@ -120,6 +125,7 @@ describe("CodexAppServerClient", () => {
           items: [],
         },
       });
+      await client.startTurn(threadId, "/workspace/game", "Continue with model default", "gpt-5.6-terra");
       await client.interruptTurn(threadId, turnId);
     } finally {
       await client.stop();
@@ -149,13 +155,18 @@ describe("CodexAppServerClient", () => {
     expect(startTurn?.params).toMatchObject({
       approvalPolicy: "never",
       sandboxPolicy: { type: "dangerFullAccess" },
-      model: "gpt-5.6-sol",
+      model: "gpt-6-astra",
+      effort: "ultra",
     });
+    expect(requests.filter(({ method }) => method === "turn/start").at(-1)?.params)
+      .toMatchObject({ model: "gpt-5.6-terra", effort: "medium" });
     expect(
       requests
         .filter(({ method }) => method === "model/list")
         .map(({ params }) => params),
     ).toEqual([
+      { includeHidden: false },
+      { includeHidden: false, cursor: "page_2" },
       { includeHidden: false },
       { includeHidden: false, cursor: "page_2" },
     ]);
@@ -206,13 +217,13 @@ lines.on("line", (line) => {
   if (request.method === "model/list") result = request.params.cursor === "page_2"
     ? {
         data: [
-          { id: "gpt-5.6-terra", model: "gpt-5.6-terra", displayName: "GPT-5.6-Terra", description: "Balanced coding model", hidden: false, isDefault: false }
+          { id: "gpt-5.6-terra", model: "gpt-5.6-terra", displayName: "GPT-5.6-Terra", description: "Balanced coding model", hidden: false, isDefault: false, supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }], defaultReasoningEffort: "medium" }
         ],
         nextCursor: null
       }
     : {
         data: [
-          { id: "gpt-5.6-sol", model: "gpt-5.6-sol", displayName: "GPT-5.6-Sol", description: "Frontier coding model", hidden: false, isDefault: true }
+          { id: "gpt-6-astra", model: "gpt-6-astra", displayName: "GPT-6-Astra", description: "Frontier coding model", hidden: false, isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Fast" }, { reasoningEffort: "ultra", description: "Deepest" }], defaultReasoningEffort: "low" }
         ],
         nextCursor: "page_2"
       };

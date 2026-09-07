@@ -20,6 +20,7 @@ import {
   JsonRpcConnection,
   type JsonRpcNotification,
 } from "./json-rpc-connection.js";
+import type { ReasoningEffort } from "../domain/types.js";
 import type { RuntimeHookDefinition } from "../domain/managed-hook.js";
 
 export interface CodexAppServerOptions {
@@ -138,8 +139,10 @@ export class CodexAppServerClient implements CodexGateway {
     cwd: string,
     prompt: string,
     model: string,
+    reasoningEffort?: ReasoningEffort,
   ): Promise<string> {
     await this.start();
+    const effort = reasoningEffort ?? await this.defaultReasoningEffort(model);
     const response = await this.requireConnection().request<TurnStartResponse>(
       "turn/start",
       {
@@ -148,6 +151,7 @@ export class CodexAppServerClient implements CodexGateway {
         approvalPolicy: "never",
         sandboxPolicy: { type: "dangerFullAccess" },
         model,
+        effort,
         input: [{ type: "text", text: prompt, text_elements: [] }],
       },
     );
@@ -167,16 +171,26 @@ export class CodexAppServerClient implements CodexGateway {
         },
       );
       models.push(
-        ...response.data.map(({ id, displayName, description, isDefault }) => ({
+        ...response.data.map(({ id, displayName, description, isDefault, supportedReasoningEfforts, defaultReasoningEffort }) => ({
           id,
           displayName,
           description,
           isDefault,
+          supportedReasoningEfforts,
+          defaultReasoningEffort,
         })),
       );
       cursor = response.nextCursor ?? undefined;
     } while (cursor !== undefined);
     return models;
+  }
+
+  private async defaultReasoningEffort(modelId: string): Promise<ReasoningEffort> {
+    // App Server 会沿用同一对话上一轮的强度；显式发送默认值才能撤销覆盖配置。
+    const models = await this.listModels();
+    const model = models.find(({ id }) => id === modelId);
+    if (!model) throw new Error(`Model ${modelId} is not available`);
+    return model.defaultReasoningEffort;
   }
 
   async hasSkill(cwd: string, skillName: string): Promise<boolean> {

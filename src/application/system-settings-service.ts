@@ -142,10 +142,19 @@ function validateModels(
       "Fallback model must differ from the primary model",
     );
   }
-  const availableModelIds = new Set(availableModels.map(({ id }) => id));
-  for (const model of [models.primary, models.fallback]) {
-    if (!availableModelIds.has(model)) {
-      throw new WorkflowConflictError(`Model ${model} is not available`);
+  for (const route of ["primary", "fallback"] as const) {
+    const modelId = models[route];
+    const model = availableModels.find(({ id }) => id === modelId);
+    if (!model) {
+      throw new WorkflowConflictError(`Model ${modelId} is not available`);
+    }
+    const effort = models[`${route}ReasoningEffort`];
+    if (effort !== undefined && !model.supportedReasoningEfforts.some(
+      ({ reasoningEffort }) => reasoningEffort === effort,
+    )) {
+      throw new WorkflowConflictError(
+        `Reasoning effort ${effort} is not supported by ${modelId}`,
+      );
     }
   }
 }

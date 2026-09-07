@@ -46,18 +46,24 @@ describe("SystemSettingsService", () => {
           displayName: "GPT-5.6-Sol",
           description: "Frontier coding model",
           isDefault: true,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }, { reasoningEffort: "ultra", description: "Deepest" }],
         },
         {
           id: "gpt-5.6-terra",
           displayName: "GPT-5.6-Terra",
           description: "Balanced coding model",
           isDefault: false,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }],
         },
         {
           id: "gpt-5.6-nano",
           displayName: "GPT-5.6-Nano",
           description: "Small coding model",
           isDefault: false,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }],
         },
       ],
     }, {
@@ -114,11 +120,15 @@ describe("SystemSettingsService", () => {
         displayName: "Sol",
         description: "Primary",
         isDefault: true,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }, { reasoningEffort: "ultra", description: "Deepest" }],
       }, {
         id: "gpt-5.6-terra",
         displayName: "Terra",
         description: "Fallback",
         isDefault: false,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }],
       }] },
       { readInstallation: async () => ({ installed: false }) },
       { settingsChanged: async () => undefined },
@@ -146,11 +156,15 @@ describe("SystemSettingsService", () => {
         displayName: "Sol",
         description: "Primary",
         isDefault: true,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }, { reasoningEffort: "ultra", description: "Deepest" }],
       }, {
         id: "gpt-5.6-terra",
         displayName: "Terra",
         description: "Fallback",
         isDefault: false,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }],
       }] },
       { readInstallation: async () => ({ installed: false }) },
     );
@@ -359,6 +373,35 @@ describe("SystemSettingsService", () => {
     expect((await projectStore.getProject(created.project.id))!.project).not.toHaveProperty(
       "modelConfig",
     );
+  });
+
+  it("rejects unsupported reasoning efforts before changing global or project settings", async () => {
+    const created = await workflow.registerProject({
+      name: "Reasoning", repositoryPath: "/workspace/reasoning", defaultBranch: "main",
+      productDocument: "# Reasoning\n", tasks: [],
+    });
+    const models = { ...testModels, fallbackReasoningEffort: "ultra" };
+    await expect(service.update({ maxConcurrentTasks: 4, models }))
+      .rejects.toThrow("Reasoning effort ultra is not supported by gpt-5.6-terra");
+    await expect(service.updateProject(created.project.id, { modelConfig: models }))
+      .rejects.toThrow("Reasoning effort ultra is not supported by gpt-5.6-terra");
+    expect((await configStore.read()).models).toEqual(testModels);
+    expect((await projectStore.getProject(created.project.id))!.project.modelConfig).toBeUndefined();
+  });
+
+  it("persists independent reasoning efforts and restores global inheritance", async () => {
+    const globalModels = { ...testModels, primaryReasoningEffort: "ultra", fallbackReasoningEffort: "medium" };
+    await service.update({ maxConcurrentTasks: 4, models: globalModels });
+    const created = await workflow.registerProject({
+      name: "Reasoning", repositoryPath: "/workspace/reasoning", defaultBranch: "main",
+      productDocument: "# Reasoning\n", tasks: [],
+    });
+    const modelConfig = { ...testModels, primaryReasoningEffort: "medium" };
+    await service.updateProject(created.project.id, { modelConfig });
+    expect((await configStore.read()).models).toEqual(globalModels);
+    expect((await projectStore.getProject(created.project.id))!.project.modelConfig).toEqual(modelConfig);
+    await service.updateProject(created.project.id, { modelConfig: null });
+    expect((await service.readProject(created.project.id)).settings.effectiveModels).toEqual(globalModels);
   });
 
   it("rejects unavailable or identical model routes before saving", async () => {

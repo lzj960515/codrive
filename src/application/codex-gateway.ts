@@ -1,3 +1,5 @@
+import type { ReasoningEffort } from "../domain/types.js";
+
 export type CodexTurnStatus =
   | "completed"
   | "interrupted"
@@ -9,6 +11,8 @@ export interface CodexModelOption {
   displayName: string;
   description: string;
   isDefault: boolean;
+  supportedReasoningEfforts: Array<{ reasoningEffort: ReasoningEffort; description: string }>;
+  defaultReasoningEffort: ReasoningEffort;
 }
 
 export interface CodexTurnSnapshot {
@@ -34,6 +38,7 @@ export interface CodexGateway {
     cwd: string,
     prompt: string,
     model: string,
+    reasoningEffort?: ReasoningEffort,
   ): Promise<string>;
   hasSkill(cwd: string, skillName: string): Promise<boolean>;
   listModels(): Promise<CodexModelOption[]>;

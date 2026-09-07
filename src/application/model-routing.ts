@@ -1,6 +1,7 @@
 import type {
   ExecutionModelRouting,
   ModelRoutingSettings,
+  ReasoningEffort,
 } from "../domain/types.js";
 
 export interface CodexTurnFailure {
@@ -53,6 +54,9 @@ export function initialModelRouting(
 ): ExecutionModelRouting {
   return {
     model: settings.primary,
+    ...(settings.primaryReasoningEffort !== undefined
+      ? { reasoningEffort: settings.primaryReasoningEffort }
+      : {}),
     route: "primary",
     retryCount: 0,
   };
@@ -76,6 +80,9 @@ export function planModelCapacityRecovery(
       outcome: "retry_scheduled",
       routing: {
         model: settings.fallback,
+        ...(settings.fallbackReasoningEffort !== undefined
+          ? { reasoningEffort: settings.fallbackReasoningEffort }
+          : {}),
         route: "fallback",
         retryCount: current.circuitBreaker.fallbackRetryCount,
         circuitBreaker: openCircuit(now, primaryProbeAfterMs),
@@ -102,6 +109,9 @@ export function planModelCapacityRecovery(
       outcome: "retry_scheduled",
       routing: {
         model: settings.fallback,
+        ...(settings.fallbackReasoningEffort !== undefined
+          ? { reasoningEffort: settings.fallbackReasoningEffort }
+          : {}),
         route: "fallback",
         retryCount: 0,
         circuitBreaker: openCircuit(now, primaryProbeAfterMs),
@@ -151,23 +161,28 @@ export function prepareModelRoutingForTurn(
   if (current.model !== configuredModel) {
     return initialModelRouting(settings);
   }
+  const reasoningEffort =
+    current.route === "primary"
+      ? settings.primaryReasoningEffort
+      : settings.fallbackReasoningEffort;
+  const routing = withReasoningEffort(current, reasoningEffort);
   if (
-    current.route === "primary" &&
-    current.circuitBreaker?.state === "half_open"
+    routing.route === "primary" &&
+    routing.circuitBreaker?.state === "half_open"
   ) {
     return {
-      ...current,
+      ...routing,
       circuitBreaker: {
-        ...current.circuitBreaker,
+        ...routing.circuitBreaker,
         probeStartedAt: now.toISOString(),
       },
     };
   }
-  if (current.route !== "fallback") return current;
-  const circuit = current.circuitBreaker;
+  if (routing.route !== "fallback") return routing;
+  const circuit = routing.circuitBreaker;
   if (!circuit) {
     return {
-      ...current,
+      ...routing,
       circuitBreaker: openCircuit(now, primaryProbeAfterMs),
     };
   }
@@ -176,22 +191,36 @@ export function prepareModelRoutingForTurn(
     Number.isFinite(Date.parse(circuit.primaryProbeAt)) &&
     Date.parse(circuit.primaryProbeAt) > now.getTime()
   ) {
-    return current;
+    return routing;
   }
 
   const probing: ExecutionModelRouting = {
-    ...current,
+    ...routing,
     model: settings.primary,
     route: "primary",
     retryCount: 0,
     circuitBreaker: {
       state: "half_open",
-      fallbackRetryCount: current.retryCount,
+      fallbackRetryCount: routing.retryCount,
       probeStartedAt: now.toISOString(),
     },
   };
   delete probing.nextRetryAt;
-  return probing;
+  return withReasoningEffort(probing, settings.primaryReasoningEffort);
+}
+
+function withReasoningEffort(
+  routing: ExecutionModelRouting,
+  reasoningEffort: ReasoningEffort | undefined,
+): ExecutionModelRouting {
+  if (routing.reasoningEffort === reasoningEffort) return routing;
+  const configured = { ...routing };
+  if (reasoningEffort === undefined) {
+    delete configured.reasoningEffort;
+  } else {
+    configured.reasoningEffort = reasoningEffort;
+  }
+  return configured;
 }
 
 function openCircuit(

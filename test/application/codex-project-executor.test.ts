@@ -29,8 +29,12 @@ class RecordingGateway implements CodexGateway {
     cwd: string,
     prompt: string,
     model: string,
+    reasoningEffort?: string,
   ): Promise<string> {
-    this.calls.push({ method: "startTurn", args: [threadId, cwd, prompt, model] });
+    this.calls.push({
+      method: "startTurn",
+      args: [threadId, cwd, prompt, model, ...(reasoningEffort ? [reasoningEffort] : [])],
+    });
     return "project_turn";
   }
 
@@ -91,6 +95,19 @@ function project(): Project {
 }
 
 describe("CodexProjectExecutor", () => {
+  it("preserves configured effort for task selection and report reminders", async () => {
+    const gateway = new RecordingGateway();
+    const executor = new CodexProjectExecutor(gateway);
+    const current = project();
+    current.currentExecution!.modelRouting.reasoningEffort = "high";
+
+    await executor.startTurn(current, "project_thread");
+    await executor.requestReport(current, "project_thread");
+
+    expect(gateway.calls.map(({ args }) => args.slice(3)))
+      .toEqual([["gpt-5.6-sol", "high"], ["gpt-5.6-sol", "high"]]);
+  });
+
   it("runs task selection in a temporary Codex task", async () => {
     const gateway = new RecordingGateway();
     const executor = new CodexProjectExecutor(gateway);

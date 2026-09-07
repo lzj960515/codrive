@@ -1,5 +1,15 @@
 # Documentation log
 
+## 2026-09-07
+
+- Updated the bundled Codex CLI to 0.153.4 so its live model catalog includes
+  `gpt-6-astra` and exposes supported/default reasoning efforts.
+- Added independent primary and fallback reasoning choices to global Settings
+  and project detail, with model-specific validation and inherited configuration.
+- Persisted configured effort in execution routing and applied it on task,
+  planning, retry, fallback, and resumed turns. Model-default choices explicitly
+  clear prior conversation effort overrides on the next turn.
+
 ## 2026-09-03
 
 - Made `$codrive-task` select and load other available Skills only after reading

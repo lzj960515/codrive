@@ -109,12 +109,16 @@ describe("HTTP API", () => {
           displayName: "GPT-5.6-Sol",
           description: "Frontier coding model",
           isDefault: true,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "ultra", description: "Deepest" }],
         },
         {
           id: "gpt-5.6-terra",
           displayName: "GPT-5.6-Terra",
           description: "Balanced coding model",
           isDefault: false,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [{ reasoningEffort: "high", description: "High" }],
         },
       ],
     }, {
@@ -860,6 +864,8 @@ describe("HTTP API", () => {
         models: {
           primary: "gpt-5.6-terra",
           fallback: "gpt-5.6-sol",
+          primaryReasoningEffort: "high",
+          fallbackReasoningEffort: "ultra",
         },
         semanticAtlasAutomaticMaintenance: true,
       },
@@ -882,6 +888,8 @@ describe("HTTP API", () => {
         models: {
           primary: "gpt-5.6-terra",
           fallback: "gpt-5.6-sol",
+          primaryReasoningEffort: "high",
+          fallbackReasoningEffort: "ultra",
         },
       },
       semanticAtlas: { installed: true, automaticMaintenance: true },
@@ -897,12 +905,6 @@ describe("HTTP API", () => {
     expect(page.body).toContain("semanticAtlasAutomaticMaintenance");
     expect(page.body).toContain(
       "const semanticAtlasSettings = semanticAtlas.installed",
-    );
-    expect(page.body).toContain(
-      "'+escapeHtml(model.displayName)+'</option>'",
-    );
-    expect(page.body).not.toContain(
-      "'+escapeHtml(model.displayName)+' · '+escapeHtml(model.id)+'</option>'",
     );
     const clientScript = page.body.match(/<script>([\s\S]+)<\/script>/)?.[1];
     expect(clientScript).toBeDefined();
@@ -924,6 +926,8 @@ describe("HTTP API", () => {
         modelConfig: {
           primary: "gpt-5.6-terra",
           fallback: "gpt-5.6-sol",
+          primaryReasoningEffort: "high",
+          fallbackReasoningEffort: "ultra",
         },
       },
     });
@@ -950,6 +954,8 @@ describe("HTTP API", () => {
         modelConfig: {
           primary: "gpt-5.6-terra",
           fallback: "gpt-5.6-sol",
+          primaryReasoningEffort: "high",
+          fallbackReasoningEffort: "ultra",
         },
         source: "project",
       },
