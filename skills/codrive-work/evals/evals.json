@@ -1,0 +1,50 @@
+{
+  "skill_name": "codrive-work",
+  "evals": [
+    {
+      "id": 1,
+      "name": "backend-slices",
+      "fixture": "fixtures/backend-slices",
+      "sandbox": "workspace-write",
+      "prompt": "用 Codrive 帮我规划这个新产品，范围和验收已经写在 README.md。先把初始任务计划写到 tmp/plan.md 给我审阅，这次不用注册，也不实现代码。",
+      "expectations": [
+        "读取codrive-forge和共享task-slicing参考；任务按完整可验证后端行为拆分，不按数据库/API/测试孤立分层。",
+        "完整覆盖提交查询结果、queued取消且不执行、running/succeeded拒绝取消；不添加UI、持久化等明确范围外能力。",
+        "前置关系说明依赖的具体结果，不能只因列在前面就串行；不为尚无代码的仓库安排推测性前置重构。",
+        "只保存规划，原材料保持原样；不调用真实Codrive或注册项目，不创建独立to-tickets入口/外部tracker。",
+        "新任务标题直接表达业务动作，不自动附加A1/B1等路线图编码；描述先说明结果，仅保留必要前置结果，省略“可立即开始”等空说明。"
+      ],
+      "source": "根据已确认Skill职责构造的虚构本地规划案例；不是实际产品或线上任务。"
+    },
+    {
+      "id": 2,
+      "name": "staged-migration",
+      "fixture": "fixtures/staged-migration",
+      "sandbox": "workspace-write",
+      "prompt": "给这个已有 Codrive 产品加迁移任务。PROJECT.md 是确认范围，context.json 是我刚取回的当前项目和任务快照，这轮直接用它们，不需要再次访问服务。让 legacy-reader 按旧契约完成；日志错字只保留原任务。请结合代码，把新增或保留任务、前置条件和验收写到 tmp/plan.md 给我审阅，先不要写入Codrive或修改源文件。",
+      "expectations": [
+        "读取codrive-work与共享参考；按增加双字段、api/batch分批迁移、确认无旧调用后收缩安排，每步具备独立验收。",
+        "api与batch迁移依赖扩展结果；batch等待既有legacy-reader完成，避免改写进行中任务；收缩依赖所有迁移完成和旧调用退出证据。",
+        "没有虚构任务API的blockedBy字段或固定ready-for-agent状态，没有共享集成分支及仅最后任务通过CI的承诺。",
+        "日志错字保留单一普通backlog任务，不强套迁移/前置重构；只保存计划、不改材料或连接服务。",
+        "新任务标题直接表达业务动作，不自动附加A1/B1等路线图编码；描述先说明结果，仅保留必要前置结果，省略“可立即开始”等空说明。",
+        "既有任务标识保留用于引用与状态判断，不把用户要求保留的任务重新编号或复制成重复任务。"
+      ],
+      "source": "根据已确认Skill职责构造的虚构本地规划案例；不是实际产品或线上任务。"
+    },
+    {
+      "id": 3,
+      "name": "selection-after-query",
+      "fixture": "fixtures/selection-after-query",
+      "sandbox": "workspace-write",
+      "source": "根据历史编码命名及control内部查询终止规则构造的虚构本地归档。",
+      "prompt": "先用 codrive-control 的查询判断方式，根据这里提供的 context.json 给我核对有哪些未完成工作；再用 codrive-task 的任务选择规则，结合 PROJECT.md 和源码把本轮适合开始的任务及理由写到 tmp/selection.md。快照已经包含当前服务返回事实，这轮无需访问服务，也不要实际提交选择。",
+      "expectations": [
+        "读取codrive-control后继续使用codrive-task并产出selection.md，不在查询摘要处结束。",
+        "允许guide独立开始，依据已有export_rows接口；不因为A1/B1编号就制造阻塞。",
+        "ui保持等待store，尊重用户明确的执行顺序；store不被重复选择，数量不超过可用容量。",
+        "任务名引用忠实于已有记录；只写本地判断，不修改历史、源文件或连接真实服务。"
+      ]
+    }
+  ]
+}

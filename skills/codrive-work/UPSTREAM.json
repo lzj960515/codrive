@@ -1,0 +1,46 @@
+{
+  "source": "https://github.com/mattpocock/skills",
+  "revision": "3cca18b368ae95cdbdebbff572ccafa662551015",
+  "upstream": "skills/engineering/to-tickets/SKILL.md",
+  "destination": "references/task-slicing.md",
+  "licenseFile": "LICENSE.mattpocock",
+  "excerpts": [
+    {
+      "startLine": 17,
+      "endLine": 17,
+      "sha256": "1a1d8ea93fd7814c81fa552667eee936229c65f9c4423367129e9c6ded89f16e"
+    },
+    {
+      "startLine": 32,
+      "endLine": 32,
+      "sha256": "7be891e1c5a4c765ac5d3744528a5c8f6aa6b0abd95a63070c191db647492dfd"
+    },
+    {
+      "startLine": 38,
+      "endLine": 38,
+      "sha256": "d3dcbc86f2dd3c1726b0ae207dbd94e768b5a8e5d9bc434f0d0ec9bc3c17ecd8"
+    },
+    {
+      "startLine": 40,
+      "endLine": 40,
+      "sha256": "2d1af42217fd3876d0f2f3f6cc974c423dab2dc9501bb82c4b557769774eb9a6"
+    },
+    {
+      "startLine": 92,
+      "endLine": 92,
+      "sha256": "629c0f91117bf807b43eae1c962e7694d28e56510a87aad91a8341236926d66e"
+    },
+    {
+      "startLine": 105,
+      "endLine": 105,
+      "sha256": "0b81949912a3be7f83e54597cddf9da18f31847e954e92b8e97054c2d779fab6"
+    }
+  ],
+  "adaptations": [
+    "Keeps confirmed scope, required layers, complete task ownership and proportionate granularity.",
+    "Describes prerequisite outcomes in existing task descriptions; Codrive retains dynamic selection and the existing task schema.",
+    "Uses expand-contract only for migrations requiring staged compatibility; each Codrive task remains independently reviewable and integrable.",
+    "Retains current confirmation, product-document ownership and task lifecycle; omits setup, tracker publication, fixed labels, context-window quotas and shared integration branches.",
+    "Uses business-action titles and result-first descriptions; keeps consequential prerequisites and acceptance invariants while reusing project context and lifecycle rules."
+  ]
+}

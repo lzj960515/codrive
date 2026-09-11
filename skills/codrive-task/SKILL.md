@@ -51,7 +51,7 @@ Codrive 将持久任务对话归属到产品仓库根目录，让工作和审查
 
 ## 任务选择 `select_tasks`
 
-读取 project context 中固定的 `planningRevision` 和项目级 `availableTaskSlots`，查看全部 `backlog`、活动任务、已完成结果和当前仓库。根据工作之间的真实关系、当前代码状态和当轮容量，完整判断这一规划版本现在适合独立开始的任务。其他项目的工作不占用当前项目容量。
+读取 project context 中固定的 `planningRevision` 和项目级 `availableTaskSlots`，查看全部 `backlog`、活动任务、已完成结果和当前仓库。根据工作之间的真实关系、当前代码状态和当轮容量，完整判断这一规划版本现在适合独立开始的任务。把历史编号和启动说明还原为其引用的任务与具体前置结果，并核对当前是否满足；单纯的排列顺序不构成依赖。用户明确要求的执行顺序仍作为约束。其他项目的工作不占用当前项目容量。
 
 - 有适合开始的工作时汇报 `selected` 和唯一的 `taskIds`；一轮可以选择多个任务，数量不超过 `availableTaskSlots`。
 - 少于可用槽位的选择仍表示本轮已经检查全部 backlog；Codrive 等待新的规划事实，不用空闲槽位重复询问。

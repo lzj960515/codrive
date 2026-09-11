@@ -3,9 +3,10 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-const handoffSkills = ["codrive-forge", "codrive-work", "codrive-control"];
-const managedSkills = [...handoffSkills, "codrive-task"];
+const handoffSkills = ["codrive-forge", "codrive-work"];
+const managedSkills = [...handoffSkills, "codrive-control", "codrive-task"];
 
+// 查询后的继续执行由 codrive-work/evals 的 selection-after-query 场景验证。
 describe("non-execution Skill handoff", () => {
   it.each(handoffSkills)(
     "%s completes its conversation after handing work to Codrive",

@@ -1,0 +1,28 @@
+{
+  "productFacts": {
+    "status": "current"
+  },
+  "requestedAction": "select_tasks",
+  "planningRevision": 7,
+  "availableTaskSlots": 2,
+  "tasks": [
+    {
+      "id": "store",
+      "title": "A1 升级存储实现",
+      "status": "in_progress",
+      "description": "改用新存储；export_rows接口保持不变。"
+    },
+    {
+      "id": "guide",
+      "title": "B1 编写CSV使用指南",
+      "status": "backlog",
+      "description": "基于当前已可用的export_rows接口说明字段与调用示例。"
+    },
+    {
+      "id": "ui",
+      "title": "C1 接入界面",
+      "status": "backlog",
+      "description": "用户明确要求A1完成后开始，使用届时新存储。"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "projectId": "billing-example",
+  "productFacts": {
+    "status": "current",
+    "revision": 4
+  },
+  "tasks": [
+    {
+      "id": "legacy-reader",
+      "title": "批量导出按既有接口读取金额",
+      "status": "in_progress",
+      "description": "batch通过amountCents输出账单；验收金额结果不变。"
+    },
+    {
+      "id": "typo",
+      "title": "修正日志错字",
+      "status": "backlog",
+      "description": "日志lenght改为length，行为不变。"
+    }
+  ]
+}

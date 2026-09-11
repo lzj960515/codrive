@@ -167,4 +167,4 @@ node <skill-directory>/scripts/codrive-control.mjs product-document-changed <pro
 
 ## 结果交接
 
-查询或控制完成后，报告新的业务状态，并在存在开发或审查对话 ID 时提供对应 `codex://threads/<id>` 链接。操作触发后续工作时，明确说明执行权已经交给 Codrive，后续开发、审查、返工和合入将由 Codrive 创建和调度的独立 Codex 对话继续执行。完成报告后结束当前回合。
+作为其他工作流的查询步骤时，把所需事实返回当前工作流并继续完成用户目标。独立查询或控制完成后，按用户关心的项目或任务报告当前结果、仍待处理的事项及有用的 `codex://threads/<id>` 对话入口；本次操作实际触发后续执行时，说明已经交给 Codrive 的工作。
