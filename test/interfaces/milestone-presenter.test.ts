@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createMilestonePresenter } from "../../src/interfaces/http/milestone-presenter.js";
+import { createMilestonePresenter, type MilestoneView } from "../../src/interfaces/http/milestone-presenter.js";
 
 const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
+const goal = (overrides: Partial<MilestoneView> = {}): MilestoneView => ({
+  id: "m", title: "Social migration", description: "Keep existing results", status: "active", statusLabel: "需要决定",
+  summary: "Investigating another consumer", questions: ["Keep <export>?"], evidence: [],
+  acceptanceCriteria: ["Existing scenarios work"], threadId: "thread-1", taskCount: 3, ...overrides,
+});
 
 describe("milestone presentation", () => {
   it("filters milestone and independent tasks without changing task order", () => {
@@ -12,40 +17,67 @@ describe("milestone presentation", () => {
     expect(view.filterTasks(tasks, "all")).toEqual(tasks);
   });
 
-  it("shows the actual decision and its conversation while escaping user content", () => {
+  it("keeps terminal work off the homepage while retaining milestone and independent history", () => {
     const view = createMilestonePresenter(escape);
-    const markup = view.cards([{
-      id: "m", title: "Social migration", description: "Keep existing results", status: "active", statusLabel: "需要决定",
-      summary: "Investigating another consumer", questions: ["Keep <export>?"],
-      evidence: [], acceptanceCriteria: ["Existing scenarios work"], threadId: "thread-1", taskCount: 3,
-    }]);
-    expect(markup).toContain("Social migration");
+    const tasks = [
+      { id: "active", milestoneId: "m", status: "working" },
+      { id: "completed", milestoneId: "m", status: "done" },
+      { id: "independent", milestoneId: null, status: "done" },
+      { id: "cancelled", milestoneId: null, status: "cancelled" },
+      { id: "queued", milestoneId: null, status: "backlog" },
+    ];
+    expect(view.filterTasks(tasks, "all", "current").map(task => task.id)).toEqual(["active", "queued"]);
+    expect(view.filterTasks(tasks, "m", "all").map(task => task.id)).toEqual(["active", "completed"]);
+    expect(view.filterTasks(tasks, "m", "history").map(task => task.id)).toEqual(["independent", "cancelled"]);
+  });
+
+  it("offers active goal filters with pending decisions without duplicating navigation", () => {
+    const view = createMilestonePresenter(escape);
+    const markup = view.activeFilters([goal(), goal({ id: "past", title: "Past goal", status: "done" })], "m");
+    expect(markup).toContain("全部未完成");
+    expect(markup).toContain("独立任务");
+    expect(markup).toContain("Keep &lt;export>?");
+    expect(markup).toContain('data-milestone-filter="m" aria-pressed="true"');
+    expect(markup).not.toContain("Past goal");
+    expect(markup).not.toContain("data-open-milestone");
+    expect(markup).not.toContain("查看全部里程碑");
+  });
+
+  it("keeps the full milestone collection discoverable with status filters", () => {
+    const view = createMilestonePresenter(escape);
+    const goals = [goal(), goal({ id: "past", title: "Past goal", status: "done", statusLabel: "已完成", questions: [] })];
+    const all = view.list(goals, "all");
+    expect(all).toContain("Social migration");
+    expect(all).toContain("Past goal");
+    expect(all.match(/data-open-milestone=/g)).toHaveLength(2);
+    const done = view.list(goals, "done");
+    expect(done).toContain('data-milestone-status="done" aria-pressed="true"');
+    expect(done).toContain("Past goal");
+    expect(done).not.toContain("Social migration");
+    expect(view.list(goals, "active")).not.toContain("Past goal");
+  });
+
+  it("shows goal, criteria, evidence and full tasks directly in the familiar detail panel", () => {
+    const view = createMilestonePresenter(escape);
+    const markup = view.detail(goal({ evidence: ["Export <verified>"] }), '<button data-task="a">Completed task</button>');
+    expect(markup).toContain('class="detail-head"');
+    expect(markup).toContain('aria-label="关闭里程碑详情"');
+    expect(markup).toContain("Keep existing results");
+    expect(markup).toContain("Existing scenarios work");
+    expect(markup).toContain("Export &lt;verified>");
     expect(markup).toContain("Keep &lt;export>?");
     expect(markup).toContain("codex://threads/thread-1");
-    expect(markup).toContain("需要决定");
+    expect(markup).toContain('<button data-task="a">Completed task</button>');
+    expect(markup).not.toContain("<details");
     expect(markup).not.toContain("reportOpportunityId");
   });
 
-  it("surfaces pending decisions on the board with a link to the milestone", () => {
+  it("presents goal acceptance independently of task-count progress", () => {
     const view = createMilestonePresenter(escape);
-    const notice = view.notices([{
-      id: "m", title: "Social", description: "Migration", status: "active", statusLabel: "需要决定",
-      summary: "Inspect consumers", questions: ["Keep old report?"], evidence: [],
-      acceptanceCriteria: [], threadId: "thread", taskCount: 2,
-    }], "project");
-    expect(notice).toContain("Keep old report?");
-    expect(notice).toContain('/projects/project#milestone-m');
-  });
-
-  it("presents goal evidence as completion rather than task-count progress", () => {
-    const view = createMilestonePresenter(escape);
-    const markup = view.cards([{
-      id: "m", title: "Social migration", description: "Move social", status: "done", statusLabel: "已完成",
-      summary: "Verified the deployed flow", questions: [], evidence: ["Export verified"],
-      acceptanceCriteria: ["Flow works"], threadId: null, taskCount: 4,
-    }]);
+    const markup = view.detail(goal({ status: "done", statusLabel: "已完成", questions: [], threadId: null, evidence: ["Flow verified"] }), "");
     expect(markup).toContain("已完成");
-    expect(markup).toContain("Export verified");
+    expect(markup).toContain("Flow verified");
     expect(markup).not.toContain("100%");
+    expect(markup).not.toContain("等待负责人开始");
   });
 });

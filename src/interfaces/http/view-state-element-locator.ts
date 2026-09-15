@@ -22,6 +22,12 @@ export function createViewStateElementLocator<
 }): ViewStateElementLocator<TElement> {
   const stableAttributes = [
     "data-task",
+    "data-workspace-tab",
+    "data-milestone-filter",
+    "data-milestone-status",
+    "data-open-milestone",
+    "data-task-history",
+    "data-back-milestone",
     "data-project",
     "data-project-action",
     "data-copy-task-id",

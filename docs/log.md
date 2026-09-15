@@ -2,6 +2,8 @@
 
 ## 2026-09-15
 
+- Separated current tasks from milestone history in the project workspace, reused the task detail panel for goals, and kept project facts and settings on their own page. Preserved terminal tasks, archived project history, and workspace location across reloads and project-information navigation.
+
 - Separated current product facts from milestone goals and task plans; ordinary work additions no longer require editing `PROJECT.md`.
 - Documented initial assessment, non-terminal discoveries, evidence-driven plans, task-specific restrictions, continued assessment while awaiting decisions, and verified milestone completion.
 - Unified visible persistent planning conversations with task conversations and recorded the startup-before-runtime v5 migration boundary.

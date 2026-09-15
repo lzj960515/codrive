@@ -63,9 +63,16 @@ export function renderBoardClient(accessToken: string): string {
         : { type: "board" };
     let snapshots = [];
     let archivedSnapshots = [];
-    let selectedProjectId = null;
-    let selectedTaskId = null;
-    let selectedMilestoneId = "all";
+    const workspaceParams = new URLSearchParams(window.location.search);
+    let selectedProjectId = workspaceParams.get("project");
+    let selectedTaskId = workspaceParams.get("task");
+    let selectedMilestoneId = workspaceParams.get("scope") || "all";
+    let workspaceTab = workspaceParams.get("tab") === "milestones" ? "milestones" : "tasks";
+    let showTaskHistory = workspaceParams.get("history") === "1";
+    let openedMilestoneId = workspaceParams.get("milestone");
+    let milestoneStatusFilter = ["active", "done"].includes(workspaceParams.get("status")) ? workspaceParams.get("status") : "all";
+    let detailReturnFocus = null;
+    let milestoneDetailScroll = 0;
     let systemUpdate = null;
     let updatePoll = null;
     let productDetail = null;
@@ -228,11 +235,12 @@ export function renderBoardClient(accessToken: string): string {
         systemSettings = route.type === "settings" ? results[2] : null;
         document.getElementById("offline").style.display = "none";
         if (route.type === "project") selectedProjectId = route.projectId;
-        if (route.type === "board" && (!selectedProjectId || !snapshots.some(snapshot => snapshot.project.id === selectedProjectId))) {
+        if (route.type === "board" && (!selectedProjectId || ![...snapshots, ...archivedSnapshots].some(snapshot => snapshot.project.id === selectedProjectId))) {
           selectedProjectId = snapshots[0]?.project.id ?? null;
+          resetWorkspaceSelection();
           selectedTaskId = null;
         }
-        if (route.type === "project" && archivedSnapshots.some(snapshot => snapshot.project.id === route.projectId)) {
+        if (archivedSnapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
           archivedProjectsExpanded = true;
         }
         const snapshot = currentSnapshot();
@@ -261,8 +269,9 @@ export function renderBoardClient(accessToken: string): string {
         ]);
         snapshots = activeProjects;
         archivedSnapshots = archivedProjects.projects;
-        if (route.type === "board" && !snapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
+        if (route.type === "board" && ![...snapshots, ...archivedSnapshots].some(snapshot => snapshot.project.id === selectedProjectId)) {
           selectedProjectId = snapshots[0]?.project.id ?? null;
+          resetWorkspaceSelection();
           selectedTaskId = null;
           taskDetail = null;
           currentActivity = null;
@@ -272,7 +281,7 @@ export function renderBoardClient(accessToken: string): string {
           document.getElementById("task-detail-content").innerHTML = "";
           await syncCurrentWatches();
         }
-        if (route.type === "project" && archivedSnapshots.some(snapshot => snapshot.project.id === route.projectId)) {
+        if (archivedSnapshots.some(snapshot => snapshot.project.id === selectedProjectId)) {
           archivedProjectsExpanded = true;
         }
         renderProjects();
@@ -330,8 +339,9 @@ export function renderBoardClient(accessToken: string): string {
           productDetail = results[1];
           projectSettings = results[2];
         }
-        if (route.type === "board" && results[0].project.archivedAt) {
+        if (route.type === "board" && results[0].project.archivedAt && snapshotIndex >= 0) {
           selectedProjectId = snapshots[0]?.project.id ?? null;
+          resetWorkspaceSelection();
           selectedTaskId = null;
           taskDetail = null;
           currentActivity = null;
@@ -348,7 +358,7 @@ export function renderBoardClient(accessToken: string): string {
         const viewState = captureViewState();
         renderProjects();
         if (route.type === "project") renderProductDetail();
-        else renderWorkspace();
+        else { renderWorkspace(); renderDetail(); }
         restoreViewState(viewState);
         document.getElementById("offline").style.display = "none";
       } catch {
@@ -368,6 +378,7 @@ export function renderBoardClient(accessToken: string): string {
         document.body.classList.add("detail-open");
         renderTaskDetail();
         if (viewState) restoreViewState(viewState);
+        else document.getElementById("close-detail")?.focus({ preventScroll: true });
         document.getElementById("offline").style.display = "none";
       } catch {
         showOffline();
@@ -405,6 +416,8 @@ export function renderBoardClient(accessToken: string): string {
         documentScroll: document.scrollingElement?.scrollTop ?? 0,
         boardScrollLeft: document.querySelector(".board-wrap")?.scrollLeft ?? 0,
         boardScrollTop: document.querySelector(".board-wrap")?.scrollTop ?? 0,
+        milestoneScrollLeft: document.querySelector(".milestone-filters")?.scrollLeft ?? 0,
+        milestoneListScroll: document.querySelector(".milestone-list")?.scrollTop ?? 0,
         detailScroll: document.getElementById("task-detail-content")?.scrollTop ?? 0,
         sidebarScroll: document.getElementById("projects")?.scrollTop ?? 0
       };
@@ -427,6 +440,10 @@ export function renderBoardClient(accessToken: string): string {
         board.scrollLeft = state.boardScrollLeft;
         board.scrollTop = state.boardScrollTop;
       }
+      const milestoneFilters = document.querySelector(".milestone-filters");
+      if (milestoneFilters) milestoneFilters.scrollLeft = state.milestoneScrollLeft;
+      const milestoneList = document.querySelector(".milestone-list");
+      if (milestoneList) milestoneList.scrollTop = state.milestoneListScroll;
       const detail = document.getElementById("task-detail-content");
       if (detail) detail.scrollTop = state.detailScroll;
       const projects = document.getElementById("projects");
@@ -530,7 +547,7 @@ export function renderBoardClient(accessToken: string): string {
       });
     }
 
-    const currentSnapshot = () => snapshots.find(snapshot => snapshot.project.id === selectedProjectId);
+    const currentSnapshot = () => [...snapshots, ...archivedSnapshots].find(snapshot => snapshot.project.id === selectedProjectId);
 
     async function realtimeRequest(event, payload = {}) {
       if (!socket.connected) throw new Error("Realtime connection unavailable");
@@ -565,6 +582,35 @@ export function renderBoardClient(accessToken: string): string {
       await Promise.all(requests);
     }
 
+    function workspaceSearch() {
+      const params = new URLSearchParams();
+      if (selectedProjectId) params.set("project", selectedProjectId);
+      if (workspaceTab !== "tasks") params.set("tab", workspaceTab);
+      if (selectedMilestoneId !== "all") params.set("scope", selectedMilestoneId);
+      if (showTaskHistory) params.set("history", "1");
+      if (milestoneStatusFilter !== "all") params.set("status", milestoneStatusFilter);
+      if (openedMilestoneId) params.set("milestone", openedMilestoneId);
+      if (selectedTaskId) params.set("task", selectedTaskId);
+      return "?"+params.toString();
+    }
+
+    function updateWorkspaceLocation() {
+      if (route.type !== "board") return;
+      const search = workspaceSearch();
+      window.history.replaceState(null, "", "/"+search);
+      const projectInfo = document.querySelector("[data-project-info]");
+      if (projectInfo) projectInfo.href = "/projects/"+encodeURIComponent(selectedProjectId)+search;
+    }
+
+    function resetWorkspaceSelection() {
+      selectedMilestoneId = "all";
+      openedMilestoneId = null;
+      workspaceTab = "tasks";
+      showTaskHistory = false;
+      milestoneStatusFilter = "all";
+      detailReturnFocus = null;
+    }
+
     async function selectProject(projectId) {
       if (!projectId || projectId === selectedProjectId) return;
       selectedTaskId = null;
@@ -575,6 +621,8 @@ export function renderBoardClient(accessToken: string): string {
       document.getElementById("task-detail").setAttribute("aria-hidden", "true");
       document.getElementById("task-detail-content").innerHTML = "";
       selectedProjectId = projectId;
+      resetWorkspaceSelection();
+      updateWorkspaceLocation();
       try {
         await syncCurrentWatches();
         await refreshSelectedProject(projectId);
@@ -585,9 +633,13 @@ export function renderBoardClient(accessToken: string): string {
 
     async function openTask(taskId) {
       if (!taskId) return;
+      if (openedMilestoneId && currentSnapshot()?.tasks.find(task => task.id === taskId)?.milestoneId !== openedMilestoneId) openedMilestoneId = null;
+      if (openedMilestoneId && !selectedTaskId) milestoneDetailScroll = document.getElementById("task-detail-content").scrollTop;
+      if (!openedMilestoneId) detailReturnFocus = elementIdentity(document.activeElement);
       taskActivityHistory.open(taskId);
       shouldScrollTaskDetailToLatest = true;
       selectedTaskId = taskId;
+      updateWorkspaceLocation();
       taskDetail = null;
       currentActivity = null;
       try {
@@ -603,7 +655,7 @@ export function renderBoardClient(accessToken: string): string {
       if (route.type === "settings") renderSettings();
       else if (route.type === "project") renderProductDetail();
       else renderWorkspace();
-      if (route.type === "board") renderTaskDetail();
+      if (route.type === "board") renderDetail();
       else clearTaskDetail();
     }
 
@@ -641,9 +693,9 @@ export function renderBoardClient(accessToken: string): string {
       archivedTrigger.setAttribute("aria-expanded", String(archivedProjectsExpanded));
       archivedPanel.hidden = !archivedProjectsExpanded;
       archivedHost.innerHTML = archivedSnapshots.length
-        ? archivedSnapshots.map(({ project, tasks }) =>
+        ? archivedSnapshots.map(({ project, tasks, milestones }) =>
             '<div class="archived-project-row">'+
-              '<a class="archived-project-link" href="/projects/'+encodeURIComponent(project.id)+'"><b>'+escapeHtml(project.name)+'</b><small>'+tasks.length+' 个任务 · '+escapeHtml(formatTime(project.archivedAt))+'</small></a>'+
+              '<a class="archived-project-link" href="/?project='+encodeURIComponent(project.id)+(milestones.length ? '&tab=milestones' : '&history=1')+'"><b>'+escapeHtml(project.name)+'</b><small>'+tasks.length+' 个任务 · '+escapeHtml(formatTime(project.archivedAt))+'</small></a>'+
               '<button class="archived-project-restore" type="button" data-unarchive-project="'+escapeHtml(project.id)+'">恢复</button>'+
             '</div>'
           ).join("")
@@ -724,45 +776,107 @@ export function renderBoardClient(accessToken: string): string {
 
     const milestoneView = (${milestonePresenter})(escapeHtml);
 
-    function bindMilestoneFilters(host) {
+    function bindWorkspaceNavigation(host) {
+      host.querySelectorAll("[data-workspace-tab]").forEach(button => {
+        button.onclick = () => {
+          clearTaskDetail();
+          openedMilestoneId = null;
+          workspaceTab = button.dataset.workspaceTab;
+          renderWorkspace();
+        };
+      });
       host.querySelectorAll("[data-milestone-filter]").forEach(button => {
         button.onclick = () => {
-          selectedMilestoneId = button.dataset.milestoneFilter;
           const viewState = captureViewState();
-          if (route.type === "project") renderProductDetail();
-          else renderWorkspace();
+          selectedMilestoneId = button.dataset.milestoneFilter;
+          showTaskHistory = false;
+          renderWorkspace();
           restoreViewState(viewState);
         };
+      });
+      host.querySelectorAll("[data-milestone-status]").forEach(button => {
+        button.onclick = () => {
+          milestoneStatusFilter = button.dataset.milestoneStatus;
+          renderWorkspace();
+        };
+      });
+      host.querySelectorAll("[data-open-milestone]").forEach(button => {
+        button.onclick = () => openMilestone(button.dataset.openMilestone);
+      });
+      host.querySelector("[data-task-history]")?.addEventListener("click", () => {
+        showTaskHistory = !showTaskHistory;
+        renderWorkspace();
       });
     }
 
     function currentMilestoneFilter(milestones) {
-      if (!["all", "independent"].includes(selectedMilestoneId) && !milestones.some(item => item.id === selectedMilestoneId)) selectedMilestoneId = "all";
+      if (!["all", "independent"].includes(selectedMilestoneId) && !milestones.some(item => item.id === selectedMilestoneId && item.status === "active")) selectedMilestoneId = "all";
       return selectedMilestoneId;
+    }
+
+    function workspaceTabs() {
+      return '<nav class="workspace-tabs" aria-label="项目视图">'+[["tasks", "任务"], ["milestones", "里程碑"]].map(([key, title]) =>
+        '<button type="button" data-workspace-tab="'+key+'" aria-current="'+(workspaceTab === key ? 'page' : 'false')+'">'+title+'</button>'
+      ).join("")+'</nav>';
+    }
+
+    function renderTaskBoard(tasks, visibleColumns) {
+      return '<div class="board-wrap"><div class="board" style="--column-count:'+visibleColumns.length+'">'+visibleColumns.map(([key, columnLabel]) => {
+        const cards = tasks.filter(task => bucket(task.status) === key);
+        const direction = terminalTaskSort[key] || null;
+        const terminal = key === "done" || key === "cancelled";
+        const visibleCards = terminal ? sortTerminalTasks(cards, direction) : cards;
+        const timeLabel = key === "done" ? "完成时间" : "取消时间";
+        const nextDirection = direction === "desc" ? "正序" : "倒序";
+        const sortButton = terminal
+          ? '<button class="column-sort '+(direction ? 'active' : '')+'" type="button" data-task-sort="'+key+'" aria-label="按'+timeLabel+nextDirection+'排列" title="按'+timeLabel+nextDirection+'排列"><span aria-hidden="true">'+(direction === "desc" ? "↓" : direction === "asc" ? "↑" : "⇅")+'</span></button>'
+          : '';
+        return '<section class="column" data-column="'+key+'"><div class="column-head"><span class="column-title"><i></i>'+columnLabel+sortButton+'</span><b>'+cards.length+'</b></div><div class="column-body">'+
+          (visibleCards.length ? visibleCards.map(taskCard).join("") : '<div class="column-empty">暂无任务</div>')+'</div></section>';
+      }).join("")+'</div></div>';
+    }
+
+    function workspaceContent(tasks, milestones, taskFilter) {
+      if (workspaceTab === "milestones") return milestoneView.list(milestones, milestoneStatusFilter);
+      const visibleTasks = milestoneView.filterTasks(tasks, taskFilter, showTaskHistory ? "history" : "current");
+      const visibleColumns = columns.filter(([key]) => showTaskHistory === ["done", "cancelled"].includes(key));
+      const historyCount = milestoneView.filterTasks(tasks, "independent", "history").length;
+      const historyButton = showTaskHistory || historyCount
+        ? '<button class="quiet-button" type="button" data-task-history>'+ (showTaskHistory ? '返回当前任务' : '独立任务历史 · '+historyCount)+'</button>' : '';
+      const taskTitle = showTaskHistory ? "独立任务历史" : taskFilter === "all" ? "全部未完成任务" : taskFilter === "independent" ? "独立任务" : milestones.find(item => item.id === taskFilter).title;
+      const taskHeading = !showTaskHistory && !["all", "independent"].includes(taskFilter)
+        ? '<button class="quiet-button" type="button" data-open-milestone="'+escapeHtml(taskFilter)+'">'+escapeHtml(taskTitle)+' · '+visibleTasks.length+' 项任务 · 目标详情 ↗</button>'
+        : '<span>'+escapeHtml(taskTitle)+' · '+visibleTasks.length+'</span>';
+      return (showTaskHistory ? '' : milestoneView.activeFilters(milestones, taskFilter))+
+        '<div class="workspace-task-tools">'+taskHeading+historyButton+'</div>'+
+        renderTaskBoard(visibleTasks, visibleColumns);
     }
 
     function renderWorkspace() {
       const snapshot = currentSnapshot();
       const host = document.getElementById("project");
+      host.classList.add("board-workspace");
       if (!snapshot) {
         host.innerHTML = '<div class="empty-workspace"><section class="empty-card"><div class="empty-kicker">从这里开始</div><h1>告诉 Codex 你的想法</h1><p>直接用自然语言描述，确认计划后，Codrive 会自动推进任务。</p><div class="starter-example">“用 Codrive 的方式帮我做一个经营太空货运公司的游戏。”</div></section></div>';
         return;
       }
       const { project, tasks, milestones } = snapshot;
       const taskFilter = currentMilestoneFilter(milestones);
-      const visibleTasks = milestoneView.filterTasks(tasks, taskFilter);
+      if (openedMilestoneId && !milestones.some(item => item.id === openedMilestoneId)) openedMilestoneId = null;
+      updateWorkspaceLocation();
       const active = tasks.filter(task => ["working", "reviewing", "integrating"].includes(task.status)).length;
       const waiting = tasks.filter(task => ["waiting_for_input", "blocked"].includes(task.status)).length;
       const done = tasks.filter(task => task.status === "done").length;
       const terminal = project.status === "cancelled";
-      const actions = terminal ? [] : [project.scheduling === "paused"
+      const archived = Boolean(project.archivedAt);
+      const actions = terminal || archived ? [] : [project.scheduling === "paused"
         ? '<button class="action-button" data-project-action="resume">继续</button>'
         : '<button class="action-button" data-project-action="pause">暂停</button>'];
-      actions.push('<button class="action-button danger" data-project-action="archive">归档</button>');
-      actions.unshift('<a class="action-button" href="/projects/'+encodeURIComponent(project.id)+'">产品详情</a>');
+      actions.push(archived ? '<button class="action-button" data-project-action="restore">恢复项目</button>' : '<button class="action-button danger" data-project-action="archive">归档</button>');
+      actions.unshift('<a class="action-button" data-project-info href="/projects/'+encodeURIComponent(project.id)+workspaceSearch()+'">项目资料</a>');
       if (project.planningThreadId) actions.unshift('<a class="action-button" href="codex://threads/'+escapeHtml(project.planningThreadId)+'">调度对话 ↗</a>');
-      if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
-      if (!terminal && (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status) || milestones.some(milestone => milestone.statusLabel === "评估失败"))) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
+      if (!archived && project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
+      if (!terminal && !archived && (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status) || milestones.some(milestone => milestone.statusLabel === "评估失败"))) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
       const attention = project.attention;
       const attentionCopy = attention?.question || attention?.summary;
       const cancellationReason = project.status === "cancelled" && project.cancellation ? project.cancellation.reason : null;
@@ -777,33 +891,22 @@ export function renderBoardClient(accessToken: string): string {
             '<div class="project-identity">'+
               '<button id="mobile-projects" class="mobile-projects" type="button" aria-label="打开项目列表">☰</button>'+
               '<span class="project-status-dot"></span>'+
-              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1><a href="/projects/'+encodeURIComponent(project.id)+'">'+escapeHtml(project.name)+'</a></h1>'+planningBanner+(terminal ? '' : milestoneView.notices(milestones, project.id))+'</div>'+
+              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1>'+escapeHtml(project.name)+'</h1>'+planningBanner+'</div>'+
             '</div>'+
             '<div class="project-controls"><div class="project-actions">'+actions.join("")+'</div><div id="project-action-status" class="project-action-status" role="status" aria-live="polite"></div></div>'+
           '</div>'+
           '<div class="project-stats"><span><b>'+tasks.length+'</b>总任务</span><span><b>'+active+'</b>进行中</span><span><b>'+waiting+'</b>等待</span><span><b>'+done+'</b>已完成</span></div>'+
         '</header>'+
-        milestoneView.filters(milestones, taskFilter)+
-        '<div class="board-wrap"><div class="board">'+columns.map(([key, columnLabel]) => {
-          const cards = visibleTasks.filter(task => bucket(task.status) === key);
-          const direction = terminalTaskSort[key] || null;
-          const visibleCards = key === "done" || key === "cancelled"
-            ? sortTerminalTasks(cards, direction)
-            : cards;
-          const timeLabel = key === "done" ? "完成时间" : "取消时间";
-          const nextDirection = direction === "desc" ? "正序" : "倒序";
-          const sortButton = key === "done" || key === "cancelled"
-            ? '<button class="column-sort '+(direction ? 'active' : '')+'" type="button" data-task-sort="'+key+'" aria-label="按'+timeLabel+nextDirection+'排列" title="按'+timeLabel+nextDirection+'排列"><span aria-hidden="true">'+(direction === "desc" ? "↓" : direction === "asc" ? "↑" : "⇅")+'</span></button>'
-            : '';
-          return '<section class="column" data-column="'+key+'"><div class="column-head"><span class="column-title"><i></i>'+columnLabel+sortButton+'</span><b>'+cards.length+'</b></div><div class="column-body">'+
-            (visibleCards.length ? visibleCards.map(taskCard).join("") : '<div class="column-empty">暂无任务</div>')+
-          '</div></section>';
-        }).join("")+'</div></div>';
+        workspaceTabs()+workspaceContent(tasks, milestones, taskFilter);
 
-      bindMilestoneFilters(host);
+      bindWorkspaceNavigation(host);
       document.getElementById("mobile-projects").onclick = () => document.body.classList.add("nav-open");
       host.querySelectorAll("[data-project-action]").forEach(button => {
         button.onclick = async () => {
+          if (button.dataset.projectAction === "restore") {
+            await restoreArchivedProject(project.id, button);
+            return;
+          }
           if (button.dataset.projectAction === "archive") {
             openProjectArchiveDialog(project, button);
             return;
@@ -854,7 +957,7 @@ export function renderBoardClient(accessToken: string): string {
       const modelForm = createModelRoutingForm(availableModels, escapeHtml);
       host.innerHTML =
         '<div class="page-screen settings-screen">'+
-          '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回看板</a><div><h1>运行设置</h1><p>调整后续任务的并发数、模型路由和产品集成。</p></div></header>'+
+          '<header class="settings-header"><a class="eyebrow-link" href="'+escapeHtml(returnHref)+'">← 返回工作区</a><div><h1>运行设置</h1><p>调整后续任务的并发数、模型路由和产品集成。</p></div></header>'+
           '<section class="integration-card" data-installed="'+String(semanticAtlas.installed)+'">'+
             '<div><span class="integration-kicker">理解层</span><h2>Semantic Atlas</h2><p>在普通任务合入后检查当前可行动候选，并创建独立的业务地图维护任务。</p></div>'+
             (semanticAtlas.installed
@@ -898,9 +1001,11 @@ export function renderBoardClient(accessToken: string): string {
     function renderProductDetail() {
       const host = document.getElementById("project");
       if (!productDetail || !projectSettings) return;
-      const { project, productDocument, attention, tasks, milestones } = productDetail;
-      const taskFilter = currentMilestoneFilter(milestones);
-      const visibleTasks = milestoneView.filterTasks(tasks, taskFilter);
+      const { project, productDocument, attention } = productDetail;
+      const returnParams = new URLSearchParams(window.location.search);
+      returnParams.set("project", project.id);
+      const returnHref = "/?"+returnParams.toString();
+      host.classList.remove("board-workspace");
       const { settings: scopedModels, globalModels, availableModels } = projectSettings;
       const inheritsGlobalModels = scopedModels.source === "global";
       const selectedModels = scopedModels.modelConfig || scopedModels.effectiveModels;
@@ -923,11 +1028,10 @@ export function renderBoardClient(accessToken: string): string {
         : "磁盘有未记录修改 · v"+project.productFacts.revision;
       host.innerHTML =
         '<div class="page-screen product-screen">'+
-          '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><div class="product-hero-actions">'+projectControls+'<a class="action-button" href="/settings">运行设置</a></div></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
+          '<header class="page-hero product-hero"><a class="eyebrow-link" href="'+escapeHtml(returnHref)+'">← 返回工作区</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>项目资料 · '+escapeHtml(project.name)+'</h1></div><div class="product-hero-actions">'+projectControls+'<a class="action-button" href="/settings">运行设置</a></div></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
           '<div class="product-grid">'+
-            '<div class="product-main">'+notice+milestoneView.cards(milestones)+
+            '<div class="product-main">'+notice+
               '<section class="product-panel"><div class="panel-heading"><span>产品文档 · PROJECT.md</span><b>'+escapeHtml(productFactsLabel)+'</b></div><article class="markdown-body">'+renderMarkdown(productDocument)+'</article></section>'+
-              '<section class="product-panel"><div class="panel-heading"><span>任务清单</span><b>'+visibleTasks.length+'</b></div>'+milestoneView.filters(milestones, taskFilter)+'<div class="product-task-list">'+visibleTasks.map(productTask).join("")+'</div></section>'+
             '</div>'+
             '<aside class="product-rail">'+
               (project.planningThreadId ? '<a class="planning-conversation-link" href="codex://threads/'+escapeHtml(project.planningThreadId)+'"><span>项目调度</span><b>打开调度对话 ↗</b></a>' : '')+
@@ -945,7 +1049,6 @@ export function renderBoardClient(accessToken: string): string {
           '</div>'+
         '</div>';
 
-      bindMilestoneFilters(host);
       const projectModelForm = document.getElementById("project-model-form");
       host.querySelector("[data-product-archive]")?.addEventListener("click", event => {
         openProjectArchiveDialog(project, event.currentTarget);
@@ -976,11 +1079,6 @@ export function renderBoardClient(accessToken: string): string {
       };
     }
 
-    function productTask(task) {
-      const executionStatus = task.executionStatus === "retry_scheduled" ? task.executionStatus : task.displayStatus;
-      return '<article class="product-task"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><div>'+(task.milestoneTitle ? '<span class="task-milestone">'+escapeHtml(task.milestoneTitle)+'</span>' : '')+'<h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(task.milestoneWait?.summary || task.description)+'</p></div><span class="status-pill">'+escapeHtml(label(executionStatus))+'</span></article>';
-    }
-
     function renderMarkdown(markdown) {
       return String(markdown || "").split("\\n").map(line => {
         const value = escapeHtml(line);
@@ -1007,6 +1105,44 @@ export function renderBoardClient(accessToken: string): string {
       document.getElementById("task-detail-content").innerHTML = "";
     }
 
+    function openMilestone(milestoneId) {
+      if (!currentSnapshot()?.milestones.some(item => item.id === milestoneId)) return;
+      if (!selectedTaskId) detailReturnFocus = elementIdentity(document.activeElement);
+      clearTaskDetail();
+      openedMilestoneId = milestoneId;
+      milestoneDetailScroll = 0;
+      updateWorkspaceLocation();
+      renderMilestoneDetail();
+      document.getElementById("task-detail-content").scrollTop = 0;
+      document.getElementById("close-detail").focus({ preventScroll: true });
+    }
+
+    function renderDetail() {
+      if (selectedTaskId) renderTaskDetail();
+      else if (openedMilestoneId) renderMilestoneDetail();
+      else clearTaskDetail();
+    }
+
+    function renderMilestoneDetail() {
+      const snapshot = currentSnapshot();
+      const milestone = snapshot?.milestones.find(item => item.id === openedMilestoneId);
+      if (!milestone) { openedMilestoneId = null; clearTaskDetail(); return; }
+      const tasks = milestoneView.filterTasks(snapshot.tasks, milestone.id);
+      const tasksMarkup = tasks.length ? tasks.map(task =>
+        '<button class="milestone-task-row" type="button" data-task="'+escapeHtml(task.id)+'"><span>'+escapeHtml(task.title)+'</span><small>'+escapeHtml(label(task.displayStatus))+'</small></button>'
+      ).join("") : '<div class="criteria-empty">尚未安排任务。</div>';
+      const detail = document.getElementById("task-detail");
+      const host = document.getElementById("task-detail-content");
+      document.body.classList.add("detail-open");
+      detail.setAttribute("aria-hidden", "false");
+      detail.setAttribute("aria-label", "里程碑详情");
+      host.innerHTML = milestoneView.detail(milestone, tasksMarkup);
+      document.getElementById("close-detail").onclick = closeDetail;
+      host.querySelectorAll("[data-task]").forEach(button => {
+        button.onclick = () => { void openTask(button.dataset.task); };
+      });
+    }
+
     function renderTaskDetail() {
       const detail = document.getElementById("task-detail");
       const host = document.getElementById("task-detail-content");
@@ -1017,7 +1153,9 @@ export function renderBoardClient(accessToken: string): string {
         return;
       }
       const { task, activities, currentDecisionRequest } = taskDetail;
+      document.body.classList.add("detail-open");
       detail.setAttribute("aria-hidden", "false");
+      detail.setAttribute("aria-label", "任务详情");
       const criteria = task.acceptanceCriteria.length
         ? '<ul class="criteria-list '+(task.status === "done" ? "complete" : "")+'">'+task.acceptanceCriteria.map(item => '<li><i>'+(task.status === "done" ? "✓" : "")+'</i><span>'+escapeHtml(item)+'</span></li>').join("")+'</ul>'
         : '<div class="criteria-empty">未设置验收标准。</div>';
@@ -1041,14 +1179,14 @@ export function renderBoardClient(accessToken: string): string {
         : '';
       const activityTimeline = renderActivityHistory(task.id, activities, currentDecisionRequest?.id);
       const controls = [
-        task.status === "blocked" && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry>重试</button>' : ''
+        task.status === "blocked" && !currentSnapshot()?.project.archivedAt && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry>重试</button>' : ''
       ].filter(Boolean).join("");
       host.innerHTML =
-        '<header class="detail-head"><strong>任务详情</strong><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
+        '<header class="detail-head">'+(openedMilestoneId ? '<button class="quiet-button" type="button" data-back-milestone>← 里程碑</button>' : '<strong>任务详情</strong>')+'<button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
         '<div class="detail-body">'+
           '<div class="detail-status"><span></span>'+escapeHtml(label(task.displayStatus))+'</div>'+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
-          (task.milestoneTitle ? '<a class="task-milestone" href="/projects/'+encodeURIComponent(task.projectId)+'#milestone-'+encodeURIComponent(task.milestoneId)+'">'+escapeHtml(task.milestoneTitle)+'</a>' : '')+
+          (task.milestoneTitle && !openedMilestoneId ? '<button type="button" class="task-milestone" data-open-milestone="'+escapeHtml(task.milestoneId)+'">'+escapeHtml(task.milestoneTitle)+'</button>' : '')+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
           (task.milestoneWait ? '<section class="milestone-task-wait"><b>等待前置结果</b><p>'+escapeHtml(task.milestoneWait.summary)+'</p>'+(task.milestoneWait.threadId ? '<a href="codex://threads/'+escapeHtml(task.milestoneWait.threadId)+'">打开里程碑对话 ↗</a>' : '')+'</section>' : '')+
           (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+scheduledResume+integrationWait+currentConversation+
@@ -1065,6 +1203,8 @@ export function renderBoardClient(accessToken: string): string {
       bindActivityHistory(host, task.id, activities, currentDecisionRequest?.id);
       renderCurrentActivity();
       document.getElementById("close-detail").onclick = closeDetail;
+      host.querySelector("[data-back-milestone]")?.addEventListener("click", returnToMilestone);
+      host.querySelector("[data-open-milestone]")?.addEventListener("click", () => openMilestone(task.milestoneId));
       const copyTaskId = host.querySelector("[data-copy-task-id]");
       copyTaskId?.addEventListener("click", async () => {
         try {
@@ -1200,18 +1340,22 @@ export function renderBoardClient(accessToken: string): string {
       });
     }
 
+    function returnToMilestone() {
+      clearTaskDetail();
+      updateWorkspaceLocation();
+      renderMilestoneDetail();
+      document.getElementById("task-detail-content").scrollTop = milestoneDetailScroll;
+      document.getElementById("close-detail").focus({ preventScroll: true });
+    }
+
     function closeDetail() {
       const viewState = captureViewState();
-      taskActivityHistory.close();
-      shouldScrollTaskDetailToLatest = false;
-      selectedTaskId = null;
-      taskDetail = null;
-      currentActivity = null;
-      taskReadRevision += 1;
-      void syncCurrentWatches();
-      document.body.classList.remove("detail-open");
+      clearTaskDetail();
+      openedMilestoneId = null;
+      updateWorkspaceLocation();
       render();
       restoreViewState(viewState);
+      findIdentifiedElement(detailReturnFocus)?.focus({ preventScroll: true });
     }
 
     document.getElementById("update-trigger").onclick = openUpdateDialog;
@@ -1246,7 +1390,7 @@ export function renderBoardClient(accessToken: string): string {
       }
       if (event.key !== "Escape") return;
       if (!archiveDialog.hidden) closeProjectArchiveDialog();
-      else if (selectedTaskId) closeDetail();
+      else if (selectedTaskId || openedMilestoneId) closeDetail();
       else if (document.body.classList.contains("nav-open")) document.body.classList.remove("nav-open");
       else if (!document.getElementById("update-dialog").hidden) closeUpdateDialog();
     });

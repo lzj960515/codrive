@@ -234,9 +234,9 @@ export const boardStyles = `
   .board-wrap { height: calc(100dvh - 184px); overflow: auto; }
   .board {
     display: grid;
-    grid-template-columns: repeat(7, minmax(252px, 1fr));
+    grid-template-columns: repeat(var(--column-count, 7), minmax(252px, 1fr));
     gap: 12px;
-    min-width: 1764px;
+    min-width: calc(var(--column-count, 7) * 252px);
     min-height: 100%;
     padding: 18px 20px 34px;
   }
@@ -590,7 +590,7 @@ export const boardStyles = `
     .project-action-status { min-width: 0; flex: 1; max-width: none; margin-top: 0; line-height: 1.35; text-align: left; }
     .project-stats { gap: 14px; margin: 18px 0 0 49px; }
     .board-wrap { height: calc(100dvh - 224px); }
-    .board { grid-template-columns: repeat(7, minmax(82vw, 1fr)); min-width: 574vw; padding: 14px 14px 30px; scroll-snap-type: x proximity; }
+    .board { grid-template-columns: repeat(var(--column-count, 7), minmax(82vw, 1fr)); min-width: calc(var(--column-count, 7) * 82vw); padding: 14px 14px 30px; scroll-snap-type: x proximity; }
     .column { scroll-snap-align: start; }
     .task-detail { width: 100vw; }
     .detail-body { padding: 20px 18px 38px; }
@@ -631,32 +631,49 @@ export const boardStyles = `
     *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
   }
 
-  .milestone-filters { display: flex; flex-shrink: 0; gap: 8px; overflow-x: auto; padding: 12px 28px; border-bottom: 1px solid var(--line); background: var(--paper, #f7f8f4); }
-  .milestone-filters button { flex-shrink: 0; border: 1px solid transparent; border-radius: 6px; padding: 7px 11px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
-  .milestone-filters button[aria-pressed="true"] { background: #e8eee8; border-color: #ccd8cd; color: #234331; font-weight: 700; }
-  .milestone-filters button:focus-visible, .milestone-card a:focus-visible, .milestone-card button:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
-  .milestone-section { margin-bottom: 22px; }
-  .milestone-section-heading { display: flex; justify-content: space-between; align-items: center; margin: 0 0 12px; font-size: 12px; color: var(--muted); }
-  .milestone-section-heading span { font-weight: 700; color: var(--ink); }
-  .milestone-section-heading b { font-weight: 400; }
-  .milestone-grid { display: grid; gap: 14px; }
-  .milestone-card { padding: 22px; border: 1px solid #d7dfd5; border-left: 3px solid #547561; border-radius: 12px; background: #fbfdf9; }
-  .milestone-card[data-state="decision"] { border-left-color: #ad7435; background: #fffcf5; }
-  .milestone-card[data-state="done"] { border-left-color: var(--mint); }
-  .milestone-card-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
-  .milestone-card-heading h2 { margin: 0; color: var(--ink); font-size: 18px; letter-spacing: -.025em; }
-  .milestone-card-heading > span { flex-shrink: 0; font-size: 11px; color: #547561; }
-  .milestone-card[data-state="decision"] .milestone-card-heading > span { color: #976127; }
-  .milestone-summary { margin: 12px 0; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
-  .milestone-question { padding: 12px 14px; border: 1px solid #e7d7b7; border-radius: 7px; background: #fff8e7; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
-  .milestone-goal { margin: 14px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-  .milestone-goal summary { width: fit-content; cursor: pointer; color: #425648; }
-  .milestone-goal p { white-space: pre-wrap; }
-  .milestone-goal h3 { font-size: 12px; }
-  .milestone-card footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #e1e8dd; padding-top: 14px; }
-  .milestone-card footer button { padding: 0; border: 0; background: transparent; cursor: pointer; color: #49624e; font: inherit; font-size: 12px; }
-  .milestone-conversation { color: #2d533d; font-size: 12px; font-weight: 700; }
-  .milestone-conversation.pending { font-weight: 400; color: var(--muted); }
+  .board-workspace { display: flex; min-width: 0; flex-direction: column; }
+  .board-workspace .workspace-header { flex-shrink: 0; }
+  .board-workspace .board-wrap { flex: 1; min-height: 0; height: auto; }
+  .workspace-tabs { display: flex; flex-shrink: 0; gap: 22px; padding: 0 28px; background: rgba(255,255,255,.82); border-bottom: 1px solid var(--line); }
+  .workspace-tabs button { padding: 13px 2px 11px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; cursor: pointer; font-size: 12px; font-weight: 700; }
+  .workspace-tabs button[aria-current="page"] { color: var(--ink); border-bottom-color: var(--signal); }
+  .workspace-task-tools { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 28px 0; }
+  .workspace-task-tools .quiet-button { min-height: 30px; padding: 0 10px; font-size: 10px; }
+  .workspace-task-tools p, .workspace-task-tools span { margin: 0; color: var(--muted); font-size: 11px; }
+  .milestone-filters { display: flex; flex-shrink: 0; gap: 8px; align-items: stretch; overflow-x: auto; padding: 12px 28px; border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+  .milestone-filters button { flex-shrink: 0; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: rgba(255,255,255,.72); cursor: pointer; text-align: left; }
+  .milestone-filters button:hover { border-color: #aebcaf; background: white; }
+  .milestone-filters button[aria-pressed="true"] { background: #e8eee8; border-color: #91a694; color: #234331; }
+  .milestone-scope { align-self: center; min-height: 36px; padding: 8px 11px; font-size: 11px; white-space: nowrap; }
+  .milestone-filter { width: 258px; max-width: 72vw; padding: 10px 12px; }
+  .milestone-heading { display: flex; min-width: 0; gap: 14px; align-items: baseline; justify-content: space-between; }
+  .milestone-heading strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+  .milestone-state { flex-shrink: 0; color: #547561; font-size: 10px; }
+  [data-state="decision"] > .milestone-heading .milestone-state { color: #976127; }
+  .milestone-excerpt { display: block; min-width: 0; margin-top: 7px; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.55; text-overflow: ellipsis; white-space: nowrap; }
+  .milestone-filter[data-state="decision"] { border-left: 3px solid var(--amber); }
+  .milestone-filter[data-state="decision"] .milestone-excerpt { color: #89612f; }
+  .milestone-list { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 28px 34px; }
+  .milestone-status-filters { display: flex; gap: 6px; margin-bottom: 18px; }
+  .milestone-status-filters button { min-height: 32px; padding: 7px 12px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer; font-size: 11px; }
+  .milestone-status-filters button[aria-pressed="true"] { color: #234331; background: #e8eee8; border-color: #ccd8cd; font-weight: 700; }
+  .milestone-rows { display: grid; gap: 10px; max-width: 1120px; }
+  .milestone-row { position: relative; display: block; width: 100%; min-width: 0; padding: 19px 46px 17px 20px; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.93); cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease; }
+  .milestone-row:hover { border-color: #aebcaf; box-shadow: 0 5px 18px rgba(18,31,26,.055); }
+  .milestone-row .milestone-heading strong { font-size: 15px; }
+  .milestone-row[data-state="decision"] { border-left: 3px solid var(--amber); }
+  .milestone-row[data-state="done"] .milestone-state { color: #28725b; }
+  .milestone-task-count { display: block; margin-top: 12px; color: #829087; font-size: 10px; }
+  .milestone-row-arrow { position: absolute; right: 20px; top: 50%; color: #829087; transform: translateY(-50%); }
+  .milestone-empty { margin: 0; padding: 30px 20px; color: var(--muted); background: rgba(255,255,255,.64); border: 1px dashed var(--line-strong); border-radius: 12px; font-size: 12px; line-height: 1.6; }
+  .milestone-task-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; width: 100%; margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); cursor: pointer; text-align: left; }
+  .milestone-task-row:hover { border-color: #aebcaf; background: #edf2ea; }
+  .milestone-task-row span { min-width: 0; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+  .milestone-task-row small { flex-shrink: 0; color: var(--muted); font-size: 10px; }
+  .milestone-detail { overflow-wrap: anywhere; }
+  .milestone-detail[data-state="done"] .detail-status { color: #28725b; }
+  .milestone-detail[data-state="decision"] .detail-status { color: #976127; }
+  .milestone-question { margin: 14px 0 0; padding: 12px 14px; border: 1px solid #e7d7b7; border-radius: 9px; background: #fff8e7; font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
   .task-milestone { display: inline-block; max-width: 100%; margin-top: 8px; color: #567261; font-size: 10px; overflow-wrap: anywhere; }
   .planning-conversation-link { display: grid; gap: 8px; margin-bottom: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #f6f9f3; color: #355340; text-decoration: none; }
   .planning-conversation-link span { font-size: 11px; color: var(--muted); }
@@ -664,6 +681,11 @@ export const boardStyles = `
   .milestone-task-wait { margin: 18px 0; padding: 15px; border: 1px solid #e7d7b7; background: #fffbf0; border-radius: 8px; font-size: 12px; line-height: 1.7; }
   .milestone-task-wait p { white-space: pre-wrap; }
   .milestone-task-wait a { color: #7c581f; }
-  .product-panel .milestone-filters { padding: 0 0 14px; background: transparent; }
-  @media (max-width: 760px) { .milestone-filters { padding: 10px 16px; } .milestone-card { padding: 16px; } }
+  @media (max-width: 760px) {
+    .workspace-tabs { padding: 0 16px; }
+    .workspace-task-tools { padding: 8px 16px 0; }
+    .milestone-filters { padding: 10px 16px; }
+    .milestone-list { padding: 16px 16px 30px; }
+    .milestone-row { padding-left: 16px; }
+  }
 `;

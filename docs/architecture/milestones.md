@@ -54,3 +54,23 @@ All member tasks reaching terminal states triggers assessment, not automatic mil
 All conversations are visible in the current project. Each turn rereads authoritative context. Automatic dispatch checks for an already active role conversation, including a user-started reply, and accepts plans through serialized identity/version validation. After a milestone reaches `done`, replies in its persistent conversation remain historical discussion outside the planning execution lifecycle, preserving completion and leaving the project's planning slot available. Model routing, retries, report opportunities, and recovery reuse planning execution mechanisms.
 
 The four managed Skills remain the entry points: Forge registers product goals, Work adds or revises authorized work, Task routes selection/assessment/task stages, and Control reads current progress and applies confirmed controls. Detailed AI judgment lives in `codrive-task/references/planning.md`; this page owns the product lifecycle.
+
+
+## Project workspace
+
+The task tab focuses on current work. Its milestone selector shows only active
+milestones; selecting one filters unfinished tasks, and its goal detail opens in
+the same side panel used for task details. Completed and cancelled tasks leave
+the current board without changing their stored state.
+
+The milestone tab lists all goals with active and completed filters. Its detail
+shows the goal, acceptance criteria, current questions, evidence, and every
+associated task directly. Opening a task keeps a return path to the milestone.
+Independent completed and cancelled tasks remain accessible through task history.
+Completion remains an explicit milestone assessment, never a task-count inference.
+
+Project information stays on a separate page for `PROJECT.md`, model settings,
+and registration details. Workspace URLs retain the project, view, filters, and
+open detail when reloading or returning from project information. Archived
+projects retain read access to goals and tasks through the same workspace;
+scheduling stays paused until the existing restore and resume controls are used.

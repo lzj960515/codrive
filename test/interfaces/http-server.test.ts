@@ -2087,7 +2087,7 @@ describe("HTTP API", () => {
     expect(detail.json().project).not.toHaveProperty("contextNotes");
     expect(missing.statusCode).toBe(404);
     expect(page.statusCode).toBe(200);
-    expect(page.body).toContain("产品详情");
+    expect(page.body).toContain("项目资料");
     expect(page.body).toContain("产品文档");
     expect(page.body).not.toContain("<span>当前执行</span>");
     expect(page.body).not.toContain("<span>产品上下文</span>");
