@@ -1,12 +1,12 @@
 ---
 name: codrive-task
-description: 读取并执行 Codrive 的项目任务选择或看板任务当前阶段，包括通用工作、独立审查、同步合入、后续工作判断和结果汇报。用户或 Codrive 要求选择、领取、处理、审查、继续、验收或汇报 Codrive 工作时使用。
+description: 读取并执行 Codrive 的项目任务选择、里程碑评估或看板任务当前阶段，包括通用工作、独立审查、同步合入、后续工作判断和结果汇报。用户或 Codrive 要求选择、领取、处理、审查、继续、验收或汇报 Codrive 工作时使用。
 compatibility: Requires Node.js 24+, Git, and a running local Codrive service.
 ---
 
 # Codrive Task
 
-Codrive 只提供任务引用。你主动读取产品和任务事实，完成当前阶段，并通过脚本回报业务结果。
+从 Codrive 提供的项目、里程碑或任务引用读取权威上下文，按当前 action 执行。规划负责发现并组织所需工作，任务负责具体交付；已有授权内的必要工作持续推进。
 
 ## 读取上下文
 
@@ -22,7 +22,7 @@ node <skill-directory>/scripts/codrive-task.mjs context <task-id>
 node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-directory>
 ```
 
-读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities` 和仓库 `AGENTS.md`。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务定义、当前状态和已有证据恢复连续上下文。
+读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities`、关联里程碑的当前目标与未决活动，以及仓库 `AGENTS.md`。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务定义、当前状态和已有证据恢复连续上下文。
 
 读取任务定义、验收标准、当前阶段和完整活动历史后，把这些内容与仓库规则共同作为本轮任务语义。开始执行当前阶段前，对照当前可用 Skill 的 `description`，加载与当前阶段实际工作匹配的 Skill，并遵循对应工作流。没有其他匹配 Skill 的任务继续按照本 Skill 完成。
 
@@ -34,11 +34,11 @@ node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-
 node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 ```
 
-根据返回的 `requestedAction` 执行任务选择，并读取 `PROJECT.md`、全部任务文件、仓库规则和实际代码。只有 `productFacts.status` 为 `current` 时才提交选择结果。
+里程碑评估使用 `milestone-context <milestone-id>`。根据 context 的 `requestedAction`，项目任务选择和里程碑评估读取[规划与目标验收](references/planning.md)，任务阶段继续下文。读取 `PROJECT.md`、相关任务与活动、仓库规则和实际证据后才提交判断；产品事实为 `current` 时推进计划。
 
 ## 连续任务工作区
 
-Codrive 将持久任务对话归属到产品仓库根目录，让工作和审查对话始终显示在 Codex App 的同一个项目下。每个任务拥有两个稳定角色的对话：工作对话负责代码、文档、发布、迁移、验证、审查反馈处理和合入，独立的 Review 对话负责当前 work 结果的审查与复审。新的 Review round 继续同一个 Review 对话，使审查者能够结合后续修改、反证和上一轮结论重新判断。
+项目调度、里程碑负责人、工作与审查都使用当前项目下可见的持久对话，每轮重新读取当前 context。Codrive 将持久任务对话归属到产品仓库根目录，让工作和审查对话始终显示在 Codex App 的同一个项目下。每个任务拥有两个稳定角色的对话：工作对话负责代码、文档、发布、迁移、验证、审查反馈处理和合入，独立的 Review 对话负责当前 work 结果的审查与复审。新的 Review round 继续同一个 Review 对话，使审查者能够结合后续修改、反证和上一轮结论重新判断。
 
 对话目录表示产品归属；`context.workspacePath` 和 `context.delivery` 来自当前绑定的 `work` 活动。该活动有 `candidateCommit` 时，这些字段是本轮 Review 和合入唯一可用的 Git 事实；没有候选时，本轮是发布、迁移、验证等无代码工作，不虚构 Git 操作。
 
@@ -49,17 +49,11 @@ Codrive 将持久任务对话归属到产品仓库根目录，让工作和审查
 
 把 `needs_input` 用于真正需要用户决定的产品语义、外部凭据或权限。工作树恢复、现有改动归属、Git 冲突和代码取舍由当前 Codex 根据可见事实完成。
 
-## 任务选择 `select_tasks`
+## 执行中发现与受影响工作
 
-读取 project context 中固定的 `planningRevision` 和项目级 `availableTaskSlots`，查看全部 `backlog`、活动任务、已完成结果和当前仓库。根据工作之间的真实关系、当前代码状态和当轮容量，完整判断这一规划版本现在适合独立开始的任务。把历史编号和启动说明还原为其引用的任务与具体前置结果，并核对当前是否满足；单纯的排列顺序不构成依赖。用户明确要求的执行顺序仍作为约束。其他项目的工作不占用当前项目容量。
+执行每个阶段时检查当前交付的前提、消费者与目标是否一致。涉及里程碑的新事实立即通过 `discovery <task-id> --json '<discovery-json>'` 登记来源、证据和影响；该非终态操作不消耗当前阶段报告机会。请求包含当前 `attemptId`、稳定 `requestId`、`summary`、`evidence`，可附确实需要暂缓的 `affectedTaskIds`。相同请求重试沿用原身份，不同来源事实保留各自身份。审查阻塞继续进入 `findings`；跨任务线索进入里程碑活动，由负责人统一调查、合并处置或请求决定。
 
-- 有适合开始的工作时汇报 `selected` 和唯一的 `taskIds`；一轮可以选择多个任务，数量不超过 `availableTaskSlots`。
-- 少于可用槽位的选择仍表示本轮已经检查全部 backlog；Codrive 等待新的规划事实，不用空闲槽位重复询问。
-- 当前候选应等待正在执行或等待继续的任务时汇报 `wait_for_active_tasks`，让原任务对话负责其实现现场。
-- 缺少影响项目规划的产品语义、外部凭据或权限时汇报 `needs_input` 和明确的 `question`。
-- 存在确定障碍时汇报 `blocked`。
-
-通过 `project-report` 提交选择结果。Codrive 按该 attempt 捕获的容量验证任务，并为选中任务分别创建独立工作对话。任务的 work、Review 和合入延续当前选择结果；完整任务完成、任务取消、新工作、产品决定、并发配置变化或人工重新规划才产生新的规划版本。
+报告事实后，当前任务内不受影响的工作继续。开始、恢复以及合入或其他有副作用的操作前，重新读取当前任务限制和授权；受影响执行保留定义、候选和检查点，按 Codrive 的中断与恢复状态继续。针对仍未确定的问题先收集证据；对已经授权的业务结果与必要漏项自主处理。影响多个任务的业务取舍汇入里程碑负责人会话，单个任务独有的权限或语义问题沿既有 `needs_input` 处理。
 
 ## 工作 `work`
 

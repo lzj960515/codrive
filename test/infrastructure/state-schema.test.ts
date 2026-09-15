@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
-import { migrateStateDirectory } from "../../src/infrastructure/state-schema.js";
+import { ensureCurrentState } from "../../src/infrastructure/state-schema.js";
 
 describe("Codrive state schema", () => {
   it("initializes an empty directory with the current state contract", async () => {
@@ -18,14 +18,14 @@ describe("Codrive state schema", () => {
         await readFile(join(stateDirectory, "state-schema.json"), "utf8"),
       ),
     ).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });
   });
 
   it("accepts the current marker without rewriting it", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-state-"));
-    const marker = '{"schemaVersion":4,"createdAt":"2026-08-26T00:00:00.000Z"}\n';
+    const marker = '{"schemaVersion":5,"createdAt":"2026-08-26T00:00:00.000Z"}\n';
     await writeFile(join(stateDirectory, "state-schema.json"), marker, "utf8");
 
     await new ProjectStore(stateDirectory).initialize();
@@ -35,7 +35,7 @@ describe("Codrive state schema", () => {
     ).resolves.toBe(marker);
   });
 
-  it("requires an offline migration before runtime opens schema v3 state", async () => {
+  it("requires a startup migration before runtime opens schema v3 state", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-state-"));
     const markerPath = join(stateDirectory, "state-schema.json");
     const marker =
@@ -43,14 +43,14 @@ describe("Codrive state schema", () => {
     await writeFile(markerPath, marker, "utf8");
 
     await expect(new ProjectStore(stateDirectory).initialize()).rejects.toThrow(
-      /offline migration/i,
+      /startup migration/i,
     );
 
     await expect(readFile(markerPath, "utf8")).resolves.toBe(marker);
 
-    await migrateStateDirectory(stateDirectory);
+    await ensureCurrentState(stateDirectory);
     await expect(readFile(markerPath, "utf8")).resolves.toContain(
-      '"schemaVersion": 4',
+      '"schemaVersion": 5',
     );
   });
 
@@ -63,7 +63,7 @@ describe("Codrive state schema", () => {
     );
     const taskPath = join(projectDirectory, "tasks", "task_old.json");
 
-    await migrateStateDirectory(stateDirectory);
+    await ensureCurrentState(stateDirectory);
     const store = new ProjectStore(stateDirectory);
     await store.initialize();
 
@@ -71,7 +71,7 @@ describe("Codrive state schema", () => {
       await readFile(join(stateDirectory, "state-schema.json"), "utf8"),
     );
     expect(marker).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       createdAt: "2026-08-25T00:00:00.000Z",
       migratedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });

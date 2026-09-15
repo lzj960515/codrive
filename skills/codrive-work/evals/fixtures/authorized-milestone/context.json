@@ -1,0 +1,44 @@
+{
+  "project": {
+    "id": "project_social",
+    "name": "Fictional Social",
+    "productFacts": {
+      "revision": 3,
+      "digest": "sha256:fixture"
+    }
+  },
+  "milestone": {
+    "id": "milestone_core",
+    "projectId": "project_social",
+    "title": "迁移核心采集和展示",
+    "description": "保持现有核心场景结果，清除相关旧实现。允许自主调查、补齐核心消费者、实现和验证；历史月报未纳入本次范围。",
+    "acceptanceCriteria": [
+      "核心消费者均有去向且结果保持",
+      "移除相关旧实现后完整链路有实际证据"
+    ],
+    "definitionVersion": 1,
+    "status": "active"
+  },
+  "productFacts": {
+    "revision": 3,
+    "acceptedDigest": "sha256:fixture",
+    "status": "current"
+  },
+  "tasks": [
+    {
+      "id": "task_write",
+      "title": "迁移核心写入",
+      "milestoneId": "milestone_core",
+      "status": "done"
+    },
+    {
+      "id": "task_display",
+      "title": "迁移展示入口",
+      "milestoneId": "milestone_core",
+      "status": "working"
+    }
+  ],
+  "evidence": [
+    "已查明新增入口 B2 服务核心展示，仍读取旧模型；现有迁移任务不覆盖 B2。"
+  ]
+}

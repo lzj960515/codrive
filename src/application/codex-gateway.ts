@@ -29,7 +29,6 @@ export interface CodexGateway {
   startThread(
     cwd: string,
     title: string,
-    options?: { ephemeral?: boolean },
   ): Promise<string>;
   resumeThread(threadId: string, cwd: string): Promise<void>;
   setThreadName(threadId: string, name: string): Promise<void>;

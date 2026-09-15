@@ -26,6 +26,28 @@ const projectInput = {
 };
 
 describe("ProjectStore", () => {
+  it("persists milestone membership and restores milestone snapshots from activity events", async () => {
+    const { stateDirectory, store } = await createStore();
+    const created = await store.createProject({ ...projectInput, tasks: [], milestones: [{
+      title: "Deliver the loop", description: "Finish the stage", acceptanceCriteria: ["Playable"], tasks: projectInput.tasks,
+    }] });
+    expect(created.milestones).toHaveLength(1);
+    const milestone = created.milestones[0]!;
+    expect(created.tasks[0]?.milestoneId).toBe(milestone.id);
+    const activity = {
+      id: "discovery_1", projectId: created.project.id, milestoneId: milestone.id,
+      type: "discovery" as const, taskId: created.tasks[0]!.id, attemptId: "attempt_1", requestId: "request_1",
+      summary: "One dependency remains", evidence: ["src/loop.ts"], affectedTaskIds: [], occurredAt: milestone.createdAt,
+    };
+    await store.appendEvent({ schemaVersion: 1, eventId: "event_discovery", type: "milestone.activity_recorded", projectId: created.project.id,
+      milestoneId: milestone.id, occurredAt: milestone.createdAt, data: { milestoneActivity: activity } });
+    await rm(store.milestonePath(created.project.id, milestone.id));
+    const restarted = new ProjectStore(stateDirectory);
+    await restarted.initialize();
+    expect((await restarted.findMilestone(milestone.id))?.milestone).toEqual(milestone);
+    expect(await restarted.listMilestoneActivities(created.project.id, milestone.id)).toEqual([activity]);
+  });
+
   it("persists product context, task snapshots, and append-only events", async () => {
     const { stateDirectory, store } = await createStore();
 
@@ -53,7 +75,7 @@ describe("ProjectStore", () => {
     ).toEqual(["project.created", "project.activated", "task.created"]);
   });
 
-  it("reads existing schema-v3 project snapshots without archive metadata", async () => {
+  it("reads current project snapshots without optional archive metadata", async () => {
     const { stateDirectory, store } = await createStore();
     const created = await store.createProject(projectInput);
     const projectPath = join(
@@ -180,6 +202,7 @@ describe("ProjectStore", () => {
       requestedAction: "select_tasks",
       currentExecution: {
         attemptId: "selection_1",
+        reportOpportunityId: "report_selection_1",
         action: "select_tasks",
         status: "running",
         threadId: "thread_1",

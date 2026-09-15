@@ -13,7 +13,7 @@ import {
 } from "../support/recording-executors.js";
 
 describe("AI task selection", () => {
-  it("asks a temporary project task to select work before starting task conversations", async () => {
+  it("asks the project planning conversation to select work before starting task conversations", async () => {
     const store = new ProjectStore(await mkdtemp(join(tmpdir(), "codrive-selection-")));
     const taskDispatcher = new RecordingTaskDispatcher();
     const projectExecutor = new RecordingProjectExecutor();

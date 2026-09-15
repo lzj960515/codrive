@@ -1,0 +1,96 @@
+{
+  "project": {
+    "id": "project_social",
+    "name": "Fictional Social",
+    "productFacts": {
+      "revision": 3,
+      "digest": "sha256:fixture"
+    }
+  },
+  "milestone": {
+    "id": "milestone_core",
+    "projectId": "project_social",
+    "title": "迁移核心采集和展示",
+    "description": "保持现有核心场景结果，清除相关旧实现。允许自主调查、补齐核心消费者、实现和验证；历史月报未纳入本次范围。",
+    "acceptanceCriteria": [
+      "核心消费者均有去向且结果保持",
+      "移除相关旧实现后完整链路有实际证据"
+    ],
+    "definitionVersion": 1,
+    "status": "active"
+  },
+  "productFacts": {
+    "revision": 3,
+    "acceptedDigest": "sha256:fixture",
+    "status": "current"
+  },
+  "tasks": [
+    {
+      "id": "task_write",
+      "title": "迁移核心写入",
+      "milestoneId": "milestone_core",
+      "status": "done"
+    },
+    {
+      "id": "task_display",
+      "title": "迁移展示入口",
+      "milestoneId": "milestone_core",
+      "status": "working"
+    },
+    {
+      "id": "task_delete",
+      "title": "删除核心迁移涉及的旧实现",
+      "milestoneId": "milestone_core",
+      "status": "working",
+      "currentExecution": {
+        "status": "interrupted"
+      }
+    }
+  ],
+  "evidence": [
+    "已查明新增入口 B2 服务核心展示，仍读取旧模型；现有迁移任务不覆盖 B2。"
+  ],
+  "requestedAction": "assess_milestone",
+  "attemptId": "attempt_assess",
+  "reportOpportunityId": "opportunity_assess",
+  "definitionVersion": 1,
+  "planningRevision": 5,
+  "activities": [
+    {
+      "id": "activity_monthly",
+      "type": "resolution",
+      "summary": "历史月报依赖共享旧路径，等待范围决定",
+      "resolution": {
+        "sourceActivityIds": [],
+        "summary": "待用户决定月报是否纳入迁移",
+        "question": "是否把范围外历史月报纳入本次迁移？推荐保留结果并纳入。",
+        "affectedTaskIds": [
+          "task_delete"
+        ]
+      }
+    },
+    {
+      "id": "activity_b2_a",
+      "type": "discovery",
+      "taskId": "task_write",
+      "summary": "核心展示入口 B2 未覆盖",
+      "evidence": [
+        "B2 使用 core-display 路径"
+      ]
+    },
+    {
+      "id": "activity_b2_b",
+      "type": "discovery",
+      "taskId": "task_display",
+      "summary": "也发现 B2 读取旧模型",
+      "evidence": [
+        "与 activity_b2_a 同一消费者"
+      ]
+    }
+  ],
+  "projection": {
+    "restrictedTaskIds": [
+      "task_delete"
+    ]
+  }
+}

@@ -1,3 +1,17 @@
+import {
+  validateTaskDefinitionUpdate,
+  applyTaskDefinitionChanges,
+} from "../domain/task-definition.js";
+import { validateMilestonePlan } from "../domain/milestone-plan.js";
+import { projectMilestoneActivities } from "../domain/milestone-activity.js";
+import type {
+  Milestone,
+  MilestoneActivity,
+  MilestoneReport,
+  CreateMilestoneInput,
+  UpdateMilestoneDefinitionInput,
+  TaskDiscoveryInput,
+} from "../domain/milestone.js";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -57,8 +71,11 @@ import {
   activeIntegrationRepositories,
   findCompetingIntegrationLease,
 } from "./integration-lease.js";
-import { ProjectExecutionCoordinator } from "./project-execution-coordinator.js";
-import type { ProjectExecutor } from "./project-executor.js";
+import {
+  PlanningCoordinator,
+  assertPlanningReportIdentity,
+} from "./planning-coordinator.js";
+import type { PlanningExecutor } from "./planning-executor.js";
 import type { RepositoryPathResolver } from "./repository-path-resolver.js";
 import type { DispatchRequest, TaskDispatcher } from "./task-dispatcher.js";
 import {
@@ -125,7 +142,7 @@ export class WorkflowEngine {
   private readonly modelPrimaryProbeAfterMs: number;
   private maxConcurrentTasks: number;
   private models: ModelRoutingSettings;
-  private readonly projectExecutions: ProjectExecutionCoordinator | undefined;
+  private readonly planningCoordinator: PlanningCoordinator | undefined;
   private operation: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -133,11 +150,12 @@ export class WorkflowEngine {
     private readonly dispatcher: TaskDispatcher,
     private readonly options: WorkflowEngineOptions,
     private readonly repositoryPaths: RepositoryPathResolver,
-    projectExecutor?: ProjectExecutor,
+    planningExecutor?: PlanningExecutor,
     lifecycle?: LifecycleRecorder,
   ) {
     this.now = options.now ?? (() => new Date().toISOString());
-    this.createId = options.createId ?? ((prefix) => `${prefix}_${randomUUID()}`);
+    this.createId =
+      options.createId ?? ((prefix) => `${prefix}_${randomUUID()}`);
     this.executionLeaseMs = options.executionLeaseMs ?? 6 * 60 * 60 * 1000;
     this.modelCapacityRetryDelaysMs =
       options.modelCapacityRetryDelaysMs ?? defaultModelCapacityRetryDelaysMs;
@@ -154,8 +172,8 @@ export class WorkflowEngine {
         now: this.now,
         createId: this.createId,
       });
-    this.projectExecutions = projectExecutor
-      ? new ProjectExecutionCoordinator(this.store, projectExecutor, {
+    this.planningCoordinator = planningExecutor
+      ? new PlanningCoordinator(this.store, planningExecutor, {
           now: this.now,
           createId: this.createId,
           leaseExpiration: () => this.leaseExpiration(),
@@ -233,12 +251,21 @@ export class WorkflowEngine {
     source: LifecycleEventSource,
   ): Promise<unknown> {
     switch (command.type) {
+      case "milestone.create":
+        return this.createMilestone(command.payload);
+      case "milestone.update_definition":
+        return this.updateMilestoneDefinition(command.payload);
+      case "milestone.report":
+        return this.submitMilestoneReport(command.payload);
+      case "task.report_discovery":
+        return this.reportDiscovery(command.payload);
       case "project.register":
         return this.registerProject(command.payload);
       case "project.add_work":
         return this.addProjectWork(
           command.payload.projectId,
           command.payload.tasks,
+          command.payload.decisionSummary,
           command.payload.productDocumentChange,
         );
       case "project.control":
@@ -348,8 +375,10 @@ export class WorkflowEngine {
       if (
         current?.primary === modelConfig?.primary &&
         current?.fallback === modelConfig?.fallback &&
-        current?.primaryReasoningEffort === modelConfig?.primaryReasoningEffort &&
-        current?.fallbackReasoningEffort === modelConfig?.fallbackReasoningEffort
+        current?.primaryReasoningEffort ===
+          modelConfig?.primaryReasoningEffort &&
+        current?.fallbackReasoningEffort ===
+          modelConfig?.fallbackReasoningEffort
       ) {
         return snapshot.project;
       }
@@ -382,6 +411,718 @@ export class WorkflowEngine {
     });
   }
 
+  async milestoneContext(milestoneId: string) {
+    const found = await this.enqueue(async () => {
+      const current = await this.requireMilestone(milestoneId);
+      if (this.planningCoordinator)
+        current.milestone =
+          await this.planningCoordinator.synchronizeConversation(
+            current.milestone,
+          );
+      return current;
+    });
+    const snapshot = await this.requireSnapshot(found.project.id);
+    const activities = await this.store.listMilestoneActivities(
+      found.project.id,
+      milestoneId,
+    );
+    return {
+      project: snapshot.project,
+      milestone: found.milestone,
+      tasks: snapshot.tasks,
+      activities,
+      projection: projectMilestoneActivities(activities),
+    };
+  }
+
+  createMilestone(input: CreateMilestoneInput): Promise<Milestone> {
+    return this.enqueue(async () => {
+      const { project } = await this.requireSnapshot(input.projectId);
+      if (project.status === "cancelled" || isProjectArchived(project))
+        throw new WorkflowConflictError("Project cannot accept a milestone");
+      const now = this.now();
+      const milestone: Milestone = {
+        id: this.createId("milestone"),
+        projectId: project.id,
+        title: input.title,
+        description: input.description,
+        acceptanceCriteria: input.acceptanceCriteria,
+        definitionVersion: 1,
+        status: "active",
+        planning: {
+          revision: 1,
+          changedAt: now,
+          changeReason: "project_registered",
+        },
+        createdAt: now,
+        updatedAt: now,
+      };
+      await this.store.saveMilestone(project.id, milestone);
+      if (input.tasks?.length)
+        await this.store.addTasks(
+          project.id,
+          input.tasks.map((task) => ({ ...task, milestoneId: milestone.id })),
+        );
+      await this.recordEvent({
+        type: "milestone.created",
+        projectId: project.id,
+        milestoneId: milestone.id,
+        state: { milestone },
+      });
+      await this.revisePlanning(project.id, "manual_replan");
+      await this.reconcileInternal();
+      return (await this.requireMilestone(milestone.id)).milestone;
+    });
+  }
+
+  updateMilestoneDefinition(
+    input: UpdateMilestoneDefinitionInput,
+  ): Promise<Milestone> {
+    return this.enqueue(async () => {
+      const { project, milestone } = await this.requireMilestone(
+        input.milestoneId,
+      );
+      if (
+        milestone.status !== "active" ||
+        project.status === "cancelled" ||
+        isProjectArchived(project)
+      )
+        throw new WorkflowConflictError("Milestone definition cannot change");
+      if (
+        milestone.definitionVersion !== input.expectedDefinitionVersion ||
+        !input.decisionSummary.trim()
+      )
+        throw new WorkflowConflictError(
+          "Milestone definition is stale or missing a decision",
+        );
+      const stopped = this.planningCoordinator
+        ? await this.planningCoordinator.cancel(milestone)
+        : milestone;
+      const updated: Milestone = {
+        ...stopped,
+        ...input.changes,
+        definitionVersion: milestone.definitionVersion + 1,
+        planning: advancePlanning(
+          milestone.planning,
+          "manual_replan",
+          this.now(),
+        ),
+        updatedAt: this.now(),
+      };
+      await this.store.saveMilestone(project.id, updated);
+      await this.recordEvent({
+        type: "milestone.definition_updated",
+        projectId: project.id,
+        milestoneId: milestone.id,
+        decision: input.decisionSummary,
+        state: { milestone: updated },
+      });
+      await this.revisePlanning(project.id, "manual_replan");
+      await this.reconcileInternal();
+      return (await this.requireMilestone(milestone.id)).milestone;
+    });
+  }
+
+  reportDiscovery(input: TaskDiscoveryInput): Promise<MilestoneActivity> {
+    return this.enqueue(async () => {
+      const { project, task } = await this.requireTask(input.taskId);
+      if (!task.milestoneId)
+        throw new WorkflowConflictError("Discovery requires a milestone task");
+      const activities = await this.store.listMilestoneActivities(
+        project.id,
+        task.milestoneId,
+      );
+      const existing = activities.find(
+        (activity) =>
+          activity.type === "discovery" &&
+          activity.requestId === input.requestId &&
+          activity.taskId === task.id,
+      );
+      if (existing) {
+        if (
+          existing.type !== "discovery" ||
+          existing.attemptId !== input.attemptId ||
+          existing.summary !== input.summary ||
+          JSON.stringify(existing.evidence) !==
+            JSON.stringify(input.evidence) ||
+          JSON.stringify(existing.affectedTaskIds) !==
+            JSON.stringify(input.affectedTaskIds ?? [])
+        )
+          throw new WorkflowConflictError(
+            "Discovery conflicts with its existing receipt",
+          );
+        return existing;
+      }
+      if (
+        task.currentExecution?.attemptId !== input.attemptId ||
+        !reportableExecutionStatuses.has(task.currentExecution.status)
+      )
+        throw new WorkflowConflictError(
+          "Discovery does not match current task execution",
+        );
+      if (!input.summary.trim() || !input.requestId.trim())
+        throw new WorkflowConflictError(
+          "Discovery requires a summary and request identity",
+        );
+      const activity: MilestoneActivity = {
+        id: this.createId("milestone_activity"),
+        projectId: project.id,
+        milestoneId: task.milestoneId,
+        type: "discovery",
+        taskId: task.id,
+        attemptId: input.attemptId,
+        requestId: input.requestId,
+        summary: input.summary,
+        evidence: input.evidence,
+        affectedTaskIds: input.affectedTaskIds ?? [],
+        occurredAt: this.now(),
+      };
+      await this.recordMilestoneActivity(activity);
+      await this.advanceMilestone(task.milestoneId);
+      await this.reconcileInternal();
+      return activity;
+    });
+  }
+
+  submitMilestoneReport(report: MilestoneReport): Promise<Milestone> {
+    return this.enqueue(async () => {
+      const { project, milestone } = await this.requireMilestone(
+        report.milestoneId,
+      );
+      const previous = (
+        await this.store.listMilestoneActivities(project.id, milestone.id)
+      )
+        .filter(
+          (activity) =>
+            activity.type === "assessment" &&
+            activity.report.reportOpportunityId === report.reportOpportunityId,
+        )
+        .at(-1);
+      if (previous?.type === "assessment") {
+        if (!isDeepStrictEqual(previous.report, report))
+          throw new WorkflowConflictError(
+            "Milestone report conflicts with accepted result",
+          );
+        if (!previous.appliedAt) await this.applyMilestoneAssessment(previous);
+        return (await this.requireMilestone(milestone.id)).milestone;
+      }
+      assertPlanningReportIdentity(milestone, report);
+      await this.validateMilestoneReport(project, milestone, report);
+      const activity: Extract<MilestoneActivity, { type: "assessment" }> = {
+        id: this.createId("milestone_activity"),
+        projectId: project.id,
+        milestoneId: milestone.id,
+        type: "assessment",
+        report,
+        summary: report.summary,
+        createdTaskIds: (report.plan?.tasks ?? []).map(() =>
+          this.createId("task"),
+        ),
+        occurredAt: this.now(),
+      };
+      // 先保存确定的计划与任务身份，恢复只补全这份已经接受的结果。
+      await this.recordMilestoneActivity(activity);
+      await this.applyMilestoneAssessment(activity);
+      await this.reconcileInternal();
+      return (await this.requireMilestone(milestone.id)).milestone;
+    });
+  }
+
+  private async validateMilestoneReport(
+    project: Project,
+    milestone: Milestone,
+    report: MilestoneReport,
+  ): Promise<void> {
+    if (!(await this.productDocumentIsCurrent(project)))
+      throw new WorkflowConflictError(
+        "PROJECT.md has unrecorded changes; update product facts before milestone planning",
+      );
+    const snapshot = await this.requireSnapshot(project.id);
+    const activities = await this.store.listMilestoneActivities(
+      project.id,
+      milestone.id,
+    );
+    validateMilestonePlan(snapshot, milestone, activities, report);
+  }
+
+  private async applyMilestoneAssessment(
+    activity: Extract<MilestoneActivity, { type: "assessment" }>,
+  ): Promise<void> {
+    const { report, projectId, milestoneId } = activity;
+    const snapshot = await this.requireSnapshot(projectId);
+    const unrelatedTasks = snapshot.tasks.filter(
+      (task) => !activity.createdTaskIds.includes(task.id),
+    );
+    const firstOrder =
+      Math.max(0, ...unrelatedTasks.map((task) => task.order)) + 1;
+    const keyIds = new Map(
+      (report.plan?.tasks ?? []).map((task, index) => [
+        task.key,
+        activity.createdTaskIds[index]!,
+      ]),
+    );
+    const resolveIds = (ids: string[] | undefined) =>
+      ids?.map((id) => keyIds.get(id) ?? id);
+    for (const [index, addition] of (report.plan?.tasks ?? []).entries()) {
+      const id = activity.createdTaskIds[index]!;
+      if (await this.store.findTask(id)) continue;
+      const { key: _key, ...definition } = addition;
+      const task: Task = {
+        ...definition,
+        id,
+        projectId,
+        milestoneId,
+        order: addition.order ?? firstOrder + index,
+        status: "backlog",
+        requestedAction: null,
+        createdAt: activity.occurredAt,
+        updatedAt: activity.occurredAt,
+      };
+      await this.store.saveTask(projectId, task);
+      await this.recordEvent({
+        type: "task.created",
+        projectId,
+        taskId: id,
+        state: { task },
+      });
+    }
+    for (const update of report.plan?.updates ?? []) {
+      const found = await this.requireTask(update.taskId);
+      const task = applyTaskDefinitionChanges(
+        found.task,
+        update.changes,
+        activity.occurredAt,
+      );
+      await this.store.saveTask(projectId, task);
+      await this.recordEvent({
+        type: "task.definition_updated",
+        projectId,
+        taskId: task.id,
+        state: { task },
+        decision: report.summary,
+      });
+    }
+    for (const cancellation of report.plan?.cancellations ?? []) {
+      const found = await this.requireTask(cancellation.taskId);
+      await this.cancelTaskInternal(found.project, found.task, {
+        reason: cancellation.reason,
+        decisionBasis: cancellation.decisionBasis,
+        cancelledBy: "codex",
+        cancelledAt: activity.occurredAt,
+      });
+    }
+    const savedActivities = await this.store.listMilestoneActivities(
+      projectId,
+      milestoneId,
+    );
+    for (const [index, resolution] of (
+      report.plan?.resolutions ?? []
+    ).entries()) {
+      const id = `${activity.id}_resolution_${index}`;
+      if (savedActivities.some((saved) => saved.id === id)) continue;
+      await this.recordMilestoneActivity({
+        id,
+        projectId,
+        milestoneId,
+        type: "resolution",
+        assessmentActivityId: activity.id,
+        occurredAt: activity.occurredAt,
+        summary: resolution.summary,
+        resolution: {
+          ...resolution,
+          ...(resolution.affectedTaskIds
+            ? { affectedTaskIds: resolveIds(resolution.affectedTaskIds)! }
+            : {}),
+          ...(resolution.waitForTaskIds
+            ? { waitForTaskIds: resolveIds(resolution.waitForTaskIds)! }
+            : {}),
+        },
+      });
+    }
+    const current = (await this.requireMilestone(milestoneId)).milestone;
+    const completed: Milestone = {
+      ...current,
+      status: report.outcome === "completed" ? "done" : "active",
+      latestAssessmentActivityId: activity.id,
+      planning: {
+        ...current.planning,
+        evaluatedRevision: report.planningRevision,
+      },
+      ...(current.currentExecution
+        ? {
+            currentExecution: {
+              ...current.currentExecution,
+              status: current.currentExecution.turnCompletedAt
+                ? ("completed" as const)
+                : current.currentExecution.status,
+              result: report,
+              finishedAt: this.now(),
+            },
+          }
+        : {}),
+      updatedAt: this.now(),
+    };
+    await this.store.saveMilestone(projectId, completed);
+    await this.recordMilestoneActivity({ ...activity, appliedAt: this.now() });
+    await this.recordEvent({
+      type:
+        report.outcome === "completed"
+          ? "milestone.completed"
+          : "milestone.assessed",
+      projectId,
+      milestoneId,
+      state: { milestone: completed },
+    });
+    await this.enforceMilestoneRestrictions(projectId);
+    await this.revisePlanning(projectId, "manual_replan");
+  }
+
+  recoverAcceptedMilestonePlans(): Promise<void> {
+    return this.enqueue(() => this.recoverMilestonePlans());
+  }
+
+  private async recoverMilestonePlans(): Promise<void> {
+    for (const snapshot of await this.store.listProjects()) {
+      const activities = await this.store.listMilestoneActivities(
+        snapshot.project.id,
+      );
+      const assessments = new Map<
+        string,
+        Extract<MilestoneActivity, { type: "assessment" }>
+      >();
+      for (const activity of activities)
+        if (activity.type === "assessment")
+          assessments.set(activity.id, activity);
+      for (const assessment of assessments.values())
+        if (!assessment.appliedAt)
+          await this.applyMilestoneAssessment(assessment);
+    }
+  }
+
+  private async recordMilestoneActivity(
+    activity: MilestoneActivity,
+  ): Promise<void> {
+    await this.recordEvent({
+      type: "milestone.activity_recorded",
+      projectId: activity.projectId,
+      milestoneId: activity.milestoneId,
+      data: { milestoneActivity: activity },
+    });
+  }
+
+  private async requireMilestone(id: string) {
+    const found = await this.store.findMilestone(id);
+    if (!found) throw new WorkflowConflictError(`Milestone ${id} not found`);
+    return found;
+  }
+
+  private async validateTaskMilestone(
+    project: Project,
+    milestoneId?: string,
+  ): Promise<void> {
+    if (!milestoneId) return;
+    const found = await this.requireMilestone(milestoneId);
+    if (found.project.id !== project.id || found.milestone.status !== "active")
+      throw new WorkflowConflictError(
+        "Task requires an active milestone in the same project",
+      );
+  }
+
+  private async advanceMilestone(milestoneId: string): Promise<void> {
+    const { milestone } = await this.requireMilestone(milestoneId);
+    if (milestone.status !== "active") return;
+    const updated = {
+      ...milestone,
+      planning: advancePlanning(
+        milestone.planning,
+        "manual_replan",
+        this.now(),
+      ),
+      updatedAt: this.now(),
+    };
+    await this.store.saveMilestone(milestone.projectId, updated);
+    await this.recordEvent({
+      type: "milestone.planning_changed",
+      projectId: milestone.projectId,
+      milestoneId,
+      state: { milestone: updated },
+    });
+  }
+
+  private async restrictedTaskIds(projectId: string): Promise<Set<string>> {
+    const snapshot = await this.requireSnapshot(projectId);
+    const restricted = new Set<string>();
+    for (const milestone of snapshot.milestones) {
+      const projection = projectMilestoneActivities(
+        await this.store.listMilestoneActivities(projectId, milestone.id),
+      );
+      for (const id of projection.restrictedTaskIds) restricted.add(id);
+    }
+    return restricted;
+  }
+
+  private async allRestrictedTaskIds(
+    snapshots: ProjectSnapshot[],
+  ): Promise<Set<string>> {
+    const result = new Set<string>();
+    for (const snapshot of snapshots)
+      for (const id of await this.restrictedTaskIds(snapshot.project.id))
+        result.add(id);
+    return result;
+  }
+
+  private async taskCanContinue(
+    project: Project,
+    task: Task,
+  ): Promise<boolean> {
+    return (
+      projectCanSchedule(project) &&
+      !(await this.restrictedTaskIds(project.id)).has(task.id)
+    );
+  }
+
+  private async resumeRestrictedTaskContinuations(): Promise<void> {
+    const snapshots = await this.store.listProjects();
+    for (const snapshot of snapshots) {
+      if (!projectCanSchedule(snapshot.project)) continue;
+      for (const task of snapshot.tasks) {
+        if (
+          task.currentExecution?.status !== "interrupted" ||
+          !task.requestedAction ||
+          ["done", "cancelled"].includes(task.status)
+        )
+          continue;
+        if (!(await this.taskCanContinue(snapshot.project, task))) continue;
+        const current = await this.requireSnapshot(snapshot.project.id);
+        if (
+          countActiveTasks(current.tasks) >=
+          projectConcurrencyLimit(current.project, this.maxConcurrentTasks)
+        )
+          continue;
+        if (
+          task.requestedAction === "integrate" &&
+          findCompetingIntegrationLease(
+            await this.store.listProjects(),
+            current.project,
+            task.id,
+            await this.allRestrictedTaskIds(await this.store.listProjects()),
+          )
+        )
+          continue;
+        const execution = task.currentExecution;
+        const pending: Task = {
+          ...task,
+          currentExecution: { ...execution, status: "pending" },
+          updatedAt: this.now(),
+        };
+        delete pending.currentExecution!.turnId;
+        delete pending.currentExecution!.turnCompletedAt;
+        delete pending.currentExecution!.finishedAt;
+        await this.store.saveTask(current.project.id, pending);
+        const recovery = {
+          resumePersistedThread: true as const,
+          previousTask: task,
+          ...(execution.turnId ? { recoveredTurnId: execution.turnId } : {}),
+        };
+        if (execution.reportReminderCount)
+          await this.continueTaskReportRequest(
+            current.project,
+            pending,
+            recovery,
+          );
+        else
+          await this.continueTaskDispatch(current.project, pending, recovery);
+      }
+    }
+  }
+
+  private async deferRestrictedTaskTurn(
+    project: Project,
+    task: Task,
+  ): Promise<Task> {
+    if (
+      !(await this.restrictedTaskIds(project.id)).has(task.id) ||
+      !task.currentExecution ||
+      ["waiting_for_input", "waiting_for_resume"].includes(
+        task.currentExecution.status,
+      )
+    )
+      return task;
+    const deferred: Task = {
+      ...task,
+      currentExecution: {
+        ...task.currentExecution,
+        status: "interrupted",
+        finishedAt: this.now(),
+      },
+    };
+    await this.store.saveTask(project.id, deferred);
+    return deferred;
+  }
+
+  private async enforceMilestoneRestrictions(projectId: string): Promise<void> {
+    const snapshot = await this.requireSnapshot(projectId);
+    const restricted = await this.restrictedTaskIds(projectId);
+    for (const task of snapshot.tasks) {
+      if (!restricted.has(task.id) || !task.currentExecution) continue;
+      const execution = task.currentExecution;
+      if (
+        execution.status === "retry_scheduled" ||
+        (execution.status === "pending" && !execution.turnId) ||
+        (execution.status === "awaiting_report" && execution.turnCompletedAt)
+      ) {
+        await this.store.saveTask(projectId, {
+          ...task,
+          currentExecution: { ...execution, status: "interrupted" },
+        });
+      } else if (inFlightExecutionStatuses.has(execution.status)) {
+        try {
+          await this.dispatcher.interrupt(
+            await this.taskDispatchRequest(snapshot.project, task),
+          );
+        } catch (error) {
+          await this.recordEvent({
+            type: "turn.interrupt_failed",
+            projectId,
+            taskId: task.id,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+  }
+
+  async observePlanningTurn(threadId: string, turnId: string): Promise<void> {
+    return this.enqueue(async () => {
+      const found = await this.store.findMilestoneByThreadId(threadId);
+      if (found) {
+        if (found.milestone.currentExecution?.turnId === turnId) return;
+        await this.advanceMilestone(found.milestone.id);
+        await this.requirePlanningCoordinator().adoptTurn(
+          (
+            await this.requireMilestone(found.milestone.id)
+          ).milestone,
+          turnId,
+        );
+        return;
+      }
+      const snapshot = (await this.store.listProjects()).find(
+        (item) => item.project.planningThreadId === threadId,
+      );
+      if (snapshot && snapshot.project.currentExecution?.turnId !== turnId)
+        await this.requirePlanningCoordinator().adoptTurn(
+          snapshot.project,
+          turnId,
+        );
+    });
+  }
+
+  async synchronizeProjectContext(projectId: string): Promise<void> {
+    return this.enqueue(async () => {
+      const { project } = await this.requireSnapshot(projectId);
+      await this.planningCoordinator?.synchronizeConversation(project);
+    });
+  }
+
+  async recoverMilestoneExecution(
+    milestoneId: string,
+    attemptId: string,
+    observedTurnId: string | undefined,
+    decision: "complete" | "keep_running" | "recover",
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      const { project, milestone } = await this.requireMilestone(milestoneId);
+      const execution = milestone.currentExecution;
+      if (
+        !projectCanSchedule(project) ||
+        !execution ||
+        execution.attemptId !== attemptId ||
+        execution.turnId !== observedTurnId
+      )
+        return;
+      if (decision === "keep_running") {
+        await this.requirePlanningCoordinator().renewLease<Milestone>(
+          milestoneId,
+          attemptId,
+        );
+        return;
+      }
+      if (decision === "complete" && execution.turnId) {
+        const completed =
+          await this.requirePlanningCoordinator().completeTurn<Milestone>(
+            milestoneId,
+            attemptId,
+            execution.turnId,
+          );
+        if (completed.currentExecution?.result)
+          await this.store.saveMilestone(project.id, {
+            ...completed,
+            currentExecution: {
+              ...completed.currentExecution,
+              status: "completed",
+            },
+          });
+        await this.reconcileInternal();
+        return;
+      }
+      if (
+        this.hasRunningPlanning(
+          await this.requireSnapshot(project.id),
+          milestone.id,
+        )
+      )
+        return;
+      if (execution.status === "pending")
+        await this.requirePlanningCoordinator().resume(milestone, attemptId);
+      else
+        await this.requirePlanningCoordinator().restart(milestone, attemptId);
+    });
+  }
+
+  async completeMilestoneTurn(
+    milestoneId: string,
+    attemptId: string,
+    turnId: string,
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      const milestone =
+        await this.requirePlanningCoordinator().completeTurn<Milestone>(
+          milestoneId,
+          attemptId,
+          turnId,
+        );
+      if (
+        milestone.currentExecution?.result &&
+        milestone.currentExecution.turnId === turnId
+      ) {
+        await this.store.saveMilestone(milestone.projectId, {
+          ...milestone,
+          currentExecution: {
+            ...milestone.currentExecution,
+            status: "completed",
+            finishedAt: this.now(),
+          },
+        });
+      }
+      await this.reconcileInternal();
+    });
+  }
+
+  async failMilestoneTurn(
+    milestoneId: string,
+    attemptId: string,
+    failure: CodexTurnFailure,
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      await this.requirePlanningCoordinator().failTurn<Milestone>(
+        milestoneId,
+        attemptId,
+        failure,
+      );
+      await this.reconcileInternal();
+    });
+  }
+
   registerProject(input: CreateProjectInput): Promise<ProjectSnapshot> {
     return this.enqueue(async () => {
       const created = await this.store.createProject(input);
@@ -400,29 +1141,47 @@ export class WorkflowEngine {
   addProjectWork(
     projectId: string,
     tasks: CreateTaskInput[],
-    productDocumentChange: ProductDocumentChange,
+    decisionSummary: string,
+    productDocumentChange?: Omit<ProductDocumentChange, "decisionSummary">,
   ): Promise<ProjectSnapshot> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
       if (snapshot.project.status === "cancelled") {
-        throw new WorkflowConflictError(`Cancelled project ${projectId} cannot accept work`);
+        throw new WorkflowConflictError(
+          `Cancelled project ${projectId} cannot accept work`,
+        );
       }
-      const acceptedDocument = await this.acceptProductDocumentChange(
-        snapshot.project,
-        productDocumentChange,
-      );
+      if (!decisionSummary.trim())
+        throw new WorkflowConflictError("Work requires a decision summary");
+      const acceptedDocument = productDocumentChange
+        ? await this.acceptProductDocumentChange(snapshot.project, {
+            ...productDocumentChange,
+            decisionSummary,
+          })
+        : undefined;
+      if (
+        !acceptedDocument &&
+        !(await this.productDocumentIsCurrent(snapshot.project))
+      )
+        throw new WorkflowConflictError("PROJECT.md has unrecorded changes");
+      for (const task of tasks)
+        await this.validateTaskMilestone(snapshot.project, task.milestoneId);
       await this.store.addTasks(projectId, tasks);
       const currentProject = hasActiveProjectExecution(snapshot.project)
-        ? await this.requireProjectExecutions().cancel(snapshot.project)
+        ? await this.requirePlanningCoordinator().cancel(snapshot.project)
         : snapshot.project;
       const changedAt = this.now();
       const project: Project = {
         ...currentProject,
-        productFacts: {
-          revision: currentProject.productFacts.revision + 1,
-          digest: acceptedDocument.digest,
-          changedAt,
-        },
+        ...(acceptedDocument
+          ? {
+              productFacts: {
+                revision: currentProject.productFacts.revision + 1,
+                digest: acceptedDocument.digest,
+                changedAt,
+              },
+            }
+          : {}),
         status: "active",
         requestedAction: null,
         planning: advancePlanning(
@@ -434,20 +1193,30 @@ export class WorkflowEngine {
         updatedAt: changedAt,
       };
       await this.store.saveProject(project);
-      await this.recordProductDocumentChange(
+      if (acceptedDocument)
+        await this.recordProductDocumentChange(
+          snapshot.project,
+          project,
+          acceptedDocument,
+        );
+      await this.recordSupersededSelection(
         snapshot.project,
         project,
-        acceptedDocument,
+        "work_added",
       );
-      await this.recordSupersededSelection(snapshot.project, project, "work_added");
       await this.recordEvent({
         type: "project.work_added",
         projectId,
         before: projectLifecycleState(snapshot.project),
         after: projectLifecycleState(project),
-        data: { taskCount: tasks.length },
+        data: { taskCount: tasks.length, decisionSummary },
       });
-      await this.recordPlanningRevision(project, snapshot.project.planning.revision);
+      await this.recordPlanningRevision(
+        project,
+        snapshot.project.planning.revision,
+      );
+      for (const id of new Set(tasks.map((task) => task.milestoneId)))
+        if (id) await this.advanceMilestone(id);
       await this.reconcileInternal();
       return (await this.store.getProject(projectId))!;
     });
@@ -460,12 +1229,13 @@ export class WorkflowEngine {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
       const targetRepositoryPath = resolve(repositoryPath);
-      const openTask = snapshot.tasks.find((task) =>
-        task.origin?.kind === "semantic_atlas_maintenance" &&
-        resolve(
-          task.origin.repositoryPath ?? snapshot.project.repositoryPath,
-        ) === targetRepositoryPath &&
-        !["done", "cancelled"].includes(task.status)
+      const openTask = snapshot.tasks.find(
+        (task) =>
+          task.origin?.kind === "semantic_atlas_maintenance" &&
+          resolve(
+            task.origin.repositoryPath ?? snapshot.project.repositoryPath,
+          ) === targetRepositoryPath &&
+          !["done", "cancelled"].includes(task.status),
       );
       if (openTask) return openTask;
       if (snapshot.project.status === "cancelled") {
@@ -474,24 +1244,26 @@ export class WorkflowEngine {
         );
       }
 
-      const createdTasks = await this.store.addTasks(projectId, [{
-        title: "维护业务地图",
-        description:
-          `使用 $semantic-atlas-maintenance 处理目标仓库 ${targetRepositoryPath} 的可行动候选。` +
-          "工作阶段选择一个业务域并准备地图改动或证据结论，独立审查后在合入阶段记录维护结果。",
-        acceptanceCriteria: [
-          "只在目标仓库中选择一个业务域并核实当前证据。",
-          "地图改动至多涉及一个 owning YAML，并通过完整验证与独立审查。",
-          "合入阶段收到 Semantic Atlas recorded 或 idempotent 回执后才能完成。",
-        ],
-        origin: {
-          kind: "semantic_atlas_maintenance" as const,
-          repositoryPath: targetRepositoryPath,
+      const createdTasks = await this.store.addTasks(projectId, [
+        {
+          title: "维护业务地图",
+          description:
+            `使用 $semantic-atlas-maintenance 处理目标仓库 ${targetRepositoryPath} 的可行动候选。` +
+            "工作阶段选择一个业务域并准备地图改动或证据结论，独立审查后在合入阶段记录维护结果。",
+          acceptanceCriteria: [
+            "只在目标仓库中选择一个业务域并核实当前证据。",
+            "地图改动至多涉及一个 owning YAML，并通过完整验证与独立审查。",
+            "合入阶段收到 Semantic Atlas recorded 或 idempotent 回执后才能完成。",
+          ],
+          origin: {
+            kind: "semantic_atlas_maintenance" as const,
+            repositoryPath: targetRepositoryPath,
+          },
         },
-      }]);
+      ]);
       const createdTask = createdTasks[0]!;
       const currentProject = hasActiveProjectExecution(snapshot.project)
-        ? await this.requireProjectExecutions().cancel(snapshot.project)
+        ? await this.requirePlanningCoordinator().cancel(snapshot.project)
         : snapshot.project;
       const changedAt = this.now();
       const project: Project = {
@@ -520,7 +1292,10 @@ export class WorkflowEngine {
         after: projectLifecycleState(project),
         data: { source: "semantic_atlas" },
       });
-      await this.recordPlanningRevision(project, snapshot.project.planning.revision);
+      await this.recordPlanningRevision(
+        project,
+        snapshot.project.planning.revision,
+      );
       await this.reconcileInternal();
       return createdTask;
     });
@@ -542,7 +1317,7 @@ export class WorkflowEngine {
         change,
       );
       const currentProject = hasActiveProjectExecution(snapshot.project)
-        ? await this.requireProjectExecutions().cancel(snapshot.project)
+        ? await this.requirePlanningCoordinator().cancel(snapshot.project)
         : snapshot.project;
       const changedAt = this.now();
       const project: Project = {
@@ -573,7 +1348,12 @@ export class WorkflowEngine {
         project,
         project.planning.changeReason,
       );
-      await this.recordPlanningRevision(project, snapshot.project.planning.revision);
+      await this.recordPlanningRevision(
+        project,
+        snapshot.project.planning.revision,
+      );
+      for (const milestone of snapshot.milestones)
+        await this.advanceMilestone(milestone.id);
       await this.reconcileInternal();
       return (await this.requireSnapshot(projectId)).project;
     });
@@ -597,10 +1377,20 @@ export class WorkflowEngine {
       );
 
       const currentProject = hasActiveProjectExecution(project)
-        ? await this.requireProjectExecutions().cancel(project)
+        ? await this.requirePlanningCoordinator().cancel(project)
         : project;
       const changedAt = this.now();
-      const updatedTask = applyTaskDefinitionChanges(task, input.changes, changedAt);
+      await this.validateTaskMilestone(
+        project,
+        input.changes.milestoneId === undefined
+          ? task.milestoneId
+          : input.changes.milestoneId ?? undefined,
+      );
+      const updatedTask = applyTaskDefinitionChanges(
+        task,
+        input.changes,
+        changedAt,
+      );
       const updatedProject: Project = {
         ...currentProject,
         ...(acceptedDocument
@@ -657,6 +1447,8 @@ export class WorkflowEngine {
         updatedProject,
         project.planning.revision,
       );
+      for (const id of new Set([task.milestoneId, updatedTask.milestoneId]))
+        if (id) await this.advanceMilestone(id);
       await this.reconcileInternal();
       return this.requireSnapshot(project.id);
     });
@@ -699,7 +1491,8 @@ export class WorkflowEngine {
       }
       const previousActivity = reportActivityForIdempotency(activities, report);
       if (previousActivity) {
-        if (taskActivityMatchesReport(previousActivity, report)) return found.task;
+        if (taskActivityMatchesReport(previousActivity, report))
+          return found.task;
         throw new WorkflowConflictError(
           `Report conflicts with the recorded result for ${report.taskId}`,
         );
@@ -753,7 +1546,10 @@ export class WorkflowEngine {
         data: { activity },
       });
 
-      if (execution.turnCompletedAt || execution.status === "waiting_for_input") {
+      if (
+        execution.turnCompletedAt ||
+        execution.status === "waiting_for_input"
+      ) {
         const completed = await this.finalizeTaskReport(
           found.project,
           task,
@@ -769,7 +1565,7 @@ export class WorkflowEngine {
 
   submitProjectReport(report: ProjectReport): Promise<Project> {
     return this.enqueue(async () => {
-      const reported = await this.requireProjectExecutions().submitReport(
+      const reported = await this.requirePlanningCoordinator().submitReport(
         report,
         (project, currentReport) =>
           this.validateProjectReportBeforeSave(project, currentReport),
@@ -783,7 +1579,11 @@ export class WorkflowEngine {
     });
   }
 
-  completeTurn(taskId: string, attemptId: string, turnId: string): Promise<Task> {
+  completeTurn(
+    taskId: string,
+    attemptId: string,
+    turnId: string,
+  ): Promise<Task> {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
       const execution = found.task.currentExecution;
@@ -834,7 +1634,11 @@ export class WorkflowEngine {
 
       const reportReminderCount = (execution.reportReminderCount ?? 0) + 1;
       if (reportReminderCount >= 3) {
-        return this.blockTaskForMissingReport(found.project, found.task, reportReminderCount);
+        return this.blockTaskForMissingReport(
+          found.project,
+          found.task,
+          reportReminderCount,
+        );
       }
 
       const awaitingReport: Task = {
@@ -868,7 +1672,7 @@ export class WorkflowEngine {
     turnId: string,
   ): Promise<Project> {
     return this.enqueue(async () => {
-      const project = await this.requireProjectExecutions().completeTurn(
+      const project = await this.requirePlanningCoordinator().completeTurn(
         projectId,
         attemptId,
         turnId,
@@ -894,7 +1698,14 @@ export class WorkflowEngine {
         );
       }
       if (!found.task.requestedAction) {
-        throw new WorkflowConflictError(`Task ${taskId} has no action to retry`);
+        throw new WorkflowConflictError(
+          `Task ${taskId} has no action to retry`,
+        );
+      }
+      if (!(await this.taskCanContinue(found.project, found.task))) {
+        throw new WorkflowConflictError(
+          `Task ${taskId} is waiting for a milestone decision or prerequisite`,
+        );
       }
       if (
         found.task.currentExecution &&
@@ -986,7 +1797,11 @@ export class WorkflowEngine {
   recoverTask(taskId: string, expectedAttemptId: string): Promise<Task> {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
-      if (!found.task.requestedAction) return found.task;
+      if (
+        !found.task.requestedAction ||
+        !(await this.taskCanContinue(found.project, found.task))
+      )
+        return found.task;
       if (!projectCanSchedule(found.project)) {
         await this.recordRecoverySuppressed(
           found.project.id,
@@ -995,8 +1810,8 @@ export class WorkflowEngine {
           isProjectArchived(found.project)
             ? "project_archived"
             : found.project.scheduling !== "running"
-              ? "project_paused"
-              : "project_not_active",
+            ? "project_paused"
+            : "project_not_active",
         );
         return found.task;
       }
@@ -1057,6 +1872,24 @@ export class WorkflowEngine {
         );
         return found.task;
       }
+      if (
+        !(await this.taskCanContinue(found.project, found.task)) &&
+        (await this.restrictedTaskIds(found.project.id)).has(found.task.id)
+      ) {
+        if (execution?.submittedActivityId)
+          return this.finalizeSubmittedTaskReport(found.project, found.task);
+        const stopped: Task = {
+          ...found.task,
+          currentExecution: {
+            ...execution!,
+            status: "interrupted",
+            finishedAt: this.now(),
+          },
+        };
+        await this.store.saveTask(found.project.id, stopped);
+        await this.reconcileInternal();
+        return stopped;
+      }
       if (execution?.submittedActivityId) {
         // A report is the turn's final side effect, so its persisted result wins over a later interruption.
         return this.finalizeSubmittedTaskReport(found.project, found.task);
@@ -1073,8 +1906,8 @@ export class WorkflowEngine {
           isProjectArchived(found.project)
             ? "project_archived"
             : found.project.scheduling !== "running"
-              ? "project_paused"
-              : "task_no_longer_active",
+            ? "project_paused"
+            : "task_no_longer_active",
         );
         return found.task;
       }
@@ -1097,7 +1930,12 @@ export class WorkflowEngine {
       }
       if (
         execution!.action === "integrate" &&
-        findCompetingIntegrationLease(snapshots, found.project, found.task.id)
+        findCompetingIntegrationLease(
+          snapshots,
+          found.project,
+          found.task.id,
+          await this.allRestrictedTaskIds(snapshots),
+        )
       ) {
         await this.recordRecoverySuppressed(
           found.project.id,
@@ -1153,7 +1991,7 @@ export class WorkflowEngine {
   ): Promise<Project> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
-      return this.requireProjectExecutions().resume(
+      return this.requirePlanningCoordinator().resume(
         snapshot.project,
         expectedAttemptId,
       );
@@ -1166,7 +2004,7 @@ export class WorkflowEngine {
   ): Promise<Project> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
-      return this.requireProjectExecutions().restart(
+      return this.requirePlanningCoordinator().restart(
         snapshot.project,
         expectedAttemptId,
       );
@@ -1193,7 +2031,7 @@ export class WorkflowEngine {
 
   renewProjectLease(projectId: string, attemptId: string): Promise<Project> {
     return this.enqueue(() =>
-      this.requireProjectExecutions().renewLease(projectId, attemptId),
+      this.requirePlanningCoordinator().renewLease(projectId, attemptId),
     );
   }
 
@@ -1201,7 +2039,9 @@ export class WorkflowEngine {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
       if (snapshot.project.status === "cancelled") {
-        throw new WorkflowConflictError(`Cancelled project ${projectId} is terminal`);
+        throw new WorkflowConflictError(
+          `Cancelled project ${projectId} is terminal`,
+        );
       }
       if (!projectCanSchedule(snapshot.project)) {
         throw new WorkflowConflictError(
@@ -1221,7 +2061,7 @@ export class WorkflowEngine {
           `Project ${projectId} is still active and cannot be retried`,
         );
       }
-      return this.requireProjectExecutions().restart(
+      return this.requirePlanningCoordinator().restart(
         snapshot.project,
         snapshot.project.currentExecution?.attemptId,
       );
@@ -1237,6 +2077,22 @@ export class WorkflowEngine {
 
       if (action === "archive") {
         if (isProjectArchived(snapshot.project)) return snapshot.project;
+        for (const milestone of snapshot.milestones) {
+          const projection = projectMilestoneActivities(
+            await this.store.listMilestoneActivities(projectId, milestone.id),
+          );
+          if (
+            projection.unresolvedActivities.some(
+              (activity) =>
+                activity.type === "resolution" && activity.resolution.question,
+            ) ||
+            (milestone.currentExecution &&
+              activeExecutionStatuses.has(milestone.currentExecution.status))
+          )
+            throw new WorkflowConflictError(
+              "Milestone still has active execution or unresolved decisions",
+            );
+        }
         const blocker = findProjectArchiveBlocker(snapshot);
         if (blocker) {
           throw new WorkflowConflictError(projectArchiveConflict(blocker));
@@ -1278,11 +2134,15 @@ export class WorkflowEngine {
       }
 
       if (snapshot.project.status === "cancelled") {
-        throw new WorkflowConflictError(`Cancelled project ${projectId} is terminal`);
+        throw new WorkflowConflictError(
+          `Cancelled project ${projectId} is terminal`,
+        );
       }
 
       if (action === "replan") {
         const project = await this.revisePlanning(projectId, "manual_replan");
+        for (const milestone of snapshot.milestones)
+          await this.advanceMilestone(milestone.id);
         await this.reconcileInternal();
         return (await this.requireSnapshot(project.id)).project;
       }
@@ -1323,14 +2183,18 @@ export class WorkflowEngine {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
       if (snapshot.project.status === "cancelled") {
-        throw new WorkflowConflictError(`Cancelled project ${projectId} is terminal`);
+        throw new WorkflowConflictError(
+          `Cancelled project ${projectId} is terminal`,
+        );
       }
       const cancellation = {
         ...cancellationInput,
         reason: requireCancellationReason(cancellationInput.reason),
         cancelledAt: this.now(),
       };
-      let project = await this.requireProjectExecutions().cancel(snapshot.project);
+      let project = await this.requirePlanningCoordinator().cancel(
+        snapshot.project,
+      );
       project = {
         ...project,
         status: "cancelled",
@@ -1351,6 +2215,11 @@ export class WorkflowEngine {
           decisionBasis: cancellation.decisionBasis,
         },
       });
+      for (const milestone of snapshot.milestones)
+        await this.store.saveMilestone(
+          project.id,
+          await this.requirePlanningCoordinator().cancel(milestone),
+        );
       for (const task of snapshot.tasks) {
         await this.cancelTaskInternal(project, task, cancellation);
       }
@@ -1358,7 +2227,10 @@ export class WorkflowEngine {
     });
   }
 
-  cancelTask(taskId: string, cancellationInput: CancellationInput): Promise<Task> {
+  cancelTask(
+    taskId: string,
+    cancellationInput: CancellationInput,
+  ): Promise<Task> {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
       const cancellation = {
@@ -1489,7 +2361,7 @@ export class WorkflowEngine {
     failure: CodexTurnFailure,
   ): Promise<Project> {
     return this.enqueue(async () => {
-      const failed = await this.requireProjectExecutions().failTurn(
+      const failed = await this.requirePlanningCoordinator().failTurn(
         projectId,
         attemptId,
         failure,
@@ -1541,7 +2413,9 @@ export class WorkflowEngine {
               ...(projectExecution.threadId
                 ? { threadId: projectExecution.threadId }
                 : {}),
-              ...(projectExecution.turnId ? { turnId: projectExecution.turnId } : {}),
+              ...(projectExecution.turnId
+                ? { turnId: projectExecution.turnId }
+                : {}),
               before: projectLifecycleState(snapshot.project),
               after: projectLifecycleState(project),
               data: { scope: "project", modelRoute: modelRouting.route },
@@ -1562,7 +2436,8 @@ export class WorkflowEngine {
           );
           if (modelRouting === execution.modelRouting) continue;
           const current = (await this.requireTask(task.id)).task;
-          if (current.currentExecution?.attemptId !== execution.attemptId) continue;
+          if (current.currentExecution?.attemptId !== execution.attemptId)
+            continue;
           const reset: Task = {
             ...current,
             currentExecution: { ...current.currentExecution, modelRouting },
@@ -1586,6 +2461,9 @@ export class WorkflowEngine {
   }
 
   private async reconcileInternal(): Promise<void> {
+    await this.recoverMilestonePlans();
+    await this.resumeRestrictedTaskContinuations();
+    await this.dispatchDeferredPlanning();
     await this.alignPlanningConcurrency();
     await this.dispatchScheduledModelRetries(new Date(this.now()));
     await this.dispatchScheduledTaskResumes(new Date(this.now()));
@@ -1601,14 +2479,17 @@ export class WorkflowEngine {
   ): Promise<void> {
     const snapshots = await this.store.listProjects();
     const activeCountByProject = new Map(
-      snapshots.map(({ project, tasks }) => [project.id, countActiveTasks(tasks)]),
+      snapshots.map(({ project, tasks }) => [
+        project.id,
+        countActiveTasks(tasks),
+      ]),
     );
-    const integrationLeases = activeIntegrationRepositories(snapshots);
+    const integrationLeases = activeIntegrationRepositories(
+      snapshots,
+      await this.allRestrictedTaskIds(snapshots),
+    );
     const candidates = snapshots
-      .filter(
-        ({ project }) =>
-          projectCanSchedule(project),
-      )
+      .filter(({ project }) => projectCanSchedule(project))
       .flatMap(({ project, tasks }) =>
         tasks
           .filter((task) =>
@@ -1630,7 +2511,13 @@ export class WorkflowEngine {
       if (
         !current ||
         !projectCanSchedule(current.project) ||
-        !isScheduledTaskResumeDue(current.task, now, threadId, includeDeferred)
+        !isScheduledTaskResumeDue(
+          current.task,
+          now,
+          threadId,
+          includeDeferred,
+        ) ||
+        !(await this.taskCanContinue(current.project, current.task))
       ) {
         continue;
       }
@@ -1756,19 +2643,34 @@ export class WorkflowEngine {
 
   private async dispatchScheduledModelRetries(now: Date): Promise<void> {
     for (const snapshot of await this.store.listProjects()) {
-      if (
-        !projectCanSchedule(snapshot.project)
-      ) {
+      if (!projectCanSchedule(snapshot.project)) {
         continue;
       }
       if (
         snapshot.project.currentExecution?.status === "retry_scheduled" &&
+        !this.hasRunningPlanning(
+          await this.requireSnapshot(snapshot.project.id),
+          snapshot.project.id,
+        ) &&
         isRetryDue(snapshot.project.currentExecution.modelRouting, now)
       ) {
-        await this.requireProjectExecutions().retryScheduled(
+        await this.requirePlanningCoordinator().retryScheduled(
           snapshot.project,
           now,
         );
+      }
+      for (const milestone of snapshot.milestones) {
+        if (
+          milestone.currentExecution?.status === "retry_scheduled" &&
+          !this.hasRunningPlanning(
+            await this.requireSnapshot(snapshot.project.id),
+            milestone.id,
+          )
+        )
+          await this.requirePlanningCoordinator().retryScheduled(
+            milestone,
+            now,
+          );
       }
       for (const task of snapshot.tasks) {
         if (
@@ -1786,6 +2688,7 @@ export class WorkflowEngine {
     task: Task,
   ): Promise<Task> {
     const current = (await this.requireTask(task.id)).task;
+    if (!(await this.taskCanContinue(project, current))) return current;
     const execution = current.currentExecution;
     if (!execution || execution.status !== "retry_scheduled") return current;
 
@@ -1827,9 +2730,15 @@ export class WorkflowEngine {
   private async dispatchTaskContinuations(): Promise<void> {
     const snapshots = await this.store.listProjects();
     const activeCountByProject = new Map(
-      snapshots.map(({ project, tasks }) => [project.id, countActiveTasks(tasks)]),
+      snapshots.map(({ project, tasks }) => [
+        project.id,
+        countActiveTasks(tasks),
+      ]),
     );
-    const integrationLeases = activeIntegrationRepositories(snapshots);
+    const integrationLeases = activeIntegrationRepositories(
+      snapshots,
+      await this.allRestrictedTaskIds(snapshots),
+    );
     const candidates = snapshots
       .filter(({ project }) => projectCanSchedule(project))
       .flatMap(({ project, tasks }) =>
@@ -1845,10 +2754,13 @@ export class WorkflowEngine {
       const activeCount = activeCountByProject.get(candidate.project.id) ?? 0;
       if (activeCount >= concurrencyLimit) continue;
       const current = await this.store.findTask(candidate.task.id);
-      if (!current || !canDispatchTask(current.task)) continue;
       if (
-        !projectCanSchedule(current.project)
-      ) {
+        !current ||
+        !canDispatchTask(current.task) ||
+        !(await this.taskCanContinue(current.project, current.task))
+      )
+        continue;
+      if (!projectCanSchedule(current.project)) {
         continue;
       }
       const repository = resolve(current.project.repositoryPath);
@@ -1867,39 +2779,95 @@ export class WorkflowEngine {
     }
   }
 
-  private async startPendingTaskSelection(): Promise<void> {
-    if (!this.projectExecutions) return;
-    const candidates = (await this.store.listProjects())
-      .filter(({ project, tasks }) =>
-        projectCanSchedule(project) &&
-        !hasActiveProjectExecution(project) &&
-        project.planning.evaluatedRevision !== project.planning.revision &&
-        tasks.some(
-          ({ status, requestedAction }) =>
-            status === "backlog" && !requestedAction,
-        ),
-      )
-      .sort(comparePlanningCandidates);
-
-    for (const candidate of candidates) {
-      const current = await this.requireSnapshot(candidate.project.id);
-      if (!(await this.productDocumentIsCurrent(current.project))) continue;
-      const capacity = availableProjectPlanningCapacity(
-        current,
-        projectConcurrencyLimit(
-          current.project,
-          this.maxConcurrentTasks,
-        ),
-      );
-      if (capacity <= 0) continue;
-      await this.projectExecutions.start(
-        current.project,
-        {
-          planningRevision: current.project.planning.revision,
-          selectionCapacity: capacity,
-        },
-      );
+  private async dispatchDeferredPlanning(): Promise<void> {
+    if (!this.planningCoordinator) return;
+    for (const snapshot of await this.store.listProjects()) {
+      if (!projectCanSchedule(snapshot.project)) continue;
+      for (const owner of [snapshot.project, ...snapshot.milestones]) {
+        const execution = owner.currentExecution;
+        if (!execution) continue;
+        if (execution.status === "pending")
+          await this.planningCoordinator.resume(owner, execution.attemptId);
+        else if (
+          execution.status === "awaiting_report" &&
+          execution.turnCompletedAt
+        )
+          await this.planningCoordinator.completeTurn(
+            owner.id,
+            execution.attemptId,
+            execution.turnId!,
+          );
+      }
     }
+  }
+
+  private readonly lastPlanningRole = new Map<
+    string,
+    "project" | "milestone"
+  >();
+
+  private async startPendingTaskSelection(): Promise<void> {
+    if (!this.planningCoordinator) return;
+    for (const snapshot of await this.store.listProjects()) {
+      const { project } = snapshot;
+      if (!projectCanSchedule(project) || this.hasRunningPlanning(snapshot))
+        continue;
+      if (!(await this.productDocumentIsCurrent(project))) continue;
+      const milestones = snapshot.milestones
+        .filter(
+          (milestone) =>
+            milestone.status === "active" &&
+            milestone.planning.evaluatedRevision !==
+              milestone.planning.revision &&
+            !activeExecutionStatuses.has(
+              milestone.currentExecution?.status ?? "",
+            ),
+        )
+        .sort((a, b) =>
+          a.planning.changedAt.localeCompare(b.planning.changedAt),
+        );
+      const restrictions = await this.restrictedTaskIds(project.id);
+      const capacity = availableProjectPlanningCapacity(
+        snapshot,
+        projectConcurrencyLimit(project, this.maxConcurrentTasks),
+      );
+      const canSelect =
+        capacity > 0 &&
+        project.planning.evaluatedRevision !== project.planning.revision &&
+        !hasActiveProjectExecution(project) &&
+        snapshot.tasks.some(
+          (task) =>
+            task.status === "backlog" &&
+            !task.requestedAction &&
+            !restrictions.has(task.id),
+        );
+      if (
+        milestones.length &&
+        (!canSelect || this.lastPlanningRole.get(project.id) !== "milestone")
+      ) {
+        await this.planningCoordinator.start(milestones[0]!);
+        this.lastPlanningRole.set(project.id, "milestone");
+      } else if (canSelect) {
+        await this.planningCoordinator.start(project, {
+          planningRevision: project.planning.revision,
+          selectionCapacity: capacity,
+        });
+        this.lastPlanningRole.set(project.id, "project");
+      }
+    }
+  }
+
+  private hasRunningPlanning(
+    snapshot: ProjectSnapshot,
+    exceptOwnerId?: string,
+  ): boolean {
+    return [snapshot.project, ...snapshot.milestones].some(
+      (owner) =>
+        owner.id !== exceptOwnerId &&
+        ["pending", "running", "awaiting_report"].includes(
+          owner.currentExecution?.status ?? "",
+        ),
+    );
   }
 
   private async markProjectsWithoutWorkIdle(): Promise<void> {
@@ -1910,6 +2878,9 @@ export class WorkflowEngine {
         project.status === "cancelled" ||
         project.status === "idle" ||
         hasActiveProjectExecution(project) ||
+        snapshot.milestones.some(
+          (milestone) => milestone.status === "active",
+        ) ||
         !tasks.every(({ status }) => ["done", "cancelled"].includes(status))
       ) {
         continue;
@@ -1940,7 +2911,8 @@ export class WorkflowEngine {
           ? execution.result
           : undefined;
       const hasUnevaluatedBacklog = tasks.some(
-        ({ status, requestedAction }) => status === "backlog" && !requestedAction,
+        ({ status, requestedAction }) =>
+          status === "backlog" && !requestedAction,
       );
       if (
         !projectCanSchedule(project) ||
@@ -1970,13 +2942,18 @@ export class WorkflowEngine {
     task: Task,
     previous: Task = task,
   ): Promise<boolean> {
+    if (!(await this.taskCanContinue(project, task))) return false;
     const attemptId = this.createId("attempt");
     let pending: Task;
     try {
       if (["review", "integrate"].includes(task.requestedAction ?? "")) {
-        const activities = await this.store.listTaskActivities(project.id, task.id);
+        const activities = await this.store.listTaskActivities(
+          project.id,
+          task.id,
+        );
         const boundWork = activities.find(
-          ({ id, type }) => id === task.workActivityId && type === "work_completed",
+          ({ id, type }) =>
+            id === task.workActivityId && type === "work_completed",
         );
         if (!boundWork) {
           throw new Error(
@@ -1989,7 +2966,8 @@ export class WorkflowEngine {
         attemptId,
         this.createId("report_opportunity"),
         this.now(),
-        task.modelRouting ?? initialModelRouting(this.modelSettingsFor(project)),
+        task.modelRouting ??
+          initialModelRouting(this.modelSettingsFor(project)),
       );
     } catch (error) {
       await this.recordEvent({
@@ -2026,6 +3004,8 @@ export class WorkflowEngine {
     task: Task,
     recovery?: TaskTurnRecovery,
   ): Promise<Task> {
+    if (!(await this.taskCanContinue(project, task)))
+      return this.deferRestrictedTaskTurn(project, task);
     const execution = task.currentExecution!;
     const taskForTurn = this.prepareTaskForTurn(project, task);
     if (taskForTurn !== task) {
@@ -2087,7 +3067,11 @@ export class WorkflowEngine {
       };
       await this.store.saveTask(project.id, running);
       if (recovery?.previousTask) {
-        await this.recordTaskRecoveryStarted(project, recovery.previousTask, running);
+        await this.recordTaskRecoveryStarted(
+          project,
+          recovery.previousTask,
+          running,
+        );
       }
       await this.recordEvent({
         type: "turn.started",
@@ -2137,7 +3121,9 @@ export class WorkflowEngine {
         projectId: project.id,
         taskId: task.id,
         attemptId: execution.attemptId,
-        ...(failedExecution.threadId ? { threadId: failedExecution.threadId } : {}),
+        ...(failedExecution.threadId
+          ? { threadId: failedExecution.threadId }
+          : {}),
         ...(failedExecution.turnId ? { turnId: failedExecution.turnId } : {}),
         reason,
         before: taskLifecycleState(current),
@@ -2159,6 +3145,8 @@ export class WorkflowEngine {
     task: Task,
     recovery?: TaskTurnRecovery,
   ): Promise<Task> {
+    if (!(await this.taskCanContinue(project, task)))
+      return this.deferRestrictedTaskTurn(project, task);
     const execution = task.currentExecution!;
     try {
       const taskForTurn = this.prepareTaskForTurn(project, task);
@@ -2194,7 +3182,11 @@ export class WorkflowEngine {
       delete reminded.currentExecution?.turnCompletedAt;
       await this.store.saveTask(project.id, reminded);
       if (recovery?.previousTask) {
-        await this.recordTaskRecoveryStarted(project, recovery.previousTask, reminded);
+        await this.recordTaskRecoveryStarted(
+          project,
+          recovery.previousTask,
+          reminded,
+        );
       }
       await this.recordEvent({
         type: "turn.started",
@@ -2299,9 +3291,10 @@ export class WorkflowEngine {
       (execution.action === "work" && report.outcome === "completed") ||
       (execution.action === "integrate" && report.outcome === "needs_review");
     if (createsWork && report.workspacePath) {
-      const repositoryPath = await this.repositoryPaths.resolveWorkspaceRepository(
-        report.workspacePath,
-      );
+      const repositoryPath =
+        await this.repositoryPaths.resolveWorkspaceRepository(
+          report.workspacePath,
+        );
       const maintenanceRepository = task.origin?.repositoryPath;
       if (
         task.origin?.kind === "semantic_atlas_maintenance" &&
@@ -2351,6 +3344,7 @@ export class WorkflowEngine {
       before: taskLifecycleState(task),
       after: taskLifecycleState(completed),
     });
+    if (task.milestoneId) await this.advanceMilestone(task.milestoneId);
     if (completed.status === "done" && task.status !== "done") {
       await this.revisePlanning(project.id, "task_completed");
     }
@@ -2413,7 +3407,8 @@ export class WorkflowEngine {
       );
     }
     const execution = project.currentExecution!;
-    const planningRevision = execution.planningRevision ?? project.planning.revision;
+    const planningRevision =
+      execution.planningRevision ?? project.planning.revision;
     if (planningRevision !== project.planning.revision) {
       throw new WorkflowConflictError(
         `Task selection revision ${planningRevision} was superseded by ${project.planning.revision}`,
@@ -2485,17 +3480,23 @@ export class WorkflowEngine {
         throw new WorkflowConflictError("Selected task IDs must be unique");
       }
 
+      const restricted = await this.restrictedTaskIds(projectId);
       const availableTasks = snapshot.tasks.filter(
-        ({ status, requestedAction }) => status === "backlog" && !requestedAction,
+        ({ id, status, requestedAction }) =>
+          status === "backlog" && !requestedAction && !restricted.has(id),
       );
-      const availableTasksById = new Map(availableTasks.map((task) => [task.id, task]));
+      const availableTasksById = new Map(
+        availableTasks.map((task) => [task.id, task]),
+      );
       const unavailableTaskIds = taskIds.filter(
         (taskId) => !availableTasksById.has(taskId),
       );
       if (unavailableTaskIds.length > 0) {
         const availableTaskIds = availableTasks.map(({ id }) => id).join(", ");
         throw new WorkflowConflictError(
-          `Task IDs ${unavailableTaskIds.join(", ")} are not available for selection. ` +
+          `Task IDs ${unavailableTaskIds.join(
+            ", ",
+          )} are not available for selection. ` +
             `Available task IDs: ${availableTaskIds || "none"}`,
         );
       }
@@ -2504,10 +3505,7 @@ export class WorkflowEngine {
         execution?.selectionCapacity ??
         availableProjectPlanningCapacity(
           snapshot,
-          projectConcurrencyLimit(
-            snapshot.project,
-            this.maxConcurrentTasks,
-          ),
+          projectConcurrencyLimit(snapshot.project, this.maxConcurrentTasks),
         );
       if (taskIds.length > selectionCapacity) {
         throw new WorkflowConflictError(
@@ -2683,17 +3681,22 @@ export class WorkflowEngine {
     );
     if (wasActive && execution?.threadId && execution.turnId) {
       try {
-        await this.dispatcher.interrupt(await this.taskDispatchRequest(project, task));
+        await this.dispatcher.interrupt(
+          await this.taskDispatchRequest(project, task),
+        );
       } catch (error) {
         await this.recordEvent({
           type: "turn.interrupt_failed",
           projectId: project.id,
           taskId: task.id,
           attemptId: execution.attemptId,
-          data: { message: error instanceof Error ? error.message : String(error) },
+          data: {
+            message: error instanceof Error ? error.message : String(error),
+          },
         });
       }
     }
+    if (task.milestoneId) await this.advanceMilestone(task.milestoneId);
     return cancelled;
   }
 
@@ -2724,7 +3727,10 @@ export class WorkflowEngine {
       new Date(now),
       this.modelPrimaryProbeAfterMs,
     );
-    if (!options.rotateReportOpportunity && modelRouting === execution.modelRouting) {
+    if (
+      !options.rotateReportOpportunity &&
+      modelRouting === execution.modelRouting
+    ) {
       return task;
     }
     const prepared: Task = {
@@ -2897,7 +3903,7 @@ export class WorkflowEngine {
       execution?.action === "select_tasks" &&
       activeExecutionStatuses.has(execution.status)
     ) {
-      current = await this.requireProjectExecutions().cancel(current);
+      current = await this.requirePlanningCoordinator().cancel(current);
       await this.recordEvent({
         type: "project.selection_superseded",
         projectId,
@@ -2905,7 +3911,8 @@ export class WorkflowEngine {
         before: projectLifecycleState(snapshot.project),
         after: projectLifecycleState(current),
         data: {
-          planningRevision: execution.planningRevision ?? current.planning.revision,
+          planningRevision:
+            execution.planningRevision ?? current.planning.revision,
           reason,
         },
       });
@@ -2915,7 +3922,9 @@ export class WorkflowEngine {
       ...current,
       status: current.status === "cancelled" ? "cancelled" : "active",
       requestedAction:
-        current.currentExecution?.action === "select_tasks" ? null : current.requestedAction,
+        current.currentExecution?.action === "select_tasks"
+          ? null
+          : current.requestedAction,
       planning: advancePlanning(
         current.planning,
         reason,
@@ -2925,7 +3934,10 @@ export class WorkflowEngine {
       updatedAt: this.now(),
     };
     await this.store.saveProject(revised);
-    await this.recordPlanningRevision(revised, snapshot.project.planning.revision);
+    await this.recordPlanningRevision(
+      revised,
+      snapshot.project.planning.revision,
+    );
     return revised;
   }
 
@@ -2946,7 +3958,9 @@ export class WorkflowEngine {
     });
   }
 
-  private async requireTask(taskId: string): Promise<{ project: Project; task: Task }> {
+  private async requireTask(
+    taskId: string,
+  ): Promise<{ project: Project; task: Task }> {
     const found = await this.store.findTask(taskId);
     if (!found) throw new Error(`Task ${taskId} was not found`);
     return found;
@@ -2972,9 +3986,9 @@ export class WorkflowEngine {
     taskId: string,
     activityId: string,
   ): Promise<TaskActivity> {
-    const activity = (await this.store.listTaskActivities(projectId, taskId)).find(
-      ({ id }) => id === activityId,
-    );
+    const activity = (
+      await this.store.listTaskActivities(projectId, taskId)
+    ).find(({ id }) => id === activityId);
     if (!activity) throw new Error(`Task activity ${activityId} was not found`);
     return activity;
   }
@@ -2992,6 +4006,10 @@ export class WorkflowEngine {
       return (await this.store.getProject(command.payload.projectId))
         ? { projectId: command.payload.projectId }
         : {};
+    }
+    if ("milestoneId" in command.payload) {
+      const found = await this.store.findMilestone(command.payload.milestoneId);
+      return found ? { projectId: found.project.id } : {};
     }
     if ("taskId" in command.payload) {
       const found = await this.store.findTask(command.payload.taskId);
@@ -3027,11 +4045,11 @@ export class WorkflowEngine {
     });
   }
 
-  private requireProjectExecutions(): ProjectExecutionCoordinator {
-    if (!this.projectExecutions) {
+  private requirePlanningCoordinator(): PlanningCoordinator {
+    if (!this.planningCoordinator) {
       throw new Error("Project execution is not configured");
     }
-    return this.projectExecutions;
+    return this.planningCoordinator;
   }
 
   private recordEvent(
@@ -3050,7 +4068,9 @@ export class WorkflowEngine {
   }
 
   private leaseExpiration(): string {
-    return new Date(Date.parse(this.now()) + this.executionLeaseMs).toISOString();
+    return new Date(
+      Date.parse(this.now()) + this.executionLeaseMs,
+    ).toISOString();
   }
 }
 
@@ -3106,11 +4126,10 @@ function availableProjectPlanningCapacity(
   snapshot: ProjectSnapshot,
   concurrencyLimit: number,
 ): number {
-  const reservedWorkTasks = snapshot.tasks
-    .filter(
-      ({ status, requestedAction }) =>
-        status === "backlog" && requestedAction === "work",
-    ).length;
+  const reservedWorkTasks = snapshot.tasks.filter(
+    ({ status, requestedAction }) =>
+      status === "backlog" && requestedAction === "work",
+  ).length;
   return Math.max(
     0,
     concurrencyLimit - countActiveTasks(snapshot.tasks) - reservedWorkTasks,
@@ -3121,9 +4140,7 @@ function projectConcurrencyLimit(project: Project, fallback: number): number {
   return project.planning.concurrencyLimit ?? fallback;
 }
 
-function projectArchiveConflict(
-  blocker: ProjectArchiveBlocker,
-): string {
+function projectArchiveConflict(blocker: ProjectArchiveBlocker): string {
   const status = archiveExecutionStatusLabel(blocker.status);
   if (blocker.scope === "project") {
     return `项目规划执行仍处于“${status}”，请先完成或取消该执行后再归档。`;
@@ -3154,7 +4171,8 @@ function compareTaskDispatchCandidates(
   left: { project: Project; task: Task },
   right: { project: Project; task: Task },
 ): number {
-  const actionPriority = (task: Task) => (task.requestedAction === "work" ? 1 : 0);
+  const actionPriority = (task: Task) =>
+    task.requestedAction === "work" ? 1 : 0;
   return (
     actionPriority(left.task) - actionPriority(right.task) ||
     left.task.updatedAt.localeCompare(right.task.updatedAt) ||
@@ -3200,8 +4218,9 @@ function comparePlanningCandidates(
   right: ProjectSnapshot,
 ): number {
   return (
-    left.project.planning.changedAt.localeCompare(right.project.planning.changedAt) ||
-    left.project.id.localeCompare(right.project.id)
+    left.project.planning.changedAt.localeCompare(
+      right.project.planning.changedAt,
+    ) || left.project.id.localeCompare(right.project.id)
   );
 }
 
@@ -3216,7 +4235,9 @@ function completedProjectExecution(
   };
 }
 
-function statusForTaskAction(action: NonNullable<Task["requestedAction"]>): Task["status"] {
+function statusForTaskAction(
+  action: NonNullable<Task["requestedAction"]>,
+): Task["status"] {
   if (action === "review") return "reviewing";
   if (action === "integrate") return "integrating";
   return "working";
@@ -3249,7 +4270,8 @@ function validateBoundWorkReport(
 ): void {
   if (!["review", "integrate"].includes(execution.action)) return;
   const work = activities.find(
-    ({ id, type }) => id === execution.workActivityId && type === "work_completed",
+    ({ id, type }) =>
+      id === execution.workActivityId && type === "work_completed",
   );
   if (!work) {
     throw new WorkflowConflictError(
@@ -3313,91 +4335,6 @@ function commandSummary(command: CodriveCommand): Record<string, unknown> {
   return summary;
 }
 
-function changedTaskDefinitionFields(
-  task: Task,
-  changes: TaskDefinitionChanges,
-): Array<keyof TaskDefinitionChanges> {
-  return (["title", "description", "acceptanceCriteria"] as const).filter(
-    (field) =>
-      changes[field] !== undefined &&
-      !isDeepStrictEqual(task[field], changes[field]),
-  );
-}
-
-function validateTaskDefinitionUpdate(
-  project: Project,
-  task: Task,
-  input: UpdateTaskDefinitionInput,
-): {
-  decisionSummary: string;
-  changedFields: Array<keyof TaskDefinitionChanges>;
-} {
-  if (project.status === "cancelled") {
-    throw new WorkflowConflictError(
-      `Cancelled project ${project.id} cannot update task definitions`,
-    );
-  }
-  if (isProjectArchived(project)) {
-    throw new WorkflowConflictError(
-      `Archived project ${project.id} cannot update task definitions`,
-    );
-  }
-  if (task.origin) {
-    throw new WorkflowConflictError(
-      `System-generated task ${task.id} cannot update its definition`,
-    );
-  }
-  if (
-    task.status !== "backlog" ||
-    task.requestedAction !== null ||
-    task.currentExecution
-  ) {
-    throw new WorkflowConflictError(
-      `Task ${task.id} must remain an unstarted backlog task before its definition can change`,
-    );
-  }
-  if (task.updatedAt !== input.expectedUpdatedAt) {
-    throw new WorkflowConflictError(
-      `Task ${task.id} definition is stale; current updatedAt is ${task.updatedAt}`,
-    );
-  }
-
-  const decisionSummary = input.decisionSummary.trim();
-  if (!decisionSummary) {
-    throw new WorkflowConflictError(
-      "Task definition changes require a decision summary",
-    );
-  }
-  if (input.changes.title !== undefined && input.changes.title.length === 0) {
-    throw new WorkflowConflictError("Task definition title must not be empty");
-  }
-  const changedFields = changedTaskDefinitionFields(task, input.changes);
-  if (changedFields.length === 0) {
-    throw new WorkflowConflictError(
-      `Task ${task.id} definition update does not change any fields`,
-    );
-  }
-  return { decisionSummary, changedFields };
-}
-
-function applyTaskDefinitionChanges(
-  task: Task,
-  changes: TaskDefinitionChanges,
-  updatedAt: string,
-): Task {
-  return {
-    ...task,
-    ...(changes.title === undefined ? {} : { title: changes.title }),
-    ...(changes.description === undefined
-      ? {}
-      : { description: changes.description }),
-    ...(changes.acceptanceCriteria === undefined
-      ? {}
-      : { acceptanceCriteria: changes.acceptanceCriteria }),
-    updatedAt,
-  };
-}
-
 function cancellationInput(
   payload: Pick<CancellationInput, "decisionBasis" | "reason">,
   source: LifecycleEventSource,
@@ -3422,7 +4359,9 @@ const rfc3339AbsoluteTime =
 
 function requireFutureRfc3339(value: string, now: string): string {
   if (!rfc3339AbsoluteTime.test(value) || !Number.isFinite(Date.parse(value))) {
-    throw new WorkflowConflictError("resumeAt must be an RFC 3339 absolute time");
+    throw new WorkflowConflictError(
+      "resumeAt must be an RFC 3339 absolute time",
+    );
   }
   if (Date.parse(value) <= Date.parse(now)) {
     throw new WorkflowConflictError("resumeAt must be in the future");
@@ -3462,7 +4401,7 @@ function commandResultTarget(result: unknown): {
   if ("projectId" in result && typeof result.projectId === "string") {
     return {
       projectId: result.projectId,
-      ...( "id" in result && typeof result.id === "string"
+      ...("id" in result && typeof result.id === "string"
         ? { taskId: result.id }
         : {}),
     };

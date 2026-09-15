@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { CodexTaskDispatcher } from "./application/codex-task-dispatcher.js";
 import { ExecutionActivityBridge } from "./application/execution-activity-bridge.js";
-import { CodexProjectExecutor } from "./application/codex-project-executor.js";
+import { CodexPlanningExecutor } from "./application/codex-planning-executor.js";
 import { LifecycleRecorder } from "./application/lifecycle-recorder.js";
 import { ManagedHookRuntimeInspector } from "./application/managed-hook-runtime-inspector.js";
 import { PackageVersionCheckScheduler } from "./application/package-version-check-scheduler.js";
@@ -19,6 +19,7 @@ import { CodriveLog } from "./infrastructure/codrive-log.js";
 import { ConfigStore, type CodriveConfig } from "./infrastructure/config-store.js";
 import { DetachedUpgradeLauncher } from "./infrastructure/detached-upgrade-launcher.js";
 import { GitRepositoryPathResolver } from "./infrastructure/git-repository-path-resolver.js";
+import { ensureCurrentState } from "./infrastructure/state-schema.js";
 import { InstanceLock } from "./infrastructure/instance-lock.js";
 import {
   isManagedResourceInstallationComplete,
@@ -69,6 +70,7 @@ export class CodriveServer {
     }
 
     try {
+      await ensureCurrentState(this.config.stateDirectory);
       const store = new ProjectStore(this.config.stateDirectory);
       await store.initialize();
       const version = await readPackageVersion();
@@ -100,7 +102,7 @@ export class CodriveServer {
         this.configStore,
         { codeReviewSkillAvailable },
       );
-      const projectExecutor = new CodexProjectExecutor(this.codex);
+      const projectExecutor = new CodexPlanningExecutor(this.codex);
       const lifecycle = new LifecycleRecorder(store, {
         onEvent: (event) => this.log!.event(event),
       });

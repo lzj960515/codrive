@@ -1,3 +1,5 @@
+import { projectMilestoneActivities } from "../../domain/milestone-activity.js";
+import { createMilestoneView, readMilestoneActivities } from "./milestone-view.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 
@@ -20,6 +22,7 @@ import type { CodriveCommand, Project, Task } from "../../domain/types.js";
 import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
 import { renderBoardPage } from "./board.js";
+import { commandSchema } from "./command-schemas.js";
 import { createBoardView } from "./board-view.js";
 import { createProjectDetailView } from "./project-detail-view.js";
 import { createTaskDetailView } from "./task-detail-view.js";
@@ -52,63 +55,6 @@ export interface HttpServerDependencies {
   onError?: (message: string) => void;
 }
 
-const taskInputSchema = z.object({
-  title: z.string().min(1),
-  description: z.string(),
-  acceptanceCriteria: z.array(z.string()),
-  order: z.number().int().positive().optional(),
-});
-
-const projectInputSchema = z.object({
-  name: z.string().min(1),
-  repositoryPath: z.string().min(1),
-  defaultBranch: z.string().min(1).default("main"),
-  productDocument: z
-    .string()
-    .refine(hasProductFacts, "PROJECT.md must contain product facts"),
-  tasks: z.array(taskInputSchema).min(1),
-});
-
-const taskReportSchema = z.object({
-  taskId: z.string().min(1),
-  attemptId: z.string().min(1),
-  reportOpportunityId: z.string().min(1),
-  outcome: z.enum([
-    "completed",
-    "approved",
-    "changes_requested",
-    "work_required",
-    "needs_review",
-    "needs_input",
-    "blocked",
-  ]),
-  summary: z.string().min(1),
-  workspacePath: z.string().optional(),
-  baseCommit: z.string().optional(),
-  candidateCommit: z.string().optional(),
-  reviewedMainCommit: z.string().optional(),
-  mergedCommit: z.string().optional(),
-  tests: z.string().optional(),
-  findings: z.array(z.string()).optional(),
-  question: z.string().optional(),
-  resumeAt: z.string().optional(),
-  resumePrompt: z.string().optional(),
-});
-
-const projectReportSchema = z.object({
-  projectId: z.string().min(1),
-  attemptId: z.string().min(1),
-  outcome: z.enum([
-    "selected",
-    "wait_for_active_tasks",
-    "needs_input",
-    "blocked",
-  ]),
-  summary: z.string().min(1),
-  taskIds: z.array(z.string().min(1)).optional(),
-  question: z.string().optional(),
-});
-
 const hookActivitySchema = z.object({
   schemaVersion: z.literal(1),
   session_id: z.string().min(1).max(200),
@@ -123,142 +69,6 @@ const hookActivitySchema = z.object({
   occurred_at: z.iso.datetime(),
 }).strict();
 
-const cancellationDecisionSchema = {
-  decisionBasis: z.enum(["user_confirmed", "agent_decision"]),
-  reason: z.string().trim().min(1).max(2_000),
-};
-
-const productDocumentChangeSchema = z.object({
-  decisionSummary: z.string().trim().min(1).max(2_000),
-  expectedRevision: z.number().int().positive(),
-  expectedDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-  documentDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-});
-
-const taskDefinitionChangesSchema = z
-  .object({
-    title: z.string().min(1).optional(),
-    description: z.string().optional(),
-    acceptanceCriteria: z.array(z.string()).optional(),
-  })
-  .refine(
-    ({ title, description, acceptanceCriteria }) =>
-      title !== undefined ||
-      description !== undefined ||
-      acceptanceCriteria !== undefined,
-    "Task definition changes must include at least one field",
-  );
-
-const modelRoutingSettingsSchema = z.object({
-  primary: z.string().min(1),
-  fallback: z.string().min(1),
-  primaryReasoningEffort: z.string().min(1).optional(),
-  fallbackReasoningEffort: z.string().min(1).optional(),
-}).transform(({ primary, fallback, primaryReasoningEffort, fallbackReasoningEffort }) => ({
-  primary,
-  fallback,
-  ...(primaryReasoningEffort === undefined ? {} : { primaryReasoningEffort }),
-  ...(fallbackReasoningEffort === undefined ? {} : { fallbackReasoningEffort }),
-}));
-
-const commandSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("system.install_resources"),
-    payload: z.object({}),
-  }),
-  z.object({
-    type: z.literal("system.check_for_updates"),
-    payload: z.object({}),
-  }),
-  z.object({
-    type: z.literal("system.start_upgrade"),
-    payload: z.object({
-      targetVersion: z.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/),
-    }),
-  }),
-  z.object({
-    type: z.literal("system.update_settings"),
-    payload: z.object({
-      maxConcurrentTasks: z.number().int().positive(),
-      models: modelRoutingSettingsSchema,
-      semanticAtlasAutomaticMaintenance: z.boolean().optional(),
-    }),
-  }),
-  z.object({
-    type: z.literal("project.update_settings"),
-    payload: z.object({
-      projectId: z.string().min(1),
-      modelConfig: modelRoutingSettingsSchema.nullable(),
-    }),
-  }),
-  z.object({ type: z.literal("project.register"), payload: projectInputSchema }),
-  z.object({
-    type: z.literal("project.add_work"),
-    payload: z.object({
-      projectId: z.string().min(1),
-      tasks: z.array(taskInputSchema).min(1),
-      productDocumentChange: productDocumentChangeSchema,
-    }),
-  }),
-  z.object({
-    type: z.literal("project.control"),
-    payload: z.discriminatedUnion("action", [
-      z.object({
-        projectId: z.string().min(1),
-        action: z.enum([
-          "pause",
-          "resume",
-          "retry",
-          "replan",
-          "archive",
-          "unarchive",
-        ]),
-      }),
-      z.object({
-        projectId: z.string().min(1),
-        action: z.literal("cancel"),
-        ...cancellationDecisionSchema,
-      }),
-    ]),
-  }),
-  z.object({
-    type: z.literal("project.update_product_document"),
-    payload: productDocumentChangeSchema.extend({
-      projectId: z.string().min(1),
-    }),
-  }),
-  z.object({
-    type: z.literal("task.update_definition"),
-    payload: z.object({
-      taskId: z.string().min(1),
-      expectedUpdatedAt: z.iso.datetime(),
-      decisionSummary: z.string().trim().min(1).max(2_000),
-      changes: taskDefinitionChangesSchema,
-      productDocumentChange: productDocumentChangeSchema
-        .omit({ decisionSummary: true })
-        .optional(),
-    }),
-  }),
-  z.object({
-    type: z.literal("task.control"),
-    payload: z.discriminatedUnion("action", [
-      z.object({ taskId: z.string().min(1), action: z.literal("retry") }),
-      z.object({ taskId: z.string().min(1), action: z.literal("continue") }),
-      z.object({
-        taskId: z.string().min(1),
-        action: z.literal("reschedule"),
-        resumeAt: z.string().min(1),
-      }),
-      z.object({
-        taskId: z.string().min(1),
-        action: z.literal("cancel"),
-        ...cancellationDecisionSchema,
-      }),
-    ]),
-  }),
-  z.object({ type: z.literal("task.report"), payload: taskReportSchema }),
-  z.object({ type: z.literal("project.report"), payload: projectReportSchema }),
-]);
 
 export function createHttpServer(
   dependencies: HttpServerDependencies,
@@ -351,6 +161,7 @@ export function createHttpServer(
     return createBoardView(
       snapshots.filter(({ project }) => !isProjectArchived(project)),
       snapshots,
+      await readMilestoneActivities(dependencies.store, snapshots),
     );
   });
   server.get("/api/board/archived", async () => {
@@ -360,6 +171,7 @@ export function createHttpServer(
         isProjectArchived(project),
       ),
       snapshots,
+      await readMilestoneActivities(dependencies.store, snapshots),
     );
     return { count: projects.length, projects };
   });
@@ -371,6 +183,7 @@ export function createHttpServer(
       return createBoardView(
         [snapshot],
         await dependencies.store.listProjects(),
+        await readMilestoneActivities(dependencies.store, [snapshot]),
       )[0]!;
     },
   );
@@ -383,6 +196,7 @@ export function createHttpServer(
         snapshot,
         await dependencies.store.readProductDocument(snapshot.project.id),
         await dependencies.store.listProjects(),
+        await readMilestoneActivities(dependencies.store, [snapshot]),
       );
     },
   );
@@ -430,11 +244,16 @@ export function createHttpServer(
   server.get<{ Params: { projectId: string } }>(
     "/api/contexts/projects/:projectId",
     async (request, reply) => {
-      const snapshot = await dependencies.store.getProject(request.params.projectId);
+      let snapshot = await dependencies.store.getProject(request.params.projectId);
       if (!snapshot) return reply.code(404).send({ error: "Project not found" });
+      await dependencies.workflow.synchronizeProjectContext(request.params.projectId);
+      snapshot = (await dependencies.store.getProject(request.params.projectId))!;
       return {
         projectId: snapshot.project.id,
         attemptId: snapshot.project.currentExecution?.attemptId ?? null,
+        reportOpportunityId: snapshot.project.currentExecution?.reportOpportunityId ?? null,
+        planningThreadId: snapshot.project.planningThreadId ?? null,
+        milestones: snapshot.milestones,
         requestedAction: snapshot.project.requestedAction,
         projectDirectory: dependencies.store.projectDirectory(snapshot.project.id),
         projectDocument: dependencies.store.productDocumentPath(snapshot.project.id),
@@ -453,6 +272,41 @@ export function createHttpServer(
           snapshot.project.id,
         ),
         planningRevision: snapshot.project.currentExecution?.planningRevision ?? null,
+      };
+    },
+  );
+
+  server.get<{ Params: { milestoneId: string } }>(
+    "/api/milestones/:milestoneId",
+    async (request, reply) => {
+      const found = await dependencies.store.findMilestone(request.params.milestoneId);
+      if (!found) return reply.code(404).send({ error: "Milestone not found" });
+      const snapshot = (await dependencies.store.getProject(found.project.id))!;
+      const activities = await dependencies.store.listMilestoneActivities(found.project.id, found.milestone.id);
+      return {
+        milestone: createMilestoneView(found.milestone, activities, snapshot.tasks.filter(task => task.milestoneId === found.milestone.id).length),
+        activities,
+      };
+    },
+  );
+  server.get<{ Params: { milestoneId: string } }>(
+    "/api/contexts/milestones/:milestoneId",
+    async (request, reply) => {
+      if (!(await dependencies.store.findMilestone(request.params.milestoneId))) return reply.code(404).send({ error: "Milestone not found" });
+      const context = await dependencies.workflow.milestoneContext(request.params.milestoneId);
+      const execution = context.milestone.currentExecution;
+      return {
+        ...context,
+        milestoneId: context.milestone.id,
+        projectId: context.project.id,
+        attemptId: execution?.attemptId ?? null,
+        reportOpportunityId: execution?.reportOpportunityId ?? null,
+        requestedAction: "assess_milestone",
+        definitionVersion: context.milestone.definitionVersion,
+        planningRevision: execution?.planningRevision ?? context.milestone.planning.revision,
+        repositoryPath: context.project.repositoryPath,
+        projectDocument: dependencies.store.productDocumentPath(context.project.id),
+        productFacts: await productFactsContext(dependencies.store, context.project),
       };
     },
   );
@@ -542,6 +396,8 @@ async function taskContext(
   project: Project,
   task: Task,
 ) {
+  const milestoneOwner = task.milestoneId ? await store.findMilestone(task.milestoneId) : null;
+  const milestoneActivities = milestoneOwner ? await store.listMilestoneActivities(project.id, milestoneOwner.milestone.id) : [];
   const activities = await store.listTaskActivities(project.id, task.id);
   const activity = projectTaskActivities(
     activities,
@@ -550,6 +406,9 @@ async function taskContext(
   const { delivery } = activity;
   return {
     taskId: task.id,
+    milestone: milestoneOwner?.milestone ?? null,
+    milestoneActivities,
+    milestoneProjection: projectMilestoneActivities(milestoneActivities),
     projectId: project.id,
     attemptId: task.currentExecution?.attemptId ?? null,
     reportOpportunityId: task.currentExecution?.reportOpportunityId ?? null,

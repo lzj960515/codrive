@@ -1,5 +1,12 @@
 # Documentation log
 
+## 2026-09-15
+
+- Separated current product facts from milestone goals and task plans; ordinary work additions no longer require editing `PROJECT.md`.
+- Documented initial assessment, non-terminal discoveries, evidence-driven plans, task-specific restrictions, continued assessment while awaiting decisions, and verified milestone completion.
+- Unified visible persistent planning conversations with task conversations and recorded the startup-before-runtime v5 migration boundary.
+- Updated the four managed Skills and their planning reference without introducing another Skill or separate discovery/hold lifecycle.
+
 ## 2026-09-07
 
 - Updated the bundled Codex CLI to 0.153.4 so its live model catalog includes

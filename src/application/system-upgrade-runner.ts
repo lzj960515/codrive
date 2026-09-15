@@ -140,7 +140,7 @@ function classifyUpgradeError(
       return {
         code: "state_migration_failed",
         summary:
-          "Codrive stopped, but its state could not be migrated safely. Restore or repair the v3 state, then retry.",
+          "Codrive stopped, but its state could not be migrated safely. Restore or repair the pre-upgrade state, then retry.",
       };
     }
     if (error.step === "start") {
@@ -165,7 +165,7 @@ function classifyUpgradeError(
     return {
       code: "state_migration_failed",
       summary:
-        "Codrive stopped, but its state could not be migrated safely. Restore or repair the v3 state, then retry.",
+        "Codrive stopped, but its state could not be migrated safely. Restore or repair the pre-upgrade state, then retry.",
     };
   }
   if (/timed out|timeout/i.test(message)) {

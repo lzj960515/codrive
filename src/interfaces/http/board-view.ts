@@ -1,16 +1,21 @@
+import type { Milestone, MilestoneActivity } from "../../domain/milestone.js";
+import { createMilestoneView, milestoneTaskWait } from "./milestone-view.js";
 import type { ProjectSnapshot } from "../../domain/types.js";
 import { createTaskDisplay } from "./task-display.js";
 
 export function createBoardView(
   snapshots: ProjectSnapshot[],
   schedulingSnapshots: ProjectSnapshot[] = snapshots,
+  milestoneActivities: ReadonlyMap<string, MilestoneActivity[]> = new Map(),
 ) {
-  return snapshots.map(({ project, tasks }) => {
+  return snapshots.map(({ project, tasks, milestones }) => {
     const planning = createPlanningView(project, tasks);
+    const milestonesById = new Map(milestones.map(milestone => [milestone.id, milestone]));
     return {
       project: {
         id: project.id,
         name: project.name,
+        planningThreadId: project.planningThreadId ?? null,
         status: project.status,
         displayStatus: projectDisplayStatus(
           project.archivedAt,
@@ -28,7 +33,13 @@ export function createBoardView(
         planning,
         updatedAt: project.updatedAt,
       },
+      milestones: milestones.map(milestone => createMilestoneView(
+        milestone,
+        milestoneActivities.get(milestone.id) ?? [],
+        tasks.filter(task => task.milestoneId === milestone.id).length,
+      )),
       tasks: tasks.map((task) => ({
+        ...taskMilestoneView(task, milestonesById, milestoneActivities),
         id: task.id,
         title: task.title,
         description: task.description,
@@ -57,6 +68,21 @@ export function createBoardView(
       })),
     };
   });
+}
+
+function taskMilestoneView(
+  task: ProjectSnapshot["tasks"][number],
+  milestones: ReadonlyMap<string, Milestone>,
+  activities: ReadonlyMap<string, MilestoneActivity[]>,
+) {
+  const milestone = task.milestoneId ? milestones.get(task.milestoneId) : undefined;
+  return {
+    milestoneId: milestone?.id ?? null,
+    milestoneTitle: milestone?.title ?? null,
+    milestoneWait: milestone
+      ? milestoneTaskWait(milestone, activities.get(milestone.id) ?? [], task.id)
+      : null,
+  };
 }
 
 function createPlanningView(

@@ -316,6 +316,73 @@ describe("HTTP API", () => {
     });
   }
 
+  it("adds work without changing the accepted product contract", async () => {
+    const created = await registerProject();
+    const before = await store.readProductDocument(created.project.id);
+    const response = await command({
+      type: "project.add_work",
+      payload: {
+        projectId: created.project.id,
+        decisionSummary: "Cover the remaining existing consumer",
+        tasks: [{ title: "Migrate consumer", description: "Preserve existing results", acceptanceCriteria: ["Consumer uses the current source"] }],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const snapshot = await store.getProject(created.project.id);
+    expect(snapshot!.tasks).toHaveLength(2);
+    expect(snapshot!.project.productFacts).toEqual(created.project.productFacts);
+    expect(await store.readProductDocument(created.project.id)).toBe(before);
+  });
+
+  it("registers a milestone before its first task is known", async () => {
+    const response = await command({
+      type: "project.register",
+      payload: {
+        name: "Social", repositoryPath: "/workspace/social", defaultBranch: "main",
+        productDocument: "# Social\nCollect and present social content.", tasks: [],
+        milestones: [{ title: "Social migration", description: "Preserve collection and display results", acceptanceCriteria: ["Existing scenarios work through the new source"] }],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().milestones).toHaveLength(1);
+    expect(response.json().tasks).toEqual([]);
+  });
+
+  it("shows milestone decisions and only the affected task's wait in HTTP views", async () => {
+    const response = await command({ type: "project.register", payload: {
+      name: "Social", repositoryPath: "/workspace/social", defaultBranch: "main",
+      productDocument: "# Social", tasks: [],
+      milestones: [{ title: "Social migration", description: "Preserve current consumers", acceptanceCriteria: ["Old consumers migrated"] }],
+    } });
+    const created = response.json() as ProjectSnapshot;
+    const milestone = created.milestones[0]!;
+    const execution = milestone.currentExecution!;
+    const reported = await command({ type: "milestone.report", payload: {
+      milestoneId: milestone.id, attemptId: execution.attemptId,
+      reportOpportunityId: execution.reportOpportunityId,
+      definitionVersion: milestone.definitionVersion, planningRevision: execution.planningRevision,
+      outcome: "needs_input", summary: "Investigate consumers while the removal decision waits",
+      plan: {
+        tasks: [
+          { key: "remove", title: "Remove old source", description: "Remove after consumers are resolved", acceptanceCriteria: [] },
+          { key: "inspect", title: "Inspect consumer", description: "Trace the current reader", acceptanceCriteria: [] },
+        ],
+        resolutions: [{ sourceActivityIds: [], summary: "Keep source until scope is decided", question: "Should the old report remain available?", affectedTaskIds: ["remove"] }],
+      },
+    } });
+    expect(reported.statusCode).toBe(200);
+    const headers = { "x-codrive-token": "secret" };
+    const board = (await server.inject({url: "/api/board", headers})).json()[0];
+    expect(board.milestones[0]).toMatchObject({ questions: ["Should the old report remain available?"], threadId: milestone.threadId });
+    expect(board.tasks.find((task: { title: string }) => task.title === "Remove old source").milestoneWait).toMatchObject({ summary: "Keep source until scope is decided" });
+    expect(board.tasks.find((task: { title: string }) => task.title === "Inspect consumer").milestoneWait).toBeNull();
+    const context = await server.inject({url: `/api/contexts/milestones/${milestone.id}`, headers});
+    expect(context.statusCode).toBe(200);
+    expect(context.json()).toMatchObject({ milestoneId: milestone.id, projectDocument: store.productDocumentPath(created.project.id) });
+    const detail = await server.inject({url: `/api/milestones/${milestone.id}`, headers});
+    expect(detail.json().milestone.questions).toEqual(board.milestones[0].questions);
+  });
+
   it("rejects a blank product document before registering a project", async () => {
     const response = await command({
       type: "project.register",
@@ -835,6 +902,7 @@ describe("HTTP API", () => {
     expect(current?.project).toMatchObject({
       scheduling: "paused",
       currentExecution: {
+        reportOpportunityId: failedExecution.reportOpportunityId,
         attemptId: failedExecution.attemptId,
         status: "failed",
       },
@@ -1210,6 +1278,7 @@ describe("HTTP API", () => {
         evaluatedRevision: planningRevision,
       },
       currentExecution: {
+        reportOpportunityId: "fixture-project-report",
         attemptId: "selection_1",
         action: "select_tasks",
         status: "completed",
@@ -1218,6 +1287,7 @@ describe("HTTP API", () => {
         planningRevision,
         modelRouting: testModelRouting(),
         result: {
+          reportOpportunityId: "fixture-project-report",
           projectId: created.project.id,
           attemptId: "selection_1",
           outcome: "needs_input",
@@ -1800,6 +1870,7 @@ describe("HTTP API", () => {
         evaluatedRevision: 1,
       },
       currentExecution: {
+        reportOpportunityId: "fixture-project-report",
         attemptId: "selection_1",
         action: "select_tasks",
         status: "completed",
@@ -1808,6 +1879,7 @@ describe("HTTP API", () => {
         planningRevision: 1,
         modelRouting: testModelRouting(),
         result: {
+          reportOpportunityId: "fixture-project-report",
           projectId: created.project.id,
           attemptId: "selection_1",
           outcome: "needs_input",
@@ -1857,6 +1929,7 @@ describe("HTTP API", () => {
         changeReason: "manual_replan",
       },
       currentExecution: {
+        reportOpportunityId: "fixture-project-report",
         attemptId: "selection_1",
         action: "select_tasks",
         status: "completed",
@@ -1865,6 +1938,7 @@ describe("HTTP API", () => {
         planningRevision: 1,
         modelRouting: testModelRouting(),
         result: {
+          reportOpportunityId: "fixture-project-report",
           projectId: created.project.id,
           attemptId: "selection_1",
           outcome: "needs_input",
@@ -1957,6 +2031,7 @@ describe("HTTP API", () => {
         evaluatedRevision: 1,
       },
       currentExecution: {
+        reportOpportunityId: "fixture-project-report",
         attemptId: "selection_1",
         action: "select_tasks",
         status: "completed",
@@ -1965,6 +2040,7 @@ describe("HTTP API", () => {
         planningRevision: 1,
         modelRouting: testModelRouting(),
         result: {
+          reportOpportunityId: "fixture-project-report",
           projectId: created.project.id,
           attemptId: "selection_1",
           outcome: "wait_for_active_tasks",

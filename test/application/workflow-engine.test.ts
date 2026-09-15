@@ -80,24 +80,13 @@ async function addProjectWork(
   projectId: string,
   tasks: Parameters<WorkflowEngine["addProjectWork"]>[1],
 ) {
-  const project = (await store.getProject(projectId))!.project;
-  const currentDocument = await store.readProductDocument(projectId);
-  const nextDocument =
-    `${currentDocument.trimEnd()}\n\n` +
-    `Work update ${project.productFacts.revision + 1}.\n`;
-  await writeFile(store.productDocumentPath(projectId), nextDocument);
-  return workflow.addProjectWork(projectId, tasks, {
-    decisionSummary: "Add the confirmed product work.",
-    expectedRevision: project.productFacts.revision,
-    expectedDigest: project.productFacts.digest,
-    documentDigest: digest(nextDocument),
-  });
+  return workflow.addProjectWork(projectId, tasks, "Add the confirmed work.");
 }
 
-async function finishProjectExecution(report: Omit<ProjectReport, "attemptId">) {
+async function finishProjectExecution(report: Omit<ProjectReport, "attemptId" | "reportOpportunityId">) {
   const snapshot = (await store.getProject(report.projectId))!;
   const execution = snapshot.project.currentExecution!;
-  await workflow.submitProjectReport({ ...report, attemptId: execution.attemptId });
+  await workflow.submitProjectReport({ ...report, attemptId: execution.attemptId, reportOpportunityId: execution.reportOpportunityId });
   return workflow.completeProjectTurn(
     report.projectId,
     execution.attemptId,
@@ -981,12 +970,12 @@ describe("WorkflowEngine", () => {
     await expect(
       workflow.submitProjectReport({
         projectId: created.project.id,
-        attemptId: supersededSelection.attemptId,
+        attemptId: supersededSelection.attemptId, reportOpportunityId: supersededSelection.reportOpportunityId,
         outcome: "selected",
         summary: "This result belongs to revision 2",
         taskIds: [created.tasks[1]!.id],
       }),
-    ).rejects.toThrow(/does not match the current project execution/i);
+    ).rejects.toThrow(/does not match.*planning execution/i);
     expect((await store.findTask(created.tasks[1]!.id))!.task.requestedAction).toBe(
       null,
     );
@@ -1165,10 +1154,8 @@ describe("WorkflowEngine", () => {
       productDocument: "# Second\n",
       tasks: [{ title: "Second task", description: "Build", acceptanceCriteria: [] }],
     });
-    let startCount = 0;
-    projectExecutor.beforeStartTurn = async () => {
-      startCount += 1;
-      if (startCount === 1) throw new Error("Planner failed to start");
+    projectExecutor.beforeStartTurn = async (project) => {
+      if (project.id === first.project.id) throw new Error("Planner failed to start");
     };
 
     await workflow.reconcile();
@@ -1237,7 +1224,7 @@ describe("WorkflowEngine", () => {
     }
     await capacityWorkflow.submitProjectReport({
       projectId: planned.project.id,
-      attemptId: selection.attemptId,
+      attemptId: selection.attemptId, reportOpportunityId: selection.reportOpportunityId,
       outcome: "selected",
       summary: "Both planned tasks are independent",
       taskIds: planned.tasks.slice(2).map(({ id }) => id),
@@ -1525,7 +1512,7 @@ describe("WorkflowEngine", () => {
       await expect(
         workflow.submitProjectReport({
           projectId: created.project.id,
-          attemptId: execution.attemptId,
+          attemptId: execution.attemptId, reportOpportunityId: execution.reportOpportunityId,
           ...report,
         }),
       ).rejects.toThrow(expectedError);
@@ -1576,7 +1563,7 @@ describe("WorkflowEngine", () => {
 
     await workflow.submitProjectReport({
       projectId: created.project.id,
-      attemptId: execution.attemptId,
+      attemptId: execution.attemptId, reportOpportunityId: execution.reportOpportunityId,
       outcome: "selected",
       summary: "Corrected selection",
       taskIds: created.tasks.slice(0, 2).map(({ id }) => id),
@@ -1774,6 +1761,7 @@ describe("WorkflowEngine", () => {
       requestedAction: "select_tasks",
       currentExecution: {
         attemptId: "planning_attempt",
+        reportOpportunityId: "planning_report",
         action: "select_tasks",
         status: "running",
         startedAt: now.toISOString(),
@@ -2103,7 +2091,7 @@ describe("WorkflowEngine", () => {
     await expect(
       workflow.submitProjectReport({
         projectId: created.project.id,
-        attemptId: execution.attemptId,
+        attemptId: execution.attemptId, reportOpportunityId: execution.reportOpportunityId,
         outcome: "selected",
         summary: "This selection used the earlier document.",
         taskIds: [created.tasks[0]!.id],
@@ -2115,7 +2103,7 @@ describe("WorkflowEngine", () => {
     );
   });
 
-  it("restarts temporary project selection when new work changes its facts", async () => {
+  it("restarts project selection when new work changes its facts", async () => {
     const created = await registerProject(1);
     const firstExecution = created.project.currentExecution!;
 
@@ -2136,12 +2124,12 @@ describe("WorkflowEngine", () => {
     await expect(
       workflow.submitProjectReport({
         projectId: created.project.id,
-        attemptId: firstExecution.attemptId,
+        attemptId: firstExecution.attemptId, reportOpportunityId: firstExecution.reportOpportunityId,
         outcome: "selected",
         summary: "This report arrived after its planning facts changed",
         taskIds: [created.tasks[0]!.id],
       }),
-    ).rejects.toThrow(/does not match the current project execution/i);
+    ).rejects.toThrow(/does not match.*planning execution/i);
     expect((await store.findTask(created.tasks[0]!.id))!.task.requestedAction).toBe(
       null,
     );

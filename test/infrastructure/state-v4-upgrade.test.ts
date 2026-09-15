@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
-import { migrateStateDirectory } from "../../src/infrastructure/state-schema.js";
+import { ensureCurrentState } from "../../src/infrastructure/state-schema.js";
 
 const createdAt = "2026-08-27T00:00:00.000Z";
 const workActivityId = "activity_development";
@@ -15,11 +15,11 @@ describe("state schema v4 upgrade", () => {
     const directory = await persistedV3State();
     const store = new ProjectStore(directory);
 
-    await migrateStateDirectory(directory);
+    await ensureCurrentState(directory);
     await store.initialize();
 
     await expect(readJson(join(directory, "state-schema.json"))).resolves.toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       createdAt,
       migratedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });
@@ -115,7 +115,7 @@ describe("state schema v4 upgrade", () => {
     const beforeMarker = await readFile(markerPath, "utf8");
     const beforeTask = await readFile(taskPath, "utf8");
 
-    await expect(migrateStateDirectory(directory)).rejects.toThrow(
+    await expect(ensureCurrentState(directory)).rejects.toThrow(
       /cannot bind.*review.*work activity/i,
     );
 
@@ -137,7 +137,7 @@ describe("state schema v4 upgrade", () => {
     task.status = "obsolete";
     await writeFile(taskPath, `${JSON.stringify(task, null, 2)}\n`, "utf8");
 
-    await expect(migrateStateDirectory(directory)).rejects.toThrow(
+    await expect(ensureCurrentState(directory)).rejects.toThrow(
       /unsupported.*status/i,
     );
 
@@ -152,7 +152,7 @@ describe("state schema v4 upgrade", () => {
       "utf8",
     );
 
-    await expect(new ProjectStore(directory).initialize()).rejects.toThrow(/schema v4/i);
+    await expect(ensureCurrentState(directory)).rejects.toThrow(/schema v5/i);
   });
 
   it.each([
@@ -164,7 +164,7 @@ describe("state schema v4 upgrade", () => {
     }],
   ] as const)("rejects a legacy %s when persisted state already claims v4", async (_label, mutate) => {
     const directory = await persistedV3State();
-    await migrateStateDirectory(directory);
+    await ensureCurrentState(directory);
     await new ProjectStore(directory).initialize();
     const eventsPath = join(directory, "projects", "project_v3", "events.ndjson");
     const events = (await readFile(eventsPath, "utf8"))
@@ -181,9 +181,9 @@ describe("state schema v4 upgrade", () => {
     await expect(new ProjectStore(directory).initialize()).rejects.toThrow(/unsupported.*lifecycle/i);
   });
 
-  it("preserves historical project lifecycle snapshots while enforcing current v4 state", async () => {
+  it("rejects legacy recovery snapshots in current v5 state", async () => {
     const directory = await persistedV3State();
-    await migrateStateDirectory(directory);
+    await ensureCurrentState(directory);
     await new ProjectStore(directory).initialize();
     const projectDirectory = join(directory, "projects", "project_v3");
     const eventsPath = join(projectDirectory, "events.ndjson");
@@ -215,15 +215,12 @@ describe("state schema v4 upgrade", () => {
     );
 
     const reopened = new ProjectStore(directory);
-    await expect(reopened.initialize()).resolves.toBeUndefined();
-    await expect(reopened.getProject("project_v3")).resolves.toMatchObject({
-      project: { status: "active", requestedAction: null },
-    });
+    await expect(reopened.initialize()).rejects.toThrow(/project lifecycle status.*schema v5/i);
   });
 
   it("rejects an unbound review execution when persisted state already claims v4", async () => {
     const directory = await persistedV3State();
-    await migrateStateDirectory(directory);
+    await ensureCurrentState(directory);
     await new ProjectStore(directory).initialize();
     const taskPath = join(
       directory,

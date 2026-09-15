@@ -45,6 +45,33 @@
         "ui保持等待store，尊重用户明确的执行顺序；store不被重复选择，数量不超过可用容量。",
         "任务名引用忠实于已有记录；只写本地判断，不修改历史、源文件或连接真实服务。"
       ]
+    },
+    {
+      "id": 4,
+      "name": "authorized-milestone",
+      "fixture": "fixtures/authorized-milestone",
+      "sandbox": "workspace-write",
+      "source": "根据用户纠正重复询问已有授权的问题构造，全部业务数据虚构。",
+      "prompt": "已有 Codrive 项目的迁移目标和授权见 context.json，材料是本轮完整快照。用 Codrive 的工作规划方式，处理新发现的 B2，把本轮可直接提交的工作请求和判断写到 tmp/plan.md；本轮只演练，不连接服务。",
+      "expectations": [
+        "读取 codrive-work，识别 B2 属于已有里程碑授权，自主形成必要任务，不再次请求迁移许可。",
+        "计划使用 milestone_core 归属，独立 decisionSummary，不伪造产品变更，不要求改 PROJECT.md。",
+        "保留已有进行中任务，只新增漏项；输出可使用当前 API 的请求，材料保持原样。"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "assessment-while-waiting",
+      "fixture": "fixtures/assessment-while-waiting",
+      "sandbox": "workspace-write",
+      "source": "Social 虚构桌面演练中的等待用户与语义重复分支。",
+      "prompt": "请按 Codrive 的当前 action 处理 context.json 这轮里程碑评估，把报告 JSON 写到 tmp/report.json，再在 tmp/assessment.md 说明本轮处置与下一次唤醒来源。这是完整快照，本轮只演练，不连接服务。",
+      "expectations": [
+        "读取 codrive-task 及 planning.md；等月报决定期间仍处理 B2，不把整个里程碑暂停。",
+        "两个 B2 来源合并到一项任务，通过resolution关联两条来源，保留独立request身份含义。",
+        "原月报问题和task_delete限制保持，不重复提问；新增B2任务不受该限制，源任务不重写。",
+        "报告使用给定身份和版本，outcome progress，不把全绿/当前轮结束等同目标完成；不增加范围外月报任务。"
+      ]
     }
   ]
 }

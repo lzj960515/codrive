@@ -1,6 +1,6 @@
 ---
 name: codrive-control
-description: 查询和控制本地 Codrive 项目、任务与运行设置，包括产品详情、产品文档事实、已确认的未开始任务定义修改、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、要求执行已经确认的 backlog 任务修改、更新产品事实、恢复模型容量或干预自动流程时使用；新的任务需求和修改判断由 codrive-work 负责。
+description: 查询和控制本地 Codrive 项目、里程碑、任务与运行设置，包括产品详情、产品文档事实、已确认的未开始任务定义修改、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、要求执行已经确认的 backlog 任务修改、更新产品事实、恢复模型容量或干预自动流程时使用；新的任务需求和修改判断由 codrive-work 负责。
 compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
@@ -15,9 +15,10 @@ node <skill-directory>/scripts/codrive-control.mjs board
 node <skill-directory>/scripts/codrive-control.mjs archived
 node <skill-directory>/scripts/codrive-control.mjs project <project-id>
 node <skill-directory>/scripts/codrive-control.mjs task <task-id>
+node <skill-directory>/scripts/codrive-control.mjs milestone <milestone-id>
 ```
 
-`board` 返回默认看板中的未归档项目；`archived` 返回已归档项目及其数量。`project` 返回注册信息、完整 `PROJECT.md`、产品事实同步状态、最小规划状态、归档时间、任务与当前执行信息。`task` 返回任务定义、当前状态、完整进展记录和推导后的 Codex 对话链接。
+`board` 返回默认看板中的未归档项目；`archived` 返回已归档项目及其数量。`project` 返回注册信息、完整 `PROJECT.md`、产品事实同步状态、最小规划状态、归档时间、任务与当前执行信息。`task` 返回任务定义、归属、当前状态、完整进展记录和推导后的 Codex 对话链接；`milestone` 返回目标、验收、当前结论、未决活动和负责人对话入口。当前任务数量不能代替里程碑完成判断。
 
 项目的 `attention` 只表达需要处理的异常状态：`decision_requested` 表示需要在对应 Codex App 对话中作出决定，`blocked` 表示项目存在确定阻塞。没有 `attention` 时，项目按当前任务和规划状态正常推进。
 
@@ -50,7 +51,7 @@ node <skill-directory>/scripts/codrive-control.mjs update-settings --json '{"max
 node <skill-directory>/scripts/codrive-control.mjs project-control <project-id> <action>
 ```
 
-暂停和恢复只控制后续调度；已经运行的 turn 可以结束，所以看板可能显示“执行中 · 后续已暂停”。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 在同一规划版本创建新的执行 attempt。确认产品、仓库或外部 Gate 已变化时，使用 `replan` 创建新的规划版本并重新判断 backlog。
+暂停和恢复只控制后续调度；已经运行的 turn 可以结束，所以看板可能显示“执行中 · 后续已暂停”。项目级执行失败并保留 `requestedAction` 时，使用 `retry` 在同一规划版本创建新的执行 attempt。确认产品、仓库或外部前置条件已变化时，使用 `replan` 创建新的规划版本并重新判断 backlog。
 
 归档前先读取项目和任务执行状态。项目或任一任务正在启动、运行、等待重试、等待汇报、等待输入或计划等待时，保留当前项目并报告 Codrive 返回的可操作原因。`archive` 会暂停后续调度并从默认看板隐藏项目，同时保留本地数据、`PROJECT.md`、任务、活动历史、执行证据和 Codex 对话引用。`unarchive` 恢复项目可见性；恢复后仍保持暂停，需要用户明确执行 `resume` 才会重新调度。归档与取消的语义独立，第一版不永久删除项目，也不联动归档 Codex 对话。
 
@@ -81,7 +82,7 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> resche
 
 ## 修改未开始任务
 
-用户提出新的任务需求或要求改变任务定义时，先读取 `$codrive-work` 完成范围判断、变化展示和用户确认。本节负责执行已经确认的修改。
+用户提出新的任务需求或要求改变任务定义时，先读取 `$codrive-work` 完成范围与已有授权判断；新的业务取舍需确认，已授权的必要变化直接执行。本节负责执行已经确认的修改。
 
 执行前读取任务与项目详情，保存任务当前的 `updatedAt`。任务仍是普通 `backlog`、`requestedAction=null`、没有执行，并且项目仍未取消和未归档时，使用定义修改命令。系统生成任务由其所有者维护；已经开始、完成或取消的任务返回 `$codrive-work` 选择当前生命周期、取消替换或后续任务。
 
@@ -99,7 +100,7 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> resche
 }
 ```
 
-`changes` 至少包含 `title`、`description` 或 `acceptanceCriteria` 之一。只发送需要改变的字段：
+`changes` 可修改 `title`、`description`、`acceptanceCriteria` 或 `milestoneId`；归属只能指向同项目开放里程碑，解除归属使用 `null`。只发送需要改变的字段：
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs task-update <task-id> --json '<task-update-json>'
@@ -117,6 +118,18 @@ node <skill-directory>/scripts/codrive-control.mjs task-update <task-id> --json 
 ```
 
 脚本读取磁盘上的 `PROJECT.md` 并计算新哈希；Codrive 在一个序列化命令中接受产品事实和任务定义，记录决定摘要，替换失效的任务选择并推进一个规划版本。任务版本、产品文档版本或生命周期已经变化时，重新读取当前状态并根据最新事实整理修改。任务 JSON 保存 Codrive 的运行状态，所有任务定义变化都通过本命令进入工作流。
+
+## 修改已确认的里程碑目标
+
+阶段范围或验收确实改变时，先由 `$codrive-work` 核实已有授权。读取当前里程碑定义版本，再提交明确的变化与决定摘要：
+
+`--json` 对象包含 `expectedDefinitionVersion`、`decisionSummary` 和完整的 `changes: { title, description, acceptanceCriteria }`。
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs milestone-update <milestone-id> --json '<definition-update-json>'
+```
+
+新事实与调查结论属于里程碑活动，不用于暗中重写目标。需要继续评估时，由负责人使用 `$codrive-task` 的里程碑流程处理；产品长期规则确实改变才同步 `PROJECT.md`。
 
 ## 取消判断
 

@@ -402,6 +402,7 @@ function projectSnapshot(tasks: Task[]): ProjectSnapshot {
       updatedAt: "2026-08-31T00:00:00.000Z",
     },
     tasks,
+    milestones: [],
   };
 }
 

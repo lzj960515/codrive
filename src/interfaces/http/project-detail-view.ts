@@ -1,3 +1,4 @@
+import type { MilestoneActivity } from "../../domain/milestone.js";
 import type { ProjectSnapshot } from "../../domain/types.js";
 import {
   hasProductFacts,
@@ -9,8 +10,9 @@ export function createProjectDetailView(
   snapshot: ProjectSnapshot,
   productDocument: string,
   schedulingSnapshots: ProjectSnapshot[] = [snapshot],
+  milestoneActivities: ReadonlyMap<string, MilestoneActivity[]> = new Map(),
 ) {
-  const board = createBoardView([snapshot], schedulingSnapshots)[0]!;
+  const board = createBoardView([snapshot], schedulingSnapshots, milestoneActivities)[0]!;
   const { project } = snapshot;
   const { attention, ...projectView } = board.project;
   const tasksById = new Map(snapshot.tasks.map((task) => [task.id, task]));
@@ -32,6 +34,7 @@ export function createProjectDetailView(
       },
       createdAt: project.createdAt,
     },
+    milestones: board.milestones,
     productDocument,
     attention,
     tasks: board.tasks.map((taskView) => ({

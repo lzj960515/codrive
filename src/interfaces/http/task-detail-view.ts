@@ -1,3 +1,4 @@
+import { milestoneTaskWait } from "./milestone-view.js";
 import { projectTaskActivities } from "../../domain/task-activity.js";
 import type { Project, ProjectSnapshot, Task } from "../../domain/types.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
@@ -9,6 +10,8 @@ export async function createTaskDetailView(
   task: Task,
   schedulingSnapshots: ProjectSnapshot[],
 ) {
+  const milestoneOwner = task.milestoneId ? await store.findMilestone(task.milestoneId) : null;
+  const milestoneActivities = milestoneOwner ? await store.listMilestoneActivities(project.id, milestoneOwner.milestone.id) : [];
   const activities = await store.listTaskActivities(project.id, task.id);
   const publicActivities = activities.map((activity) => {
     if (!activity.evidence?.resumePrompt) return activity;
@@ -49,6 +52,9 @@ export async function createTaskDetailView(
     task: {
       id: task.id,
       projectId: task.projectId,
+      milestoneId: task.milestoneId ?? null,
+      milestoneTitle: milestoneOwner?.milestone.title ?? null,
+      milestoneWait: milestoneOwner ? milestoneTaskWait(milestoneOwner.milestone, milestoneActivities, task.id) : null,
       title: task.title,
       description: task.description,
       acceptanceCriteria: task.acceptanceCriteria,

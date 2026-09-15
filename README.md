@@ -43,7 +43,7 @@ codrive setup
 codrive
 ```
 
-`setup` initializes an empty state directory at schema v4 and installs the exact package's managed Skills and Hook. Codrive then prints the local board URL and log location. After setup:
+`setup` initializes an empty state directory at schema v5 and installs the exact package's managed Skills and Hook. Codrive then prints the local board URL and log location. After setup:
 
 1. In Codex, run `/hooks`, review the four Codrive activity Hook definitions, and trust their current hashes.
 2. Open the target project directory in Codex App.
@@ -61,7 +61,7 @@ The update window shows the installed version, the latest stable release, the la
 codrive upgrade
 ```
 
-Ordinary startup never performs a historical state migration. It creates schema v4 only for an empty state directory, then requires both current v4 state and exact-version managed resource markers before starting App Server or Recovery. A manual package replacement or failed resource synchronization therefore remains stopped; use `codrive upgrade` for an existing installation, or `codrive setup` to initialize a fresh installation or repair resources whose state is already current.
+Startup migrates supported older local state under the state lock before App Server or Recovery begins, then requires managed Skill and Hook markers to match the installed package. Use `codrive upgrade` to install and synchronize the complete package, or `codrive setup` to initialize or repair managed resources. An unsuccessful conversion or resource check keeps normal execution stopped.
 
 Codex owns Hook review and trust. After setup or any release that changes the Hook definition, use `/hooks` in Codex to review and trust the new hash. Codex does not expose a public per-Hook API that lets Codrive persist that decision on the user's behalf; the process-wide bypass would also trust unrelated user and project Hooks, so Codrive does not use it. The update window shows an action prompt until all four Codrive definitions are enabled and trusted, and `codrive doctor` reports static installation and runtime trust as separate checks.
 
@@ -92,11 +92,17 @@ An ordinary unstarted backlog task can change its title, result boundary, and ac
 
 Task state has three distinct layers: the board-visible business status, the next `work | review | integrate` action, and the attempt's runtime status. Every completed work result owns one immutable activity and an optional `candidateCommit`; Review and integration bind that exact activity instead of scanning older candidates. Integration completion is a separate decision from Git merge completion, so one task can continue into release, migration, or verification work after code is merged.
 
-State schema v4 persists that model. Only the stopped upgrade command performs historical migration: Codrive backs up v3, migrates task snapshots and recovery events in a temporary tree, reconstructs work-activity bindings, validates counts and open execution identities, then atomically switches projects and the marker. Migration failure leaves v3 authoritative. A schema-v2 installation first performs the existing v3 upgrade and then this v4 migration. Ordinary startup only validates current state and managed-resource markers before recovery. See [Product facts lifecycle](./docs/architecture/product-facts.md).
+State schema v5 preserves task delivery bindings and adds milestone goals and persistent planning. Supported older local state is backed up, converted, and validated under the state lock before normal service startup; runtime accepts only the current model. Existing tasks remain independent, while temporary planning is replaced with pending visible persistent selection. See [Product facts lifecycle](./docs/architecture/product-facts.md).
 
 Review findings represent real delivery blockers in supported product and operational paths, not unconditional instructions. The work conversation fixes valid issues or records evidence for findings that do not apply; the same independent Review conversation then reevaluates the newly recorded work result.
 
 Waiting and recovery are part of the same workflow. A task can pause until a specific time without holding project capacity, capacity errors can move work to a fallback model, and an authoritatively interrupted task can resume from its persisted conversation and execution state. Recovery rechecks the exact action, attempt, thread, turn, project capacity, and integration lease before starting one replacement turn. The task timeline records actual recovery transitions and surfaces only decisions or failures that need attention.
+
+## Milestone goals
+
+A milestone defines a stage outcome, its scope, and evidence-based acceptance. It can start without tasks: its owner investigates and creates the initial work. Discoveries and task results keep the plan current; authorized omissions are handled autonomously, and only new business choices need your decision. Unrelated work continues while a question is pending.
+
+Adding tasks does not require changing `PROJECT.md`. That document stays the current product contract; milestone goals and task plans have their own lifecycle. Finishing every task triggers final assessment. Missing runtime or delivery evidence creates ordinary verification work before the milestone is marked done. All planning and execution conversations remain visible in the current project. See [Milestones and continuous planning](./docs/architecture/milestones.md).
 
 ## Codex conversations
 
@@ -105,7 +111,8 @@ Waiting and recovery are part of the same workflow. A task can pause until a spe
 | Work | One persistent Codex conversation per task for code, release, migration, verification, and Review feedback |
 | Integration | Continues the work conversation and decides whether the whole task is complete |
 | Review | Uses one `[review]`-prefixed independent persistent conversation per task and loads the startup-detected `$code-review` Skill |
-| Task selection | Uses temporary conversations that stay out of the recent-task list |
+| Milestone assessment | Uses one visible persistent `[里程碑]` conversation per milestone |
+| Task selection | Uses one visible persistent `[调度]` conversation per project |
 
 Task details link each execution and activity to its source conversation. They also show blockers, scheduled continuation, decision requests, test evidence, review findings, and Git results in one chronological timeline.
 
@@ -113,9 +120,9 @@ Task details link each execution and activity to its source conversation. They a
 
 | Skill | Purpose |
 | --- | --- |
-| `$codrive-forge` | Turn a product idea into a confirmed plan and initial task set |
-| `$codrive-task` | Select project work or execute the current task stage |
-| `$codrive-work` | Add confirmed work or revise an existing unstarted task |
+| `$codrive-forge` | Register a product contract with milestone goals or initial tasks |
+| `$codrive-task` | Select project work, assess milestone goals, or execute the current task stage |
+| `$codrive-work` | Add authorized goals and tasks or revise unstarted work |
 | `$codrive-control` | Inspect progress, revise backlog tasks, record product-document changes, and control execution |
 
 Skills read live context from Codrive, so task messages stay short and product state remains consistent across conversations. After `$codrive-task` reads the current task definition, acceptance criteria, stage, activity history, and repository rules, it loads other available Skills that match the actual work for that stage.
@@ -129,7 +136,7 @@ codrive stop                    Stop Codrive
 codrive restart                 Restart Codrive
 codrive upgrade                 Install the latest release through the stopped-state migration barrier
 codrive status                  Show local service status
-codrive setup                   Initialize fresh v4 state and install or repair managed resources
+codrive setup                   Initialize fresh v5 state and install or repair managed resources
 codrive doctor                  Check runtime, Codex, login, and managed resources
 codrive import <project.json>   Import a product
 codrive serve                   Run in the foreground

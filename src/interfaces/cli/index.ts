@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
+import { InstanceLock } from "../../infrastructure/instance-lock.js";
 import { CodriveServer } from "../../codrive-server.js";
 import { SystemUpgradeRunner } from "../../application/system-upgrade-runner.js";
 import { ManagedHookRuntimeInspector } from "../../application/managed-hook-runtime-inspector.js";
@@ -25,7 +26,7 @@ import {
 import { UpgradeStateStore } from "../../infrastructure/upgrade-state-store.js";
 import {
   initializeStateDirectory,
-  migrateStateDirectory,
+  ensureCurrentState,
 } from "../../infrastructure/state-schema.js";
 import type {
   PackageVersionStatus,
@@ -117,7 +118,13 @@ async function restartService(): Promise<void> {
 
 async function migrateState(): Promise<void> {
   const config = await new ConfigStore().read();
-  await migrateStateDirectory(config.stateDirectory);
+  const lock = new InstanceLock(config.stateDirectory);
+  await lock.acquire();
+  try {
+    await ensureCurrentState(config.stateDirectory);
+  } finally {
+    await lock.release();
+  }
 }
 
 async function upgrade(): Promise<void> {
@@ -143,7 +150,7 @@ async function upgrade(): Promise<void> {
   }
   if (!checked.updateAvailable) {
     process.stdout.write(`Codrive ${currentVersion} is already current.\n`);
-    await migrateStateDirectory(config.stateDirectory);
+    await migrateState();
     await new ManagedResourceInstaller().install();
     process.stdout.write(
       "Codrive's 4 managed Skills and 1 managed Hook are synchronized.\n",

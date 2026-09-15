@@ -99,7 +99,6 @@ export class CodexAppServerClient implements CodexGateway {
   async startThread(
     cwd: string,
     title: string,
-    options: { ephemeral?: boolean } = {},
   ): Promise<string> {
     await this.start();
     const connection = this.requireConnection();
@@ -108,11 +107,8 @@ export class CodexAppServerClient implements CodexGateway {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       serviceName: "codrive",
-      ephemeral: options.ephemeral ?? false,
     });
-    if (!options.ephemeral) {
-      await this.setThreadName(response.thread.id, title);
-    }
+    await this.setThreadName(response.thread.id, title);
     return response.thread.id;
   }
 

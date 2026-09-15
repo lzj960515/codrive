@@ -84,6 +84,18 @@ describe("non-execution Skill handoff", () => {
     expect(task).toContain("与当前阶段实际工作匹配的 Skill");
   });
 
+  it("routes selection and assessment to a packaged planning reference", async () => {
+    const skill = await readFile(resolve("skills/codrive-task/SKILL.md"), "utf8");
+    const reference = await readFile(resolve("skills/codrive-task/references/planning.md"), "utf8");
+    expect(skill).toContain("references/planning.md");
+    expect(reference).toContain("`select_tasks`");
+    expect(reference).toContain("`assess_milestone`");
+    expect(reference).toContain("milestone-report");
+    expect(reference).toContain("reportOpportunityId");
+    expect(reference).toContain("sourceActivityIds");
+    expect(reference).toContain("waitForTaskIds");
+  });
+
   it("documents one explicit JSON argument contract across every managed Skill", async () => {
     for (const skillName of managedSkills) {
       const instructions = await readFile(

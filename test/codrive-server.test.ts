@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { InstanceLock } from "../src/infrastructure/instance-lock.js";
 import { CodriveServer } from "../src/codrive-server.js";
 import { PackageVersionCheckScheduler } from "../src/application/package-version-check-scheduler.js";
 import { RecoveryManager } from "../src/application/recovery-manager.js";
@@ -14,6 +15,20 @@ import { ManagedResourceInstaller } from "../src/infrastructure/managed-resource
 describe("CodriveServer startup readiness", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("does not migrate while another process owns the state directory", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-locked-startup-"));
+    const marker = '{"schemaVersion":4,"createdAt":"2026-08-28T00:00:00.000Z"}\n';
+    await writeFile(join(stateDirectory, "state-schema.json"), marker);
+    const owner = new InstanceLock(stateDirectory);
+    await owner.acquire();
+    try {
+      await expect(new CodriveServer(stateDirectory).start()).rejects.toThrow(/already running/i);
+      expect(await readFile(join(stateDirectory, "state-schema.json"), "utf8")).toBe(marker);
+    } finally {
+      await owner.release();
+    }
   });
 
   it("fails before App Server and recovery when managed resources are outdated", async () => {
@@ -56,13 +71,14 @@ describe("CodriveServer startup readiness", () => {
 
     expect(appServerStart).not.toHaveBeenCalled();
     expect(recoveryStart).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(join(stateDirectory, "state-schema.json"), "utf8")).schemaVersion).toBe(5);
   });
 
-  it("fails before resources and App Server when state still needs migration", async () => {
+  it("fails before resources and App Server when migration encounters an unsupported schema", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-startup-"));
     const markerPath = join(stateDirectory, "state-schema.json");
     const marker =
-      '{"schemaVersion":3,"createdAt":"2026-08-28T00:00:00.000Z"}\n';
+      '{"schemaVersion":1,"createdAt":"2026-08-28T00:00:00.000Z"}\n';
     await writeFile(markerPath, marker, "utf8");
     const resourceStatus = vi.spyOn(
       ManagedResourceInstaller.prototype,
@@ -75,7 +91,7 @@ describe("CodriveServer startup readiness", () => {
     const recoveryStart = vi.spyOn(RecoveryManager.prototype, "start");
 
     await expect(new CodriveServer(stateDirectory).start()).rejects.toThrow(
-      /offline migration/i,
+      /unsupported Codrive state/i,
     );
 
     expect(resourceStatus).not.toHaveBeenCalled();

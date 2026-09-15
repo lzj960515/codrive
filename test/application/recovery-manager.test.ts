@@ -908,6 +908,7 @@ describe("RecoveryManager", () => {
     const running = snapshot.tasks[0]!.currentExecution!;
     const retrySnapshot = (nextRetryAt: string) => ({
       project: snapshot.project,
+      milestones: snapshot.milestones,
       tasks: [
         {
           ...snapshot.tasks[0]!,
@@ -1928,7 +1929,7 @@ describe("RecoveryManager", () => {
     const selecting = (await idleStore.getProject(created.project.id))!.project;
     await idleWorkflow.submitProjectReport({
       projectId: created.project.id,
-      attemptId: selecting.currentExecution!.attemptId,
+      attemptId: selecting.currentExecution!.attemptId, reportOpportunityId: selecting.currentExecution!.reportOpportunityId,
       outcome: "wait_for_active_tasks",
       summary: "Gameplay should wait for the foundation",
     });
@@ -2055,7 +2056,7 @@ describe("RecoveryManager", () => {
       ]);
   });
 
-  it("leaves an idle project without a temporary project execution", async () => {
+  it("leaves an idle project without an active planning execution", async () => {
     const idleStore = new ProjectStore(
       await mkdtemp(join(tmpdir(), "codrive-idle-recovery-")),
     );

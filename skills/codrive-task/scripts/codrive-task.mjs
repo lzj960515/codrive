@@ -24,6 +24,18 @@ if (command === "context" && args.length === 1) {
     activityId,
     reportOpportunityId: payload.reportOpportunityId,
   });
+} else if (command === "discovery" && args[0]) {
+  const [id, ...inputArgs] = args;
+  const payload = parseJsonArgument(inputArgs, "discovery");
+  const result = await sendCommand("task.report_discovery", { ...payload, taskId: id });
+  printSuccess(result);
+} else if (command === "milestone-context" && args.length === 1) {
+  print(await request(`/api/contexts/milestones/${encodeURIComponent(args[0])}`));
+} else if (command === "milestone-report" && args[0]) {
+  const [id, ...inputArgs] = args;
+  const payload = parseJsonArgument(inputArgs, "milestone-report");
+  const result = await sendCommand("milestone.report", { ...payload, milestoneId: id });
+  printSuccess(result, { reportOpportunityId: payload.reportOpportunityId });
 } else if (command === "project-context" && args.length === 1) {
   const [id] = args;
   print(await request(`/api/contexts/projects/${encodeURIComponent(id)}`));
@@ -37,10 +49,11 @@ if (command === "context" && args.length === 1) {
   printSuccess(result, {
     attemptId: payload.attemptId,
     outcome: payload.outcome,
+    reportOpportunityId: payload.reportOpportunityId,
   });
 } else {
   fail(
-    "Usage: codrive-task <context|resolve|report|project-context|project-report> <id> [--cwd path | --json payload]",
+    "Usage: codrive-task <context|resolve|report|discovery|project-context|project-report|milestone-context|milestone-report> <id> [--cwd path | --json payload]",
   );
 }
 

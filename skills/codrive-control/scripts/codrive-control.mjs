@@ -15,6 +15,13 @@ if (command === "board" && args.length === 0) {
   result = await request(`/api/projects/${encodeURIComponent(args[0])}`);
 } else if (command === "task" && args.length === 1) {
   result = await request(`/api/tasks/${encodeURIComponent(args[0])}`);
+} else if (command === "milestone" && args.length === 1) {
+  result = await request(`/api/contexts/milestones/${encodeURIComponent(args[0])}`);
+} else if (command === "milestone-update" && args[0]) {
+  const [id, ...inputArgs] = args;
+  const payload = parseJsonArgument(inputArgs, "milestone-update");
+  result = await sendCommand("milestone.update_definition", { ...payload, milestoneId: id });
+  isWrite = true;
 } else if (command === "settings" && args.length === 0) {
   result = await request("/api/system/settings");
 } else if (command === "update-settings") {
@@ -66,7 +73,7 @@ if (command === "board" && args.length === 0) {
   isWrite = true;
 } else {
   fail(
-    "Usage: codrive-control <board|archived|project|task|settings|update-settings|project-control|task-control|task-update|product-document-changed> ...",
+    "Usage: codrive-control <board|archived|project|task|milestone|milestone-update|settings|update-settings|project-control|task-control|task-update|product-document-changed> ...",
   );
 }
 print(isWrite ? { ok: true, result } : result);

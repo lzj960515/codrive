@@ -4,8 +4,9 @@ import { join } from "node:path";
 
 import { upgradeStateV2ToV3 } from "./state-v2-upgrade.js";
 import { upgradeStateV3ToV4 } from "./state-v3-upgrade.js";
+import { upgradeStateV4ToV5 } from "./state-v4-upgrade.js";
 
-const currentStateSchemaVersion = 4;
+const currentStateSchemaVersion = 5;
 
 interface StateSchema {
   schemaVersion: number;
@@ -19,10 +20,10 @@ export async function initializeStateDirectory(
   const schemaPath = join(stateDirectory, "state-schema.json");
   const schema = await readSchema(schemaPath);
   if (schema) {
-    if (schema.schemaVersion === 2 || schema.schemaVersion === 3) {
+    if ([2, 3, 4].includes(schema.schemaVersion)) {
       throw new Error(
-        `Codrive state version ${schema.schemaVersion} requires offline migration ` +
-          `before service startup; run codrive upgrade while the service is stopped`,
+        `Codrive state version ${schema.schemaVersion} requires startup migration ` +
+          `before opening the store; start Codrive to migrate`,
       );
     }
     assertCurrentSchema(schema);
@@ -32,7 +33,8 @@ export async function initializeStateDirectory(
   await initializeEmptyStateDirectory(stateDirectory, schemaPath);
 }
 
-export async function migrateStateDirectory(
+/** 调用方持有数据目录的 InstanceLock，转换完成后才允许 Store 和执行器启动。 */
+export async function ensureCurrentState(
   stateDirectory: string,
 ): Promise<void> {
   const schemaPath = join(stateDirectory, "state-schema.json");
@@ -47,6 +49,7 @@ export async function migrateStateDirectory(
         createdAt,
       } satisfies StateSchema);
       await upgradeStateV3ToV4(stateDirectory, migratedAt, createdAt);
+      await upgradeStateV4ToV5(stateDirectory, migratedAt, createdAt);
       return;
     }
     if (schema.schemaVersion === 3) {
@@ -55,6 +58,15 @@ export async function migrateStateDirectory(
         stateDirectory,
         new Date().toISOString(),
         createdAt,
+      );
+      await upgradeStateV4ToV5(stateDirectory, new Date().toISOString(), createdAt);
+      return;
+    }
+    if (schema.schemaVersion === 4) {
+      await upgradeStateV4ToV5(
+        stateDirectory,
+        new Date().toISOString(),
+        validTimestamp(schema.createdAt, "Codrive state marker"),
       );
       return;
     }

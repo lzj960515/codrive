@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
+import type { Milestone } from "../../src/domain/milestone.js";
 import type { ProjectSnapshot } from "../../src/domain/types.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import { createHttpServer } from "../../src/interfaces/http/server.js";
@@ -170,6 +171,7 @@ describe("bundled Skill scripts", () => {
     const reportedOutput = JSON.parse(
       await runSkill("codrive-task", ["project-report", created.project.id], {
         attemptId: created.project.currentExecution!.attemptId,
+        reportOpportunityId: created.project.currentExecution!.reportOpportunityId,
         outcome: "selected",
         summary: "Start the first task",
         taskIds: [created.tasks[0]!.id],
@@ -193,8 +195,10 @@ describe("bundled Skill scripts", () => {
     const added = commandResult<ProjectSnapshot>(
       await runSkill("codrive-work", ["add", created.project.id], {
         decisionSummary: "Add the audio milestone.",
-        expectedRevision: projectContext.productFacts.revision,
-        expectedDigest: projectContext.productFacts.acceptedDigest,
+        productDocumentChange: {
+          expectedRevision: projectContext.productFacts.revision,
+          expectedDigest: projectContext.productFacts.acceptedDigest,
+        },
         tasks: [
           { title: "Audio", description: "Add audio", acceptanceCriteria: [] },
         ],
@@ -352,12 +356,120 @@ describe("bundled Skill scripts", () => {
     expect(runtimeSettings.maxConcurrentTasks).toBe(3);
   });
 
+  it("adds ordinary work without editing or advancing product facts", async () => {
+    const created = await store.createProject({
+      name: "Migration",
+      repositoryPath: "/workspace/migration",
+      defaultBranch: "main",
+      productDocument: "# Stable product contract\n",
+      tasks: [{ title: "Original", description: "Existing work", acceptanceCriteria: [] }],
+    });
+    const added = commandResult<ProjectSnapshot>(await runSkill(
+      "codrive-work", ["add", created.project.id], {
+        decisionSummary: "Cover an omitted consumer within the accepted scope",
+        tasks: [{ title: "Consumer", description: "Keep existing results", acceptanceCriteria: [] }],
+      },
+    ));
+    expect(added.tasks).toHaveLength(2);
+    expect(added.project.productFacts).toEqual(created.project.productFacts);
+    const context = JSON.parse(await runSkill("codrive-work", ["show", created.project.id]));
+    expect(context.productFacts.status).toBe("current");
+  });
+
+  it("registers a goal without tasks and reports an evidence-backed plan", async () => {
+    const created = commandResult<ProjectSnapshot>(await runSkill("codrive-forge", ["register"], {
+      name: "Social rehearsal",
+      repositoryPath: "/workspace/social-rehearsal",
+      defaultBranch: "main",
+      productDocument: "# Fictional core collection and display\n",
+      tasks: [],
+      milestones: [{
+        title: "Migrate core Social",
+        description: "Preserve core collection and display",
+        acceptanceCriteria: ["All core consumers have verified destinations"],
+      }],
+    }));
+    expect(created.tasks).toEqual([]);
+    expect(created.milestones).toHaveLength(1);
+    const milestone = created.milestones[0]!;
+    const context = JSON.parse(await runSkill("codrive-task", ["milestone-context", milestone.id]));
+    expect(context.requestedAction).toBe("assess_milestone");
+    const report = {
+      attemptId: context.attemptId,
+      reportOpportunityId: context.reportOpportunityId,
+      definitionVersion: context.definitionVersion,
+      planningRevision: context.planningRevision,
+      outcome: "progress",
+      summary: "Investigate consumers before migration",
+      plan: { tasks: [{ key: "consumers", title: "Inspect consumers", description: "Trace actual usage", acceptanceCriteria: ["Record each supported entry"] }] },
+    };
+    const accepted = JSON.parse(await runSkill("codrive-task", ["milestone-report", milestone.id], report));
+    expect(accepted).toMatchObject({ ok: true, reportOpportunityId: context.reportOpportunityId });
+    await runSkill("codrive-task", ["milestone-report", milestone.id], report);
+    const snapshot = (await store.getProject(created.project.id))!;
+    expect(snapshot.tasks).toHaveLength(1);
+    expect(snapshot.tasks[0]!.milestoneId).toBe(milestone.id);
+    expect(snapshot.project.productFacts).toEqual(created.project.productFacts);
+  });
+
+  it("creates and revises milestone definitions through work and control", async () => {
+    const created = await store.createProject({
+      name: "Product", repositoryPath: "/workspace/product", defaultBranch: "main",
+      productDocument: "# Product\n", tasks: [],
+    });
+    const milestone = commandResult<Milestone>(await runSkill("codrive-work", ["milestone-create", created.project.id], {
+      title: "Migration", description: "Core migration", acceptanceCriteria: ["Core verified"],
+    }));
+    const context = JSON.parse(await runSkill("codrive-control", ["milestone", milestone.id]));
+    expect(context.milestone.id).toBe(milestone.id);
+    const updated = commandResult<Milestone>(await runSkill("codrive-control", ["milestone-update", milestone.id], {
+      expectedDefinitionVersion: context.milestone.definitionVersion,
+      decisionSummary: "User included the historical export",
+      changes: { title: "Migration", description: "Core and historical export", acceptanceCriteria: ["Core and export verified"] },
+    }));
+    expect(updated.definitionVersion).toBe(context.milestone.definitionVersion + 1);
+    expect(updated.description).toBe("Core and historical export");
+  });
+
+  it("records a non-terminal discovery without occupying the task report opportunity", async () => {
+    const created = await store.createProject({
+      name: "Discovery", repositoryPath: "/workspace/discovery", defaultBranch: "main",
+      productDocument: "# Product\n", tasks: [],
+    });
+    const milestone = commandResult<Milestone>(await runSkill("codrive-work", ["milestone-create", created.project.id], {
+      title: "Migration", description: "Keep results", acceptanceCriteria: ["Consumers covered"],
+      tasks: [{ title: "Inspect", description: "Find consumers", acceptanceCriteria: [] }],
+    }));
+    const snapshot = (await store.getProject(created.project.id))!;
+    const task = snapshot.tasks[0]!;
+    await store.saveTask(created.project.id, {
+      ...task, status: "working", requestedAction: "work",
+      currentExecution: {
+        attemptId: "attempt_discovery", reportOpportunityId: "opportunity_discovery",
+        action: "work", status: "running", startedAt: new Date().toISOString(), modelRouting: testModelRouting(),
+      },
+    });
+    const discovery = { attemptId: "attempt_discovery", requestId: "request_consumer", summary: "Additional consumer", evidence: ["fixture/consumer.ts:4"] };
+    const first = JSON.parse(await runSkill("codrive-task", ["discovery", task.id], discovery));
+    const retry = JSON.parse(await runSkill("codrive-task", ["discovery", task.id], discovery));
+    expect(first.ok).toBe(true);
+    expect(retry.result).toEqual(first.result);
+    const context = JSON.parse(await runSkill("codrive-task", ["context", task.id]));
+    expect(context).toMatchObject({ attemptId: "attempt_discovery", reportOpportunityId: "opportunity_discovery", requestedAction: "work" });
+    const goal = JSON.parse(await runSkill("codrive-control", ["milestone", milestone.id]));
+    expect(goal.activities.filter((activity: { type: string }) => activity.type === "discovery")).toHaveLength(1);
+  });
+
   it.each([
     ["codrive-forge", ["register"]],
     ["codrive-task", ["report", "task_missing"]],
     ["codrive-work", ["add", "project_missing"]],
     ["codrive-control", ["update-settings"]],
     ["codrive-control", ["task-update", "task_missing"]],
+    ["codrive-work", ["milestone-create", "project_missing"]],
+    ["codrive-control", ["milestone-update", "milestone_missing"]],
+    ["codrive-task", ["milestone-report", "milestone_missing"]],
+    ["codrive-task", ["discovery", "task_missing"]],
   ])(
     "%s requires explicit --json input and never accepts stdin payloads",
     async (skill, args) => {
@@ -376,6 +488,10 @@ describe("bundled Skill scripts", () => {
     ["codrive-work", ["add", "project_missing"]],
     ["codrive-control", ["update-settings"]],
     ["codrive-control", ["task-update", "task_missing"]],
+    ["codrive-work", ["milestone-create", "project_missing"]],
+    ["codrive-control", ["milestone-update", "milestone_missing"]],
+    ["codrive-task", ["milestone-report", "milestone_missing"]],
+    ["codrive-task", ["discovery", "task_missing"]],
   ])("%s reports invalid --json input as a command-line error", async (skill, args) => {
     await expect(
       runSkill(skill, [...args, "--json", "not-json"]),

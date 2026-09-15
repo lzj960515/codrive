@@ -45,9 +45,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({ executable });
     try {
-      const threadId = await client.startThread("/workspace/game", "Game task", {
-        ephemeral: true,
-      });
+      const threadId = await client.startThread("/workspace/game", "Game task");
       await client.resumeThread(threadId, "/workspace/game/.worktrees/task");
       const turnId = await client.startTurn(
         threadId,
@@ -145,9 +143,10 @@ describe("CodexAppServerClient", () => {
     expect(startThread?.params).toMatchObject({
       approvalPolicy: "never",
       sandbox: "danger-full-access",
-      ephemeral: true,
+
     });
-    expect(setThreadName).toBeUndefined();
+    expect(startThread?.params).not.toHaveProperty("ephemeral");
+    expect(setThreadName?.params).toEqual({ threadId: "thread_1", name: "Game task" });
     expect(resumeThread?.params).toMatchObject({
       approvalPolicy: "never",
       sandbox: "danger-full-access",

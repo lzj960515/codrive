@@ -5,37 +5,45 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const [command, projectId, ...args] = process.argv.slice(2);
-if (!projectId || !["show", "add"].includes(command)) {
-  fail("Usage: codrive-work <show|add> <project-id>");
+if (!projectId || !["show", "add", "milestone-create"].includes(command)) {
+  fail("Usage: codrive-work <show|add|milestone-create> <project-id>");
 }
 if (command === "show") {
   if (args.length > 0) fail("Usage: codrive-work show <project-id>");
   print(await request(`/api/contexts/projects/${encodeURIComponent(projectId)}`));
 } else {
-  const payload = parseJsonArgument(args, "add");
-  const context = await request(
-    `/api/contexts/projects/${encodeURIComponent(projectId)}`,
-  );
+  const payload = parseJsonArgument(args, command);
+  if (command === "milestone-create") {
+    const result = await request("/api/commands", {
+      method: "POST",
+      body: JSON.stringify({ type: "milestone.create", payload: { ...payload, projectId } }),
+    });
+    print({ ok: true, result });
+  } else {
+    const productDocumentChange = await readProductDocumentChange(projectId, payload);
+    const result = await request("/api/commands", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "project.add_work",
+        payload: { ...payload, projectId, ...(productDocumentChange ? { productDocumentChange } : {}) },
+      }),
+    });
+    print({ ok: true, result });
+  }
+}
+
+async function readProductDocumentChange(projectId, payload) {
+  if (payload.productDocumentChange === undefined) return undefined;
+  const change = payload.productDocumentChange;
+  if (!change || typeof change !== "object" || Array.isArray(change)) {
+    fail("productDocumentChange must be a JSON object");
+  }
+  const context = await request(`/api/contexts/projects/${encodeURIComponent(projectId)}`);
   const document = await readFile(context.projectDocument, "utf8");
-  const result = await request("/api/commands", {
-    method: "POST",
-    body: JSON.stringify({
-      type: "project.add_work",
-      payload: {
-        projectId,
-        tasks: payload.tasks,
-        productDocumentChange: {
-          decisionSummary: payload.decisionSummary,
-          expectedRevision: payload.expectedRevision,
-          expectedDigest: payload.expectedDigest,
-          documentDigest: `sha256:${createHash("sha256")
-            .update(document)
-            .digest("hex")}`,
-        },
-      },
-    }),
-  });
-  print({ ok: true, result });
+  return {
+    ...change,
+    documentDigest: `sha256:${createHash("sha256").update(document).digest("hex")}`,
+  };
 }
 
 async function request(path, options = {}) {

@@ -32,7 +32,8 @@
     "docs/architecture/realtime-sync.md",
     "docs/architecture/semantic-atlas-maintenance.md",
     "README.md",
-    "README.zh-CN.md"
+    "README.zh-CN.md",
+    "docs/architecture/milestones.md"
   ],
   "engines": {
     "node": ">=24"

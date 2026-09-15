@@ -1,3 +1,10 @@
+import type {
+  Milestone,
+  CreateMilestoneInput,
+  UpdateMilestoneDefinitionInput,
+  MilestoneReport,
+  TaskDiscoveryInput,
+} from "./milestone.js";
 export type ProjectStatus = "active" | "idle" | "cancelled";
 
 export type SchedulingStatus = "running" | "paused";
@@ -129,6 +136,8 @@ export interface Project {
   planning: ProjectPlanningState;
   productFacts: ProductFactsState;
   modelConfig?: ModelRoutingSettings;
+  planningThreadId?: string;
+  planningQuestion?: string;
   currentExecution?: ProjectExecution;
   modelRouting?: ExecutionModelRouting;
   cancellation?: Cancellation;
@@ -146,15 +155,17 @@ export type ProjectReportOutcome =
 export interface ProjectReport {
   projectId: string;
   attemptId: string;
+  reportOpportunityId: string;
   outcome: ProjectReportOutcome;
   summary: string;
   taskIds?: string[];
   question?: string;
 }
 
-export interface ProjectExecution {
+export interface PlanningExecution<TAction extends string, TResult> {
   attemptId: string;
-  action: ProjectAction;
+  action: TAction;
+  reportOpportunityId: string;
   status: ExecutionStatus;
   threadId?: string;
   turnId?: string;
@@ -163,12 +174,15 @@ export interface ProjectExecution {
   modelRouting: ExecutionModelRouting;
   finishedAt?: string;
   turnCompletedAt?: string;
-  result?: ProjectReport;
+  result?: TResult;
   reportReminderCount?: number;
   planningRevision?: number;
+  definitionVersion?: number;
   selectionCapacity?: number;
   leaseExpiresAt?: string;
 }
+
+export type ProjectExecution = PlanningExecution<ProjectAction, ProjectReport>;
 
 export type TaskStatus =
   | "backlog"
@@ -305,6 +319,7 @@ export interface TaskActivity {
 export interface Task {
   id: string;
   projectId: string;
+  milestoneId?: string;
   title: string;
   description: string;
   acceptanceCriteria: string[];
@@ -332,6 +347,7 @@ export interface LifecycleEvent {
   component?: LifecycleEventComponent;
   source?: LifecycleEventSource;
   projectId?: string;
+  milestoneId?: string;
   taskId?: string;
   attemptId?: string;
   threadId?: string;
@@ -354,15 +370,18 @@ export interface CodriveEvent extends LifecycleEvent {
   state?: {
     project?: Project;
     task?: Task;
+    milestone?: Milestone;
   };
 }
 
 export interface ProjectSnapshot {
   project: Project;
   tasks: Task[];
+  milestones: Milestone[];
 }
 
 export interface CreateTaskInput {
+  milestoneId?: string;
   title: string;
   description: string;
   acceptanceCriteria: string[];
@@ -371,6 +390,7 @@ export interface CreateTaskInput {
 }
 
 export interface TaskDefinitionChanges {
+  milestoneId?: string | null;
   title?: string;
   description?: string;
   acceptanceCriteria?: string[];
@@ -390,16 +410,25 @@ export interface CreateProjectInput {
   defaultBranch: string;
   productDocument: string;
   tasks: CreateTaskInput[];
+  milestones?: Omit<CreateMilestoneInput, "projectId">[];
 }
 
 export type CodriveCommand =
+  | { type: "milestone.create"; payload: CreateMilestoneInput }
+  | {
+      type: "milestone.update_definition";
+      payload: UpdateMilestoneDefinitionInput;
+    }
+  | { type: "milestone.report"; payload: MilestoneReport }
+  | { type: "task.report_discovery"; payload: TaskDiscoveryInput }
   | { type: "project.register"; payload: CreateProjectInput }
   | {
       type: "project.add_work";
       payload: {
         projectId: string;
         tasks: CreateTaskInput[];
-        productDocumentChange: ProductDocumentChange;
+        decisionSummary: string;
+        productDocumentChange?: Omit<ProductDocumentChange, "decisionSummary">;
       };
     }
   | {

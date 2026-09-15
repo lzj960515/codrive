@@ -1,3 +1,4 @@
+import { createMilestonePresenter } from "./milestone-presenter.js";
 import { createModelRoutingForm } from "./model-routing-form.js";
 import { createRealtimeWatchCoordinator } from "./board-realtime-client.js";
 import { createExecutionActivityRenderer } from "./execution-activity-renderer.js";
@@ -25,6 +26,7 @@ export function renderBoardClient(accessToken: string): string {
   const reconcileProjects = reconcileProjectOrder.toString();
   const orderTerminalTasks = sortTerminalTasks.toString();
   const modelRoutingForm = createModelRoutingForm.toString();
+  const milestonePresenter = createMilestonePresenter.toString();
   return `<script>
     const TOKEN = ${token};
     const boardLayout = ${layout};
@@ -63,6 +65,7 @@ export function renderBoardClient(accessToken: string): string {
     let archivedSnapshots = [];
     let selectedProjectId = null;
     let selectedTaskId = null;
+    let selectedMilestoneId = "all";
     let systemUpdate = null;
     let updatePoll = null;
     let productDetail = null;
@@ -719,6 +722,25 @@ export function renderBoardClient(accessToken: string): string {
       }
     }
 
+    const milestoneView = (${milestonePresenter})(escapeHtml);
+
+    function bindMilestoneFilters(host) {
+      host.querySelectorAll("[data-milestone-filter]").forEach(button => {
+        button.onclick = () => {
+          selectedMilestoneId = button.dataset.milestoneFilter;
+          const viewState = captureViewState();
+          if (route.type === "project") renderProductDetail();
+          else renderWorkspace();
+          restoreViewState(viewState);
+        };
+      });
+    }
+
+    function currentMilestoneFilter(milestones) {
+      if (!["all", "independent"].includes(selectedMilestoneId) && !milestones.some(item => item.id === selectedMilestoneId)) selectedMilestoneId = "all";
+      return selectedMilestoneId;
+    }
+
     function renderWorkspace() {
       const snapshot = currentSnapshot();
       const host = document.getElementById("project");
@@ -726,7 +748,9 @@ export function renderBoardClient(accessToken: string): string {
         host.innerHTML = '<div class="empty-workspace"><section class="empty-card"><div class="empty-kicker">从这里开始</div><h1>告诉 Codex 你的想法</h1><p>直接用自然语言描述，确认计划后，Codrive 会自动推进任务。</p><div class="starter-example">“用 Codrive 的方式帮我做一个经营太空货运公司的游戏。”</div></section></div>';
         return;
       }
-      const { project, tasks } = snapshot;
+      const { project, tasks, milestones } = snapshot;
+      const taskFilter = currentMilestoneFilter(milestones);
+      const visibleTasks = milestoneView.filterTasks(tasks, taskFilter);
       const active = tasks.filter(task => ["working", "reviewing", "integrating"].includes(task.status)).length;
       const waiting = tasks.filter(task => ["waiting_for_input", "blocked"].includes(task.status)).length;
       const done = tasks.filter(task => task.status === "done").length;
@@ -736,8 +760,9 @@ export function renderBoardClient(accessToken: string): string {
         : '<button class="action-button" data-project-action="pause">暂停</button>'];
       actions.push('<button class="action-button danger" data-project-action="archive">归档</button>');
       actions.unshift('<a class="action-button" href="/projects/'+encodeURIComponent(project.id)+'">产品详情</a>');
+      if (project.planningThreadId) actions.unshift('<a class="action-button" href="codex://threads/'+escapeHtml(project.planningThreadId)+'">调度对话 ↗</a>');
       if (project.executionStatus === "failed" && project.requestedAction) actions.unshift('<button class="action-button" data-project-action="retry">重试失败执行</button>');
-      if (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status)) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
+      if (!terminal && (["waiting_for_task", "needs_input", "blocked"].includes(project.planning.status) || milestones.some(milestone => milestone.statusLabel === "评估失败"))) actions.unshift('<button class="action-button" data-project-action="replan">重新判断任务</button>');
       const attention = project.attention;
       const attentionCopy = attention?.question || attention?.summary;
       const cancellationReason = project.status === "cancelled" && project.cancellation ? project.cancellation.reason : null;
@@ -752,14 +777,15 @@ export function renderBoardClient(accessToken: string): string {
             '<div class="project-identity">'+
               '<button id="mobile-projects" class="mobile-projects" type="button" aria-label="打开项目列表">☰</button>'+
               '<span class="project-status-dot"></span>'+
-              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1><a href="/projects/'+encodeURIComponent(project.id)+'">'+escapeHtml(project.name)+'</a></h1>'+planningBanner+'</div>'+
+              '<div class="project-title"><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span><span>'+escapeHtml(label(project.planning.status))+'</span></div><h1><a href="/projects/'+encodeURIComponent(project.id)+'">'+escapeHtml(project.name)+'</a></h1>'+planningBanner+(terminal ? '' : milestoneView.notices(milestones, project.id))+'</div>'+
             '</div>'+
             '<div class="project-controls"><div class="project-actions">'+actions.join("")+'</div><div id="project-action-status" class="project-action-status" role="status" aria-live="polite"></div></div>'+
           '</div>'+
           '<div class="project-stats"><span><b>'+tasks.length+'</b>总任务</span><span><b>'+active+'</b>进行中</span><span><b>'+waiting+'</b>等待</span><span><b>'+done+'</b>已完成</span></div>'+
         '</header>'+
+        milestoneView.filters(milestones, taskFilter)+
         '<div class="board-wrap"><div class="board">'+columns.map(([key, columnLabel]) => {
-          const cards = tasks.filter(task => bucket(task.status) === key);
+          const cards = visibleTasks.filter(task => bucket(task.status) === key);
           const direction = terminalTaskSort[key] || null;
           const visibleCards = key === "done" || key === "cancelled"
             ? sortTerminalTasks(cards, direction)
@@ -774,6 +800,7 @@ export function renderBoardClient(accessToken: string): string {
           '</div></section>';
         }).join("")+'</div></div>';
 
+      bindMilestoneFilters(host);
       document.getElementById("mobile-projects").onclick = () => document.body.classList.add("nav-open");
       host.querySelectorAll("[data-project-action]").forEach(button => {
         button.onclick = async () => {
@@ -807,11 +834,12 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     function taskCard(task) {
-      const copy = task.status === "cancelled" ? task.cancellation.reason : task.integrationWait?.message || task.description;
+      const copy = task.status === "cancelled" ? task.cancellation.reason : task.milestoneWait?.summary || task.integrationWait?.message || task.description;
       const alert = ["waiting_for_input", "blocked", "waiting_for_integration"].includes(task.displayStatus) ? "task-alert" : "";
       const visibleStatus = ["retry_scheduled", "waiting_for_resume"].includes(task.executionStatus) ? task.executionStatus : task.displayStatus;
       return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.displayStatus)+'">'+
         '<span class="task-card-top"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><span class="task-state '+alert+'"><i></i>'+escapeHtml(label(visibleStatus))+'</span></span>'+
+        (task.milestoneTitle ? '<span class="task-milestone">'+escapeHtml(task.milestoneTitle)+'</span>' : '')+
         '<h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(copy)+'</p>'+
         '<span class="task-card-footer"><span class="task-action">'+escapeHtml(label(task.requestedAction || task.status || "queued"))+'</span><span>'+escapeHtml(formatTime(task.updatedAt))+'</span></span>'+
       '</button>';
@@ -870,7 +898,9 @@ export function renderBoardClient(accessToken: string): string {
     function renderProductDetail() {
       const host = document.getElementById("project");
       if (!productDetail || !projectSettings) return;
-      const { project, productDocument, attention, tasks } = productDetail;
+      const { project, productDocument, attention, tasks, milestones } = productDetail;
+      const taskFilter = currentMilestoneFilter(milestones);
+      const visibleTasks = milestoneView.filterTasks(tasks, taskFilter);
       const { settings: scopedModels, globalModels, availableModels } = projectSettings;
       const inheritsGlobalModels = scopedModels.source === "global";
       const selectedModels = scopedModels.modelConfig || scopedModels.effectiveModels;
@@ -895,11 +925,12 @@ export function renderBoardClient(accessToken: string): string {
         '<div class="page-screen product-screen">'+
           '<header class="page-hero product-hero"><a class="eyebrow-link" href="/">← 返回看板</a><div class="page-kicker">Product dossier</div><div class="product-hero-row"><div><div class="project-meta"><span class="status-pill">'+escapeHtml(label(project.displayStatus))+'</span><span>'+escapeHtml(label(project.scheduling))+'</span></div><h1>产品详情 · '+escapeHtml(project.name)+'</h1></div><div class="product-hero-actions">'+projectControls+'<a class="action-button" href="/settings">运行设置</a></div></div><p>'+escapeHtml(project.repositoryPath)+' · '+escapeHtml(project.defaultBranch)+'</p></header>'+
           '<div class="product-grid">'+
-            '<div class="product-main">'+notice+
+            '<div class="product-main">'+notice+milestoneView.cards(milestones)+
               '<section class="product-panel"><div class="panel-heading"><span>产品文档 · PROJECT.md</span><b>'+escapeHtml(productFactsLabel)+'</b></div><article class="markdown-body">'+renderMarkdown(productDocument)+'</article></section>'+
-              '<section class="product-panel"><div class="panel-heading"><span>任务清单</span><b>'+tasks.length+'</b></div><div class="product-task-list">'+tasks.map(productTask).join("")+'</div></section>'+
+              '<section class="product-panel"><div class="panel-heading"><span>任务清单</span><b>'+visibleTasks.length+'</b></div>'+milestoneView.filters(milestones, taskFilter)+'<div class="product-task-list">'+visibleTasks.map(productTask).join("")+'</div></section>'+
             '</div>'+
             '<aside class="product-rail">'+
+              (project.planningThreadId ? '<a class="planning-conversation-link" href="codex://threads/'+escapeHtml(project.planningThreadId)+'"><span>项目调度</span><b>打开调度对话 ↗</b></a>' : '')+
               '<section class="product-panel compact project-model-panel"><div class="panel-heading"><span>项目模型</span><b>'+escapeHtml(inheritsGlobalModels ? "继承全局" : "项目专用")+'</b></div>'+
                 '<form id="project-model-form" class="project-model-form">'+
                   '<label class="project-model-inherit"><input name="inheritGlobal" type="checkbox" '+(inheritsGlobalModels ? 'checked' : '')+'><span><b>继承全局设置</b><small>'+escapeHtml(modelForm.describe(globalModels, "primary"))+' / '+escapeHtml(modelForm.describe(globalModels, "fallback"))+'</small></span></label>'+
@@ -914,6 +945,7 @@ export function renderBoardClient(accessToken: string): string {
           '</div>'+
         '</div>';
 
+      bindMilestoneFilters(host);
       const projectModelForm = document.getElementById("project-model-form");
       host.querySelector("[data-product-archive]")?.addEventListener("click", event => {
         openProjectArchiveDialog(project, event.currentTarget);
@@ -946,7 +978,7 @@ export function renderBoardClient(accessToken: string): string {
 
     function productTask(task) {
       const executionStatus = task.executionStatus === "retry_scheduled" ? task.executionStatus : task.displayStatus;
-      return '<article class="product-task"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><div><h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(task.description)+'</p></div><span class="status-pill">'+escapeHtml(label(executionStatus))+'</span></article>';
+      return '<article class="product-task"><span class="task-index">任务 '+String(task.order).padStart(2, "0")+'</span><div>'+(task.milestoneTitle ? '<span class="task-milestone">'+escapeHtml(task.milestoneTitle)+'</span>' : '')+'<h3>'+escapeHtml(task.title)+'</h3><p>'+escapeHtml(task.milestoneWait?.summary || task.description)+'</p></div><span class="status-pill">'+escapeHtml(label(executionStatus))+'</span></article>';
     }
 
     function renderMarkdown(markdown) {
@@ -1016,7 +1048,9 @@ export function renderBoardClient(accessToken: string): string {
         '<div class="detail-body">'+
           '<div class="detail-status"><span></span>'+escapeHtml(label(task.displayStatus))+'</div>'+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
+          (task.milestoneTitle ? '<a class="task-milestone" href="/projects/'+encodeURIComponent(task.projectId)+'#milestone-'+encodeURIComponent(task.milestoneId)+'">'+escapeHtml(task.milestoneTitle)+'</a>' : '')+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
+          (task.milestoneWait ? '<section class="milestone-task-wait"><b>等待前置结果</b><p>'+escapeHtml(task.milestoneWait.summary)+'</p>'+(task.milestoneWait.threadId ? '<a href="codex://threads/'+escapeHtml(task.milestoneWait.threadId)+'">打开里程碑对话 ↗</a>' : '')+'</section>' : '')+
           (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+scheduledResume+integrationWait+currentConversation+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+

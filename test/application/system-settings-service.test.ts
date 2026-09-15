@@ -304,7 +304,7 @@ describe("SystemSettingsService", () => {
       .currentExecution!;
     await workflow.submitProjectReport({
       projectId: created.project.id,
-      attemptId: selection.attemptId,
+      attemptId: selection.attemptId, reportOpportunityId: selection.reportOpportunityId,
       outcome: "selected",
       summary: "Start the task",
       taskIds: [created.tasks[0]!.id],

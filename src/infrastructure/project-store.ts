@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import type { Milestone, MilestoneActivity } from "../domain/milestone.js";
 import type {
   CodriveEvent,
   CreateProjectInput,
@@ -26,11 +27,13 @@ import {
 } from "../domain/product-facts.js";
 import { initializeStateDirectory } from "./state-schema.js";
 import {
+  assertCurrentMilestone,
+  isMilestoneActivity,
   assertCurrentEvent,
   assertCurrentProject,
   assertCurrentTask,
   isTaskActivity,
-} from "./state-v4-validation.js";
+} from "./state-validation.js";
 
 export class ProjectStore {
   readonly projectsDirectory: string;
@@ -64,13 +67,32 @@ export class ProjectStore {
       createdAt: now,
       updatedAt: now,
     };
-    const generatedTaskIds = input.tasks.map(() => `task_${randomUUID()}`);
-    const tasks = input.tasks.map<Task>((task, index) => ({
+    const milestones: Milestone[] = (input.milestones ?? []).map((definition) => ({
+      id: `milestone_${randomUUID()}`,
+      projectId,
+      title: definition.title,
+      description: definition.description,
+      acceptanceCriteria: definition.acceptanceCriteria,
+      definitionVersion: 1,
+      status: "active",
+      planning: createPlanningState(now),
+      createdAt: now,
+      updatedAt: now,
+    }));
+    const taskInputs: CreateTaskInput[] = [...input.tasks];
+    for (const [index, definition] of (input.milestones ?? []).entries()) {
+      for (const task of definition.tasks ?? []) {
+        taskInputs.push({ ...task, milestoneId: milestones[index]!.id });
+      }
+    }
+    const generatedTaskIds = taskInputs.map(() => `task_${randomUUID()}`);
+    const tasks = taskInputs.map<Task>((task, index) => ({
       id: generatedTaskIds[index]!,
       projectId,
       title: task.title,
       description: task.description,
       acceptanceCriteria: task.acceptanceCriteria,
+      ...(task.milestoneId ? { milestoneId: task.milestoneId } : {}),
       ...(task.origin ? { origin: task.origin } : {}),
       order: task.order ?? index + 1,
       status: "backlog",
@@ -80,9 +102,11 @@ export class ProjectStore {
     }));
 
     await mkdir(this.tasksDirectory(projectId), { recursive: true });
+    await mkdir(this.milestonesDirectory(projectId), { recursive: true });
     await Promise.all([
       this.atomicWriteJson(this.projectPath(projectId), project),
       writeFile(this.productDocumentPath(projectId), input.productDocument, "utf8"),
+      ...milestones.map((milestone) => this.saveMilestone(projectId, milestone)),
       ...tasks.map((task) =>
         this.atomicWriteJson(this.taskPath(projectId, task.id), task),
       ),
@@ -112,7 +136,17 @@ export class ProjectStore {
       });
     }
 
-    return { project, tasks };
+    for (const milestone of milestones) {
+      await this.appendEvent({
+        schemaVersion: 1,
+        eventId: randomUUID(),
+        type: "milestone.created",
+        projectId,
+        milestoneId: milestone.id,
+        occurredAt: now,
+      });
+    }
+    return { project, tasks, milestones };
   }
 
   async listProjects(): Promise<ProjectSnapshot[]> {
@@ -142,7 +176,8 @@ export class ProjectStore {
           ),
       );
       tasks.sort((left, right) => left.order - right.order);
-      return { project, tasks };
+      const milestones = await this.listMilestones(projectId);
+      return { project, tasks, milestones };
     } catch (error) {
       if (isMissingFile(error)) {
         return null;
@@ -223,6 +258,7 @@ export class ProjectStore {
       title: input.title,
       description: input.description,
       acceptanceCriteria: input.acceptanceCriteria,
+      ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}),
       ...(input.origin ? { origin: input.origin } : {}),
       order: input.order ?? firstOrder + index,
       status: "backlog",
@@ -242,6 +278,74 @@ export class ProjectStore {
       });
     }
     return tasks;
+  }
+
+  async saveMilestone(projectId: string, milestone: Milestone): Promise<void> {
+    if (milestone.projectId !== projectId) {
+      throw new Error("Milestone belongs to a different project");
+    }
+    await this.atomicWriteJson(
+      this.milestonePath(projectId, milestone.id),
+      assertCurrentMilestone(milestone),
+    );
+  }
+
+  async findMilestone(milestoneId: string): Promise<{ project: Project; milestone: Milestone } | null> {
+    for (const snapshot of await this.listProjects()) {
+      const milestone = snapshot.milestones.find(({ id }) => id === milestoneId);
+      if (milestone) return { project: snapshot.project, milestone };
+    }
+    return null;
+  }
+
+  async findMilestoneByTurnId(turnId: string): Promise<{ project: Project; milestone: Milestone } | null> {
+    for (const snapshot of await this.listProjects()) {
+      const milestone = snapshot.milestones.find(
+        ({ currentExecution }) => currentExecution?.turnId === turnId,
+      );
+      if (milestone) return { project: snapshot.project, milestone };
+    }
+    return null;
+  }
+
+  async findMilestoneByThreadId(threadId: string): Promise<{ project: Project; milestone: Milestone } | null> {
+    for (const snapshot of await this.listProjects()) {
+      const milestone = snapshot.milestones.find((candidate) => candidate.threadId === threadId);
+      if (milestone) return { project: snapshot.project, milestone };
+    }
+    return null;
+  }
+
+  async listMilestoneActivities(projectId: string, milestoneId?: string): Promise<MilestoneActivity[]> {
+    const events = await this.readEvents(projectId);
+    return events.flatMap((event) => {
+      const activity = event.data?.milestoneActivity;
+      if (!isMilestoneActivity(activity)) return [];
+      return !milestoneId || activity.milestoneId === milestoneId ? [activity] : [];
+    });
+  }
+
+  private async listMilestones(projectId: string): Promise<Milestone[]> {
+    const directory = this.milestonesDirectory(projectId);
+    let files: string[];
+    try {
+      files = await readdir(directory);
+    } catch (error) {
+      if (isMissingFile(error)) return [];
+      throw error;
+    }
+    const milestones: Milestone[] = [];
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const milestone = assertCurrentMilestone(
+        await this.readJson<Milestone>(join(directory, file)),
+      );
+      if (milestone.projectId !== projectId) {
+        throw new Error("Milestone belongs to a different project");
+      }
+      milestones.push(milestone);
+    }
+    return milestones;
   }
 
   async readProductDocument(projectId: string): Promise<string> {
@@ -330,6 +434,14 @@ export class ProjectStore {
 
   taskPath(projectId: string, taskId: string): string {
     return join(this.tasksDirectory(projectId), `${taskId}.json`);
+  }
+
+  milestonePath(projectId: string, milestoneId: string): string {
+    return join(this.milestonesDirectory(projectId), `${milestoneId}.json`);
+  }
+
+  private milestonesDirectory(projectId: string): string {
+    return join(this.projectDirectory(projectId), "milestones");
   }
 
   private projectPath(projectId: string): string {
@@ -429,11 +541,16 @@ export class ProjectStore {
 
     let project: Project | undefined;
     const tasks = new Map<string, Task>();
+    const milestones = new Map<string, Milestone>();
     for (const line of contents.split("\n")) {
       if (!line.trim()) continue;
       const event = JSON.parse(line) as CodriveEvent;
       assertCurrentEvent(event);
       if (event.state?.project) project = event.state.project;
+      if (event.state?.milestone) {
+        const milestone = assertCurrentMilestone(event.state.milestone);
+        milestones.set(milestone.id, milestone);
+      }
       if (event.state?.task) {
         const task = assertCurrentTask(event.state.task);
         tasks.set(task.id, task);
@@ -446,6 +563,12 @@ export class ProjectStore {
         assertCurrentProject(project),
       );
     }
+    for (const milestone of milestones.values()) {
+      const path = this.milestonePath(projectId, milestone.id);
+      if (!(await this.hasNewerSnapshot(path, milestone))) {
+        await this.atomicWriteJson(path, milestone);
+      }
+    }
     for (const task of tasks.values()) {
       const path = this.taskPath(projectId, task.id);
       if (!(await this.hasNewerSnapshot(path, task))) {
@@ -456,10 +579,10 @@ export class ProjectStore {
 
   private async hasNewerSnapshot(
     path: string,
-    eventSnapshot: Project | Task,
+    eventSnapshot: Project | Task | Milestone,
   ): Promise<boolean> {
     try {
-      const snapshot = await this.readJson<Project | Task>(path);
+      const snapshot = await this.readJson<Project | Task | Milestone>(path);
       return snapshot.updatedAt >= eventSnapshot.updatedAt;
     } catch (error) {
       if (isMissingFile(error) || error instanceof SyntaxError) return false;
@@ -478,6 +601,15 @@ export class ProjectStore {
       try {
         state.task = await this.readJson<Task>(
           this.taskPath(event.projectId, event.taskId),
+        );
+      } catch (error) {
+        if (!isMissingFile(error)) throw error;
+      }
+    }
+    if (event.milestoneId) {
+      try {
+        state.milestone = await this.readJson<Milestone>(
+          this.milestonePath(event.projectId, event.milestoneId),
         );
       } catch (error) {
         if (!isMissingFile(error)) throw error;

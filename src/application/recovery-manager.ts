@@ -1,8 +1,6 @@
+import type { Milestone } from "../domain/milestone.js";
 import type { WorkflowEngine } from "./workflow-engine.js";
-import type {
-  CodexTurnSnapshot,
-  CodexTurnStatus,
-} from "./codex-gateway.js";
+import type { CodexTurnSnapshot, CodexTurnStatus } from "./codex-gateway.js";
 import type {
   ExecutionActivityBridge,
   ExecutionSilenceClaim,
@@ -28,7 +26,9 @@ interface SilentTurnInspection {
 }
 
 export interface NotificationSource {
-  onNotification(listener: (notification: JsonRpcNotification) => void): () => void;
+  onNotification(
+    listener: (notification: JsonRpcNotification) => void,
+  ): () => void;
   readTurnStatus(
     threadId: string,
     turnId: string,
@@ -72,6 +72,7 @@ const workflowNotificationMethods = new Set([
   "transport/disconnected",
   "thread/status/changed",
   "turn/completed",
+  "turn/started",
 ]);
 const maximumTimerDelayMs = 2_147_483_647;
 const defaultScanIntervalMs = 60_000;
@@ -110,6 +111,7 @@ export class RecoveryManager {
     });
     const startedAt = this.now();
     await this.options.activityBridge?.initialize(startedAt);
+    await this.workflow.recoverAcceptedMilestonePlans();
     await this.recoverInterruptedExecutions(
       this.options.activityBridge !== undefined,
     );
@@ -166,6 +168,18 @@ export class RecoveryManager {
               );
               return;
             }
+            if (notification.method === "turn/started") {
+              const params = notification.params as {
+                threadId?: string;
+                turn?: { id?: string };
+              };
+              if (params.threadId && params.turn?.id)
+                await this.workflow.observePlanningTurn(
+                  params.threadId,
+                  params.turn.id,
+                );
+              return;
+            }
             if (notification.method === "thread/status/changed") {
               const params = notification.params as {
                 threadId?: string;
@@ -182,7 +196,7 @@ export class RecoveryManager {
             }
             if (notification.method !== "turn/completed") return;
             await this.handleCompletedTurn(notification);
-          }
+          },
         );
       },
     );
@@ -199,7 +213,11 @@ export class RecoveryManager {
           type: "recovery.scan_started",
           result: "startup_or_reconnect",
         });
-        const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
+        const activeStatuses = new Set([
+          "pending",
+          "running",
+          "awaiting_report",
+        ]);
         for (const snapshot of await this.store.listProjects()) {
           if (!projectCanSchedule(snapshot.project)) {
             continue;
@@ -210,6 +228,13 @@ export class RecoveryManager {
               snapshot.project.id,
               projectExecution,
             );
+          }
+          for (const milestone of snapshot.milestones) {
+            if (
+              milestone.currentExecution &&
+              activeStatuses.has(milestone.currentExecution.status)
+            )
+              await this.recoverMilestone(milestone);
           }
           for (const task of snapshot.tasks) {
             const execution = task.currentExecution;
@@ -229,7 +254,11 @@ export class RecoveryManager {
             ) {
               continue;
             }
-            await this.recoverInterruptedTask(snapshot.project.id, task.id, execution);
+            await this.recoverInterruptedTask(
+              snapshot.project.id,
+              task.id,
+              execution,
+            );
           }
         }
         await this.workflow.lifecycle.record({
@@ -245,7 +274,11 @@ export class RecoveryManager {
     await this.workflow.lifecycle.run(
       { source: "recovery", component: "recovery", correlationId },
       async () => {
-        const activeStatuses = new Set(["pending", "running", "awaiting_report"]);
+        const activeStatuses = new Set([
+          "pending",
+          "running",
+          "awaiting_report",
+        ]);
         for (const snapshot of await this.store.listProjects()) {
           if (!projectCanSchedule(snapshot.project)) {
             continue;
@@ -292,6 +325,16 @@ export class RecoveryManager {
     await this.recoverDeferredTaskTurns();
     await this.recoverSilentTaskExecutions(now);
     await this.recoverExpiredExecutions(now);
+    for (const snapshot of await this.store.listProjects()) {
+      if (!projectCanSchedule(snapshot.project)) continue;
+      for (const milestone of snapshot.milestones)
+        if (
+          ["pending", "running", "awaiting_report"].includes(
+            milestone.currentExecution?.status ?? "",
+          )
+        )
+          await this.recoverMilestone(milestone);
+    }
     await this.workflow.lifecycle.run(
       {
         source: "recovery",
@@ -324,12 +367,13 @@ export class RecoveryManager {
     const snapshots = await this.store.listProjects();
     if (generation !== this.retryScheduleGeneration) return;
     const nextRetryAt = Math.min(
-      ...snapshots.flatMap(({ project, tasks }) => {
+      ...snapshots.flatMap(({ project, tasks, milestones }) => {
         if (!projectCanSchedule(project)) {
           return [];
         }
         const modelRetries = [
           project.currentExecution,
+          ...milestones.map((milestone) => milestone.currentExecution),
           ...tasks.map((task) => task.currentExecution),
         ]
           .filter((execution) => execution?.status === "retry_scheduled")
@@ -449,24 +493,46 @@ export class RecoveryManager {
                 turnId,
               )
             : params.turn?.status === "interrupted"
-              ? this.workflow.resumeTaskAfterInterruption(
-                  taskRecoveryTarget(found.project.id, found.task.id, taskExecution),
-                )
-            : this.workflow.failTurn(
-                found.task.id,
-                taskExecution.attemptId,
-                {
-                  turnId,
-                  message:
-                    params.turn?.error?.message ??
-                    `Turn ${params.turn?.status ?? "failed"}`,
-                  codexErrorInfo: params.turn?.error?.codexErrorInfo,
-                },
-              ),
+            ? this.workflow.resumeTaskAfterInterruption(
+                taskRecoveryTarget(
+                  found.project.id,
+                  found.task.id,
+                  taskExecution,
+                ),
+              )
+            : this.workflow.failTurn(found.task.id, taskExecution.attemptId, {
+                turnId,
+                message:
+                  params.turn?.error?.message ??
+                  `Turn ${params.turn?.status ?? "failed"}`,
+                codexErrorInfo: params.turn?.error?.codexErrorInfo,
+              }),
       );
       return;
     }
 
+    const milestoneOwner = await this.store.findMilestoneByTurnId(turnId);
+    if (milestoneOwner?.milestone.currentExecution) {
+      const { milestone } = milestoneOwner;
+      if (params.turn?.status === "completed")
+        await this.workflow.completeMilestoneTurn(
+          milestone.id,
+          milestone.currentExecution!.attemptId,
+          turnId,
+        );
+      else
+        await this.workflow.failMilestoneTurn(
+          milestone.id,
+          milestone.currentExecution!.attemptId,
+          {
+            turnId,
+            message:
+              params.turn?.error?.message ?? `Turn ${params.turn?.status}`,
+            codexErrorInfo: params.turn?.error?.codexErrorInfo,
+          },
+        );
+      return;
+    }
     const project = await this.store.findProjectByTurnId(turnId);
     const projectExecution = project?.currentExecution;
     if (project && projectExecution) {
@@ -518,11 +584,40 @@ export class RecoveryManager {
     });
   }
 
+  private async recoverMilestone(milestone: Milestone): Promise<void> {
+    const execution = milestone.currentExecution!;
+    if (execution.status === "pending" && !execution.turnId) {
+      await this.workflow.recoverMilestoneExecution(
+        milestone.id,
+        execution.attemptId,
+        undefined,
+        "recover",
+      );
+      return;
+    }
+    const observation = await this.readStatus(
+      execution.threadId,
+      execution.turnId,
+    );
+    const decision = recoveryDecision(observation);
+    if (decision !== "defer")
+      await this.workflow.recoverMilestoneExecution(
+        milestone.id,
+        execution.attemptId,
+        execution.turnId,
+        decision,
+      );
+  }
+
   private async recoverInterruptedProject(
     projectId: string,
     execution: ProjectExecution,
   ): Promise<void> {
-    if (execution.status === "pending" || !execution.threadId || !execution.turnId) {
+    if (
+      execution.status === "pending" ||
+      !execution.threadId ||
+      !execution.turnId
+    ) {
       const observed = await this.recordExecutionObservation({
         projectId,
         execution,
@@ -530,23 +625,36 @@ export class RecoveryManager {
         result: execution.status,
       });
       await this.workflow.lifecycle.run(
-        { source: "recovery", component: "recovery", causationId: observed.eventId },
-        () => this.workflow.recoverProjectExecution(projectId, execution.attemptId),
+        {
+          source: "recovery",
+          component: "recovery",
+          causationId: observed.eventId,
+        },
+        () =>
+          this.workflow.recoverProjectExecution(projectId, execution.attemptId),
       );
       return;
     }
 
-    const observation = await this.readStatus(execution.threadId, execution.turnId);
+    const observation = await this.readStatus(
+      execution.threadId,
+      execution.turnId,
+    );
     const decision = recoveryDecision(observation);
     const observed = await this.recordExecutionObservation({
       projectId,
       execution,
       decision,
-      result: observation.status ?? (observation.error ? "read_failed" : "missing"),
+      result:
+        observation.status ?? (observation.error ? "read_failed" : "missing"),
       ...(observation.error ? { reason: observation.error } : {}),
     });
     await this.workflow.lifecycle.run(
-      { source: "recovery", component: "recovery", causationId: observed.eventId },
+      {
+        source: "recovery",
+        component: "recovery",
+        causationId: observed.eventId,
+      },
       async () => {
         if (decision === "complete") {
           await this.workflow.completeProjectTurn(
@@ -580,24 +688,36 @@ export class RecoveryManager {
         result: execution.status,
       });
       await this.workflow.lifecycle.run(
-        { source: "recovery", component: "recovery", causationId: observed.eventId },
+        {
+          source: "recovery",
+          component: "recovery",
+          causationId: observed.eventId,
+        },
         () => this.workflow.recoverTask(taskId, execution.attemptId),
       );
       return;
     }
 
-    const observation = await this.readStatus(execution.threadId, execution.turnId);
+    const observation = await this.readStatus(
+      execution.threadId,
+      execution.turnId,
+    );
     const decision = recoveryDecision(observation);
     const observed = await this.recordExecutionObservation({
       projectId,
       taskId,
       execution,
       decision,
-      result: observation.status ?? (observation.error ? "read_failed" : "missing"),
+      result:
+        observation.status ?? (observation.error ? "read_failed" : "missing"),
       ...(observation.error ? { reason: observation.error } : {}),
     });
     await this.workflow.lifecycle.run(
-      { source: "recovery", component: "recovery", causationId: observed.eventId },
+      {
+        source: "recovery",
+        component: "recovery",
+        causationId: observed.eventId,
+      },
       async () => {
         if (decision === "complete") {
           await this.workflow.completeTurn(
@@ -686,7 +806,11 @@ export class RecoveryManager {
         snapshot,
       );
       await this.workflow.lifecycle.run(
-        { source: "recovery", component: "recovery", causationId: recorded.eventId },
+        {
+          source: "recovery",
+          component: "recovery",
+          causationId: recorded.eventId,
+        },
         () => this.applySilentTurnDecision(claim, observation),
       );
     } finally {
@@ -778,7 +902,8 @@ function isDeferredTaskTurn(execution: TaskExecution): boolean {
   return (
     execution.status === "pending" ||
     (execution.status === "awaiting_report" &&
-      (execution.turnCompletedAt !== undefined || execution.turnId === undefined))
+      (execution.turnCompletedAt !== undefined ||
+        execution.turnId === undefined))
   );
 }
 
@@ -800,7 +925,11 @@ function inspectSilentTurn(
     return { decision: "defer", result: "read_failed", reason: readError };
   }
   if (!snapshot?.turn) {
-    return { decision: "defer", result: "missing", reason: "exact_turn_missing" };
+    return {
+      decision: "defer",
+      result: "missing",
+      reason: "exact_turn_missing",
+    };
   }
   const turn = snapshot.turn;
   const coherentRunning =

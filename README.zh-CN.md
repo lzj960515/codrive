@@ -43,7 +43,7 @@ codrive setup
 codrive
 ```
 
-`setup` 会把空状态目录初始化为 schema v4，并安装与当前包精确一致的托管 Skills 和 Hook。随后 Codrive 会输出本地看板地址和日志位置。`setup` 完成后：
+`setup` 会把空状态目录初始化为 schema v5，并安装与当前包精确一致的托管 Skills 和 Hook。随后 Codrive 会输出本地看板地址和日志位置。`setup` 完成后：
 
 1. 在 Codex 中运行 `/hooks`，审核四条 Codrive activity Hook 定义，并信任它们的当前 hash。
 2. 用 Codex App 打开目标项目目录。
@@ -61,7 +61,7 @@ Codrive 常驻运行时会约每小时检查一次 npm latest 稳定版。已经
 codrive upgrade
 ```
 
-普通启动不会执行历史状态迁移。它只会为空状态目录创建 schema v4，然后在启动 App Server 或 `RecoveryManager` 前，要求状态已经是当前 v4，并且托管资源 marker 与当前包版本精确一致。因此手工替换 npm 包或资源同步失败后，服务会继续保持停止；已有安装使用 `codrive upgrade` 恢复，新安装或状态已经是当前版本时使用 `codrive setup` 初始化或修复资源。
+服务在启动 App Server 或 `RecoveryManager` 前，持有状态锁并迁移受支持的旧本地数据，备份和校验完成后才进入当前 schema v5。正常运行只接受新模型及与包版本精确一致的托管资源。已有安装通过 `codrive upgrade` 完成包升级与资源同步；`codrive setup` 用于初始化或修复资源。转换或资源校验失败时，正常执行保持停止。
 
 Hook 的审核和信任由 Codex 管理。首次 setup 后，或新版本改变 Hook 定义后，请在 Codex 中运行 `/hooks`，审核并信任新的 hash。Codex 没有提供让 Codrive 代替用户持久化单条 Hook 信任的公共 API；进程级绕过还会同时信任无关的用户和项目 Hook，因此 Codrive 不使用它。更新窗口会持续提示，直到四条 Codrive 定义都已启用并信任；`codrive doctor` 会分别报告静态安装状态和运行时信任状态。
 
@@ -92,11 +92,17 @@ Codrive 持久化生命周期状态并执行调度边界，Codex 负责需要判
 
 任务状态分为三层：看板展示的业务状态、下一步 `work | review | integrate` 动作，以及 attempt 的运行状态。每份完成的 work 结果拥有一条不可变活动和可选的 `candidateCommit`；Review 与合入绑定这条准确活动，不再从旧历史中寻找最近候选。代码已经合入和整个任务完成是两个判断，所以同一任务可以在合入后继续发布、迁移或验证。
 
-持久化状态 schema v4 保存这套模型。只有停服升级命令执行历史迁移：Codrive 会备份 v3，在临时目录迁移任务快照与恢复事件，重建 work 活动引用，校验计数和开放执行身份，再替换 projects 与 marker；迁移失败时 v3 仍然是权威数据。schema v2 安装会先完成原有 v3 升级，再进入同一套 v4 迁移。普通启动只校验当前状态和托管资源 marker，全部满足后才恢复执行。完整契约见 [产品事实生命周期](./docs/architecture/product-facts.md)。
+持久化 schema v5 保留任务交付绑定，并加入里程碑和持久规划会话。旧任务保留身份、原对话和独立归属；旧临时规划在启动前转换为待处理的新规划，由可见持久会话继续。正常运行使用单一当前模型。完整契约见 [产品事实生命周期](./docs/architecture/product-facts.md)。
 
 Review finding 表达受支持产品与运维路径中的真实交付阻塞，不是无条件执行指令。工作对话会修复成立的问题，或为不适用的 finding 记录反证；同一个独立 Review 对话随后结合新记录的 work 结果重新判断。
 
 等待与恢复也属于同一套流程。任务可以等待到指定时间而不占用项目容量；模型容量不足时可以切换 fallback；经过权威确认的中断工作可以从持久化的原对话和执行状态继续。恢复前会重新核对精确 action、attempt、thread、turn、项目容量和合入资格，并且只启动一个替代 turn。任务时间线只记录真实恢复等生命周期变化，把需要用户处理的决定或失败置顶展示。
+
+## 里程碑目标
+
+里程碑定义一个阶段的目标、范围和可核实的验收标准。它可以先没有任务，由负责人调查并形成初始计划。执行中的发现和任务报告持续修正计划；已经授权的必要漏项自主补齐，新的业务取舍才交给你决定。等待决定时，无关工作继续。
+
+新增任务不再要求修改 `PROJECT.md`：这份文档保持长期产品契约，阶段目标与任务计划各自维护。全部任务结束后会触发最终评估；缺少实际交付或运行证据时，负责人继续组织普通验证任务，证据齐全才完成里程碑。规划和执行会话始终在当前项目中可见。完整流程见 [里程碑与持续规划](./docs/architecture/milestones.md)。
 
 ## Codex 任务关系
 
@@ -105,7 +111,8 @@ Review finding 表达受支持产品与运维路径中的真实交付阻塞，�
 | 工作 | 每个看板任务拥有一个长期 Codex 任务，承载代码、发布、迁移、验证和 Review feedback |
 | 合入 | 继续原工作任务，并判断整个任务是否完成 |
 | 审查 | 每个看板任务拥有一个带 `[review]` 前缀、长期独立的 Review 任务，并加载启动时检测到的 `$code-review` |
-| 任务选择 | 使用临时任务，不占据最近任务列表 |
+| 里程碑评估 | 每里程碑复用一个可见的 `[里程碑]` 持久任务 |
+| 任务选择 | 每项目复用一个可见的 `[调度]` 持久任务 |
 
 任务详情会把每次执行和活动链接到来源对话，并在同一条时间线中展示阻塞、计划继续、请求决定、测试证据、审查发现和 Git 结果。
 
@@ -113,9 +120,9 @@ Review finding 表达受支持产品与运维路径中的真实交付阻塞，�
 
 | Skill | 用途 |
 | --- | --- |
-| `$codrive-forge` | 把产品想法整理为经过确认的计划和初始任务 |
-| `$codrive-task` | 选择项目工作，或执行任务当前阶段 |
-| `$codrive-work` | 增加已确认工作，或调整尚未开始的既有任务 |
+| `$codrive-forge` | 注册产品契约与已确认里程碑或初始任务 |
+| `$codrive-task` | 选择项目工作、评估里程碑，或执行任务当前阶段 |
+| `$codrive-work` | 追加已授权目标和任务，或调整未开始工作 |
 | `$codrive-control` | 查看进度、修改 backlog 任务、记录产品文档变化并控制执行 |
 
 Skills 会从 Codrive 读取实时上下文，因此任务消息保持简短，不同对话中的产品状态也能保持一致。`$codrive-task` 读取当前任务定义、验收标准、阶段、活动历史和仓库规则后，会加载与该阶段实际工作匹配的其他可用 Skill。
@@ -129,7 +136,7 @@ codrive stop                    停止 Codrive
 codrive restart                 重启 Codrive
 codrive upgrade                 停服迁移本地状态并安装最新版本
 codrive status                  查看本地服务状态
-codrive setup                   初始化全新 v4 状态并安装或修复托管资源
+codrive setup                   初始化全新 v5 状态并安装或修复托管资源
 codrive doctor                  检查运行环境、Codex、登录和托管资源
 codrive import <project.json>   导入产品
 codrive serve                   在前台运行

@@ -1,4 +1,4 @@
-import type { ProjectExecutor } from "../../src/application/project-executor.js";
+import type { PlanningExecutor, PlanningRequest } from "../../src/application/planning-executor.js";
 import type { RepositoryPathResolver } from "../../src/application/repository-path-resolver.js";
 import type {
   DispatchRequest,
@@ -126,30 +126,32 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
   }
 }
 
-export class RecordingProjectExecutor implements ProjectExecutor {
-  readonly opened: Project[] = [];
-  readonly started: Array<{ project: Project; threadId: string }> = [];
-  readonly reminders: Array<{ project: Project; threadId: string }> = [];
-  readonly interrupted: Project[] = [];
+export class RecordingProjectExecutor implements PlanningExecutor {
+  readonly opened: PlanningRequest[] = [];
+  readonly started: Array<PlanningRequest & { threadId: string }> = [];
+  readonly reminders: Array<PlanningRequest & { threadId: string }> = [];
+  readonly interrupted: PlanningRequest[] = [];
   beforeStartTurn?: (project: Project, threadId: string) => Promise<void>;
 
-  async openThread(project: Project): Promise<string> {
-    this.opened.push(project);
+  async openThread(request: PlanningRequest): Promise<string> {
+    this.opened.push(request);
+    const existing = request.milestone ? request.milestone.threadId : request.project.planningThreadId;
+    if (existing) return existing;
     return `project_thread_${this.opened.length}`;
   }
 
-  async startTurn(project: Project, threadId: string): Promise<string> {
-    await this.beforeStartTurn?.(project, threadId);
-    this.started.push({ project, threadId });
+  async startTurn(request: PlanningRequest, threadId: string): Promise<string> {
+    await this.beforeStartTurn?.(request.project, threadId);
+    this.started.push({ ...request, threadId });
     return `project_turn_${this.started.length}`;
   }
 
-  async requestReport(project: Project, threadId: string): Promise<string> {
-    this.reminders.push({ project, threadId });
+  async requestReport(request: PlanningRequest, threadId: string): Promise<string> {
+    this.reminders.push({ ...request, threadId });
     return `project_reminder_${this.reminders.length}`;
   }
 
-  async interrupt(project: Project): Promise<void> {
-    this.interrupted.push(project);
+  async interrupt(request: PlanningRequest): Promise<void> {
+    this.interrupted.push(request);
   }
 }
