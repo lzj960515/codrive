@@ -1,41 +1,51 @@
 <div align="center">
   <h1>Codrive</h1>
-  <p><strong>把产品工作，持续变成你可以看见的 Codex 任务。</strong></p>
-  <p>在本机自动推进产品规划、通用工作、独立审查和带完成判断的合入。</p>
+  <p><strong>交代目标，让 Codex 持续推进。</strong></p>
+  <p>从规划、执行到独立审查和验收，在本地管理你的 AI 开发工作。</p>
 
   <p>
-    <a href="https://www.npmjs.com/package/codrive"><img alt="npm 版本" src="https://img.shields.io/npm/v/codrive?style=flat-square&color=cb3837"></a>
-    <a href="https://github.com/lzj960515/codrive/actions/workflows/ci.yml"><img alt="持续集成" src="https://img.shields.io/github/actions/workflow/status/lzj960515/codrive/ci.yml?branch=main&style=flat-square&label=ci"></a>
-    <a href="https://www.npmjs.com/package/codrive"><img alt="Node.js 版本" src="https://img.shields.io/node/v/codrive?style=flat-square&color=43853d"></a>
-    <a href="./LICENSE"><img alt="MIT 许可证" src="https://img.shields.io/github/license/lzj960515/codrive?style=flat-square&color=2d5b46"></a>
+    <a href="https://www.npmjs.com/package/codrive"><img alt="npm version" src="https://img.shields.io/npm/v/codrive?style=flat-square&color=cb3837"></a>
+    <a href="https://github.com/lzj960515/codrive/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/lzj960515/codrive/ci.yml?branch=main&style=flat-square&label=ci"></a>
+    <a href="https://www.npmjs.com/package/codrive"><img alt="Node.js version" src="https://img.shields.io/node/v/codrive?style=flat-square&color=43853d"></a>
+    <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/lzj960515/codrive?style=flat-square&color=2d5b46"></a>
   </p>
 
   <p><a href="./README.md">English</a> · <strong>简体中文</strong></p>
 </div>
 
+## 把目标交给 AI，把精力留给决定
+
+和 AI 一起开发，常常需要你不断分配下一步、追问进度、检查结果。事情一多，每个对话都要盯着。
+
+Codrive 为 Codex App 提供持续推进工作的流程：你确认目标和边界，Codex 拆解任务、开展工作、独立审查，并根据执行中的发现调整计划。需要新的业务取舍时，它会提出问题；你可以在看板查看进度，也可以回到对应的 Codex 对话继续讨论。
+
+**本地运行，无需单独部署数据库、Redis 或 Docker。** Codrive 管理任务与调度，Codex 负责理解项目和完成工作。
+
 <p align="center">
-  <img src="https://raw.githubusercontent.com/lzj960515/codrive/main/docs/images/codrive-board.jpg" alt="包含示例项目和任务详情的 Codrive 本地产品看板">
+  <img src="https://raw.githubusercontent.com/lzj960515/codrive/main/docs/images/codrive-board.jpg" alt="Codrive 看板示例：项目、任务状态与任务详情">
 </p>
 
-## Codrive 是什么？
+## 从一个目标，到经过验收的结果
 
-Codrive 是一个轻量的本机服务，用来连接 Codex App 任务、产品看板、文件系统状态和可复用 Skills。你在 Codex App 中描述产品目标并确认计划后，Codrive 会持续推动每个任务完成通用工作、独立审查和合入，直到整个任务真正结束。
+| 你关心的事 | Codrive 如何推进 |
+| --- | --- |
+| 想做一件大事，还不知道有哪些任务 | 建立里程碑，写清目标、范围和验收标准，由 Codex 调查并形成初始任务。小改动也可以直接创建独立任务。 |
+| 做到一半，发现计划漏了东西 | 根据新发现重新评估，在已确认目标内补充调查、追加任务或调整尚未开始的工作。 |
+| 有些问题需要你拍板 | 提出具体问题，限制受影响的工作；无关任务和必要调查仍可继续。 |
+| AI 说做完了，结果可靠吗 | 每份工作结果进入独立审查。需要返工时回到原任务，修改后再次审查。 |
+| 代码合入了，事情却还没结束 | 根据任务目标继续发布、迁移或验证。里程碑还会逐项核对验收证据，缺少交付就补任务。 |
 
-Codex 仍然负责理解仓库、编写和审查代码、运行测试、解决冲突与做出产品判断。Codrive 为这些工作提供持久流程：任务状态、隔离对话、调度、恢复和清晰的活动历史。
+### 计划可以变化，目标始终清楚
 
-> **一个命令，所有状态留在本机，不需要基础设施。** Codrive 不依赖 Docker、PostgreSQL、Redis 或云端服务。
+例如，你想完成一次 Social 迁移。可以先建立里程碑，让 Codex 调查现有调用方、拆分迁移任务。执行中发现遗漏的调用方，就补充迁移工作；如果涉及改变业务行为，则先向你说明影响并请求决定。
 
-## 为什么使用 Codrive？
+所有任务结束后，Codex 还会检查迁移是否满足验收标准。缺少实际运行证据，就继续安排验证，而不是仅凭任务数量判定完成。
 
-- **工作过程可见。** 每次工作和审查执行都会出现在 Codex App 中。
-- **上下文保持专注。** 工作和 Review 使用独立对话；同一任务的 Review 对话会跨审查轮次延续。
-- **交付持续推进。** Review 通过后进入合入；合入会明确结束整个任务、开启下一轮工作，或把新候选送回 Review。
-- **规划随事实变化。** Codex 根据当前产品与仓库事实选择工作，不依赖固定依赖图。
-- **数据留在本机。** 产品文档、任务状态、执行历史和访问凭据都由用户持有。
+项目资料中的 `PROJECT.md` 保存长期产品事实与规则；里程碑描述阶段目标，任务描述具体交付。**日常追加任务不需要改写产品契约。**
 
-## 快速开始
+## 开始使用
 
-你需要 Node.js 24 或更高版本、Git，以及 `~/.codex` 中可用的 Codex 登录状态。
+准备好 **Node.js 24 或更高版本、Git、Codex App**，并完成 Codex 登录（默认使用 `~/.codex` 中的登录信息）。
 
 ```bash
 npm install --global codrive@latest
@@ -43,115 +53,79 @@ codrive setup
 codrive
 ```
 
-`setup` 会把空状态目录初始化为 schema v5，并安装与当前包精确一致的托管 Skills 和 Hook。随后 Codrive 会输出本地看板地址和日志位置。`setup` 完成后：
+`setup` 安装随包提供的 Skills 和活动 Hook；启动后，终端会显示本地看板地址。
 
-1. 在 Codex 中运行 `/hooks`，审核四条 Codrive activity Hook 定义，并信任它们的当前 hash。
+1. 在 Codex 中运行 `/hooks`，审核并信任四条 Codrive 活动 Hook 定义。
 2. 用 Codex App 打开目标项目目录。
-3. 描述产品工作，并让 Codex 使用 Codrive 推进。
+3. 描述你要做的事情，让 Codex 使用 Codrive。确认计划后开始执行。
+
+例如：
 
 ```text
-用 Codrive 的方式给这个项目增加排行榜功能，我确认计划后开始开发。
+用 Codrive 给这个项目增加排行榜功能。
+先和我确认范围与验收标准，再建立里程碑并开始推进。
 ```
 
-Codrive 常驻运行时会约每小时检查一次 npm latest 稳定版。已经打开的看板无需刷新就能收到检查结果；发现新版本后会显示更新提示。点击**重新检查**可以立即刷新状态，并从本次检查重新开始一小时周期。
+后续工作也可以直接在 Codex 中说明：
 
-更新窗口会展示当前版本、最新稳定版、最后检查时间，并分别显示四个托管 Skills 和一个托管 Codex Hook 的状态。自动检查只更新这些状态，安装仍需用户明确确认。确认后，更新进程会安装指定版本，停止 Codrive 及其 App Server，迁移并校验本地状态，在服务停止期间同步五个随包资源，再启动新服务并验证运行版本。对应的终端命令是：
-
-```bash
-codrive upgrade
-```
-
-服务在启动 App Server 或 `RecoveryManager` 前，持有状态锁并迁移受支持的旧本地数据，备份和校验完成后才进入当前 schema v5。正常运行只接受新模型及与包版本精确一致的托管资源。已有安装通过 `codrive upgrade` 完成包升级与资源同步；`codrive setup` 用于初始化或修复资源。转换或资源校验失败时，正常执行保持停止。
-
-Hook 的审核和信任由 Codex 管理。首次 setup 后，或新版本改变 Hook 定义后，请在 Codex 中运行 `/hooks`，审核并信任新的 hash。Codex 没有提供让 Codrive 代替用户持久化单条 Hook 信任的公共 API；进程级绕过还会同时信任无关的用户和项目 Hook，因此 Codrive 不使用它。更新窗口会持续提示，直到四条 Codrive 定义都已启用并信任；`codrive doctor` 会分别报告静态安装状态和运行时信任状态。
-
-看板还提供运行设置，用于调整每个项目的并发上限、默认模型、备用模型及各自的推理强度，以及可选的 Semantic Atlas 自动维护。检测到公开的 `semantic-atlas` 命令并由用户启用后，每个普通任务都会显式加载 `$semantic-atlas`；是否涉及业务理解、是否需要查询或记录由 Skill 根据实际任务自行判断，纯机械任务会直接停止。对于包含代码的工作，Codrive 会在合入前把 Agent 汇报的工作树解析成一个持久的 Git 仓库，合入完成后只检查这个仓库，并为每个仓库最多创建一个正常的、需要独立审查的维护任务。一次 Work 交付目前只代表一个 Git 仓库，不支持一个报告同时交付多个仓库。候选和业务域判断全部留在 Semantic Atlas 内部，Codrive 不负责安装或诊断 Semantic Atlas。每个项目默认继承全局模型和推理强度，也可以在项目详情中单独覆盖；新配置从该项目下一次 Codex turn 开始生效。可用模型（包括 `gpt-6-astra`）及支持的强度来自 Codex App Server；选择“模型默认”后，下一轮会使用该模型的默认强度。“已完成”和“已取消”两列可以按终止时间从新到旧或从旧到新排序。完整流程见 [Semantic Atlas 自动维护](./docs/architecture/semantic-atlas-maintenance.md)。
-
-项目归档独立于 `active`、`idle` 和 `cancelled` 生命周期状态。只有项目及其任务都没有正在启动、运行、重试、等待汇报、等待输入或计划等待的执行时才能归档。归档会暂停后续调度并把项目移出默认看板，但本机的 `PROJECT.md`、任务、活动历史、执行证据和 Codex 对话引用都会保留；可以从侧栏的“已归档”入口继续查看和恢复。恢复后项目仍保持暂停，需要你明确点击继续才会重新调度。第一版不提供永久删除，也不会联动归档 Codex 对话。
-
-打开看板后，浏览器会通过经过认证的 Socket.IO 连接，只订阅当前选中项目、当前打开任务和系统更新；归档与恢复还会向已认证的看板连接发送项目列表失效信号。实时事件只表示对应作用域已经变化，浏览器仍从 HTTP 重新读取权威快照，不从 Socket 接收业务状态。切换项目或任务时会同步切换房间；断线重连后只恢复当前房间和对应 HTTP 读取，不刷新页面，也不丢失当前界面状态。完整契约见[实时同步架构](./docs/architecture/realtime-sync.md)。
-
-任务执行期间，详情面板还会显示一条可替换的当前活动。托管 Codex Hook 会把生命周期活动发送到 `/api/hooks/activity`；通过校验的请求是唯一的实时活动和续期来源。打开任务时可以通过 `thread/read` 生成一条安全的初始文案，但该快照不会续期静默窗口。活动只保留在进程内存中，只包含类别和执行身份，不包含 prompt、reasoning、命令参数、输出、路径、transcript 或环境变量。
-
-同一条内存活动桥还会为精确任务执行维护 Hook `lastSeen` 观察窗口。服务重启时先建立一个新窗口，不会因为进程内信号丢失就猜测任务已经停止。连续十分钟没有收到通过校验的 Hook 请求后，Codrive 按一分钟扫描节奏通过 App Server 核验保存的 thread 和 turn：仍在运行就重新开始十分钟窗口，已经完成就进入现有汇报路径，只有明确中断或失败的 turn 才有资格恢复。App Server 重启或卸载持久化 thread 后可以返回 `notLoaded`；只要精确 turn 已终态且没有活跃 turn，该结果仍然权威。读取失败、turn 缺失、状态矛盾、执行身份已变化、项目暂停或容量不足时保持原状并延后重查，不新增持久化 Presence 状态。
-
-## 工作方式
-
-![Codrive 产品轮转与调度架构](https://raw.githubusercontent.com/lzj960515/codrive/main/docs/architecture/codrive-orchestration.png)
-
-1. **规划。** Codex 把产品目标整理为任务，并根据最新产品与仓库事实选择下一批工作。
-2. **工作。** 每个选中任务在自己的长期 Codex 对话中推进；代码工作使用隔离 Git 工作树，发布、迁移和验证也可以形成没有提交的可审查结果。
-3. **审查。** 第一轮审查创建名为 `[review] <任务名>` 的独立 Review 对话，后续复审继续该对话。Codrive 启动时只检查一次是否存在已启用的 `code-review` Skill，并在本次进程中保留该结果。启动时可用时，首次审查、复审和计划恢复都会显式加载 `$code-review`；运行期间的 Skill 变化在 Codrive 重启后生效。发现问题后，原工作对话形成下一份有证据的 work 结果。
-4. **合入。** 原任务对话合入代码候选或核实无代码结果，然后明确结束任务、要求继续工作，或把冲突处理中产生的新候选送回 Review；同一个仓库仍然每次只合入一个任务。
-
-Codrive 持久化生命周期状态并执行调度边界，Codex 负责需要判断的工作。各项目拥有独立并发上限；只有规划事实变化时才重新选择任务，而不是每次出现空闲位置都询问模型。
-
-`PROJECT.md` 是项目选择和任务执行读取的唯一当前产品事实。项目注册完成后，Agent 直接用普通文件工具局部修改这份本地文档，再发送只包含版本与哈希的轻量通知，不重新传输完整文档。Codrive 会重新读取并验证文件，把决定摘要写入只追加的事件历史，替换已经失效的任务选择并重新规划。
-
-尚未开始的普通 backlog 任务可以通过带 `updatedAt` 并发校验的正式命令修改名称、结果边界和验收标准。修改同时改变产品事实时，同一个命令会接受已经编辑的 `PROJECT.md` 并只推进一次规划修订。已经开始的任务继续使用当前执行生命周期，完成或取消后的变化形成后续任务；任务 JSON 始终由 Codrive 管理运行状态。
-
-任务状态分为三层：看板展示的业务状态、下一步 `work | review | integrate` 动作，以及 attempt 的运行状态。每份完成的 work 结果拥有一条不可变活动和可选的 `candidateCommit`；Review 与合入绑定这条准确活动，不再从旧历史中寻找最近候选。代码已经合入和整个任务完成是两个判断，所以同一任务可以在合入后继续发布、迁移或验证。
-
-持久化 schema v5 保留任务交付绑定，并加入里程碑和持久规划会话。旧任务保留身份、原对话和独立归属；旧临时规划在启动前转换为待处理的新规划，由可见持久会话继续。正常运行使用单一当前模型。完整契约见 [产品事实生命周期](./docs/architecture/product-facts.md)。
-
-Review finding 表达受支持产品与运维路径中的真实交付阻塞，不是无条件执行指令。工作对话会修复成立的问题，或为不适用的 finding 记录反证；同一个独立 Review 对话随后结合新记录的 work 结果重新判断。
-
-等待与恢复也属于同一套流程。任务可以等待到指定时间而不占用项目容量；模型容量不足时可以切换 fallback；经过权威确认的中断工作可以从持久化的原对话和执行状态继续。恢复前会重新核对精确 action、attempt、thread、turn、项目容量和合入资格，并且只启动一个替代 turn。任务时间线只记录真实恢复等生命周期变化，把需要用户处理的决定或失败置顶展示。
-
-## 里程碑目标
-
-里程碑定义一个阶段的目标、范围和可核实的验收标准。它可以先没有任务，由负责人调查并形成初始计划。执行中的发现和任务报告持续修正计划；已经授权的必要漏项自主补齐，新的业务取舍才交给你决定。等待决定时，无关工作继续。
-
-新增任务不再要求修改 `PROJECT.md`：这份文档保持长期产品契约，阶段目标与任务计划各自维护。全部任务结束后会触发最终评估；缺少实际交付或运行证据时，负责人继续组织普通验证任务，证据齐全才完成里程碑。规划和执行会话始终在当前项目中可见。完整流程见 [里程碑与持续规划](./docs/architecture/milestones.md)。
-
-## Codex 任务关系
-
-| 工作阶段 | Codex 任务行为 |
+| 想做什么 | 可以这样说 |
 | --- | --- |
-| 工作 | 每个看板任务拥有一个长期 Codex 任务，承载代码、发布、迁移、验证和 Review feedback |
-| 合入 | 继续原工作任务，并判断整个任务是否完成 |
-| 审查 | 每个看板任务拥有一个带 `[review]` 前缀、长期独立的 Review 任务，并加载启动时检测到的 `$code-review` |
-| 里程碑评估 | 每里程碑复用一个可见的 `[里程碑]` 持久任务 |
-| 任务选择 | 每项目复用一个可见的 `[调度]` 持久任务 |
+| 追加小任务 | 用 Codrive 增加一个独立任务：修复设置页返回链接，并验证能正常返回项目。 |
+| 调整计划 | 排行榜还需要支持周榜，先帮我评估影响，再调整这个里程碑的计划。 |
+| 了解进展 | 看一下 Codrive 里这个项目的进度，有什么问题需要我决定？ |
+| 暂停调度 | 暂停这个项目的后续任务调度。 |
 
-任务详情会把每次执行和活动链接到来源对话，并在同一条时间线中展示阻塞、计划继续、请求决定、测试证据、审查发现和 Git 结果。
+## 在看板看进度，在对话里做决定
 
-## 内置 Skills
+- **任务看板**展示各阶段的工作，保留已完成和已取消的任务。顶部的活动里程碑卡片用于筛选，不选时显示全部任务。
+- **里程碑页面**集中查看阶段目标、验收标准、待决定的问题和关联任务，也能回顾已完成的里程碑。
+- **任务详情**展示活动记录、当前执行摘要、审查结果和对话入口。AI 没有正在执行时，可以取消未完成任务；需要恢复的任务提供相应操作，计划等待也可调整时间或提前继续。
+- **项目资料**单独维护产品文档和项目模型配置。归档项目会保留历史；恢复后仍保持暂停，由你决定何时继续。
+
+规划、里程碑评估、任务执行和独立审查都使用项目下可见、可继续的 Codex 对话。你可以查看过程、补充背景，也可以在需要时参与决策。
+
+## 按你的节奏运行
+
+设置中可以调整项目并发上限、默认模型、备用模型及各自的推理强度。项目可以继承全局模型设置，也可以单独覆盖；修改从下一轮执行开始生效。
+
+模型容量不足时，Codrive 会重试并按配置切换备用模型。计划等待会让出执行容量，到期后继续；确认中断的工作会尝试从原对话恢复。需要你处理的问题会在详情中保留记录。
+
+如果已经安装 Semantic Atlas，可以在设置中启用自动维护，让相关代码工作完成后通过普通任务更新项目业务知识。详见 [Semantic Atlas 自动维护](./docs/architecture/semantic-atlas-maintenance.md)。
+
+### 更新与常用命令
+
+Codrive 运行时会定期检查新版本，并在看板提示。安装由你发起，也可以使用 `codrive upgrade`：它会安装新版本、迁移受支持的本地数据、同步 Skills 和 Hook，并重启验证服务。Hook 定义发生变化后，需要再次通过 Codex 的 `/hooks` 审核并信任。
+
+| 命令 | 用途 |
+| --- | --- |
+| `codrive` | 在后台启动服务和本地看板 |
+| `codrive status` | 查看本地服务状态 |
+| `codrive stop` / `codrive restart` | 停止或重启服务 |
+| `codrive upgrade` | 更新到最新版本 |
+| `codrive setup` | 初始化或修复托管 Skills 和 Hook |
+| `codrive doctor` | 检查运行环境、登录和托管资源 |
+| `codrive serve` | 在前台运行 |
+
+## 本地数据与执行权限
+
+Codrive 默认把项目状态、活动历史和日志保存在 `~/.codrive`。本地服务只监听 `127.0.0.1`，并使用访问令牌保护。AI 请求仍通过 Codex 使用所配置的模型服务。
+
+自动任务拥有完整本机访问权限，可以修改文件、执行命令、测试、提交和合入代码，无需逐次终端审批。请在你信任的仓库中使用，并明确任务的目标和授权范围。
+
+## 了解更多与参与开发
+
+Codrive 随包提供四个 Skills，分别承接不同工作：
 
 | Skill | 用途 |
 | --- | --- |
-| `$codrive-forge` | 注册产品契约与已确认里程碑或初始任务 |
-| `$codrive-task` | 选择项目工作、评估里程碑，或执行任务当前阶段 |
-| `$codrive-work` | 追加已授权目标和任务，或调整未开始工作 |
-| `$codrive-control` | 查看进度、修改 backlog 任务、记录产品文档变化并控制执行 |
+| `$codrive-forge` | 将初始产品目标整理为项目、里程碑和任务 |
+| `$codrive-work` | 为已有项目追加工作或调整计划 |
+| `$codrive-task` | 执行任务选择、里程碑评估和任务各阶段 |
+| `$codrive-control` | 查询进度、维护项目事实和控制执行 |
 
-Skills 会从 Codrive 读取实时上下文，因此任务消息保持简短，不同对话中的产品状态也能保持一致。`$codrive-task` 读取当前任务定义、验收标准、阶段、活动历史和仓库规则后，会加载与该阶段实际工作匹配的其他可用 Skill。
+想了解实现细节，可以阅读[里程碑与持续规划](./docs/architecture/milestones.md)、[产品事实生命周期](./docs/architecture/product-facts.md)和[看板实时同步](./docs/architecture/realtime-sync.md)。
 
-## 常用命令
-
-```text
-codrive                         在后台启动 Codrive 和本地看板
-codrive start                   在后台启动 Codrive
-codrive stop                    停止 Codrive
-codrive restart                 重启 Codrive
-codrive upgrade                 停服迁移本地状态并安装最新版本
-codrive status                  查看本地服务状态
-codrive setup                   初始化全新 v5 状态并安装或修复托管资源
-codrive doctor                  检查运行环境、Codex、登录和托管资源
-codrive import <project.json>   导入产品
-codrive serve                   在前台运行
-codrive --version               显示当前安装版本
-```
-
-## 本地数据与安全
-
-Codrive 默认把状态和日志保存在 `~/.codrive`。产品事件日志只追加写入；`codrive.log` 记录运行生命周期，不包含 prompt、聊天正文或报告正文。
-
-HTTP API 与 Socket.IO 端点只监听 `127.0.0.1`，并使用同一个随机访问令牌。自动 Codex 任务拥有完整本机访问权限，可以连续修改、测试、提交、合入和清理代码，无需等待终端审批。请只注册你信任的仓库和产品指令。
-
-## 参与开发
-
-Codrive 使用 Node.js 24 或更高版本和 pnpm 11.5.1。
+本地开发使用 Node.js 24 或更高版本和 pnpm 11.5.1：
 
 ```bash
 corepack enable

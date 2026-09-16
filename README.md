@@ -1,7 +1,7 @@
 <div align="center">
   <h1>Codrive</h1>
-  <p><strong>Turn product work into a continuous stream of visible Codex tasks.</strong></p>
-  <p>Local-first orchestration for planning, work, independent review, and completion-aware integration.</p>
+  <p><strong>Set the goal. Let Codex keep the work moving.</strong></p>
+  <p>Local orchestration for planning, execution, independent review, and acceptance.</p>
 
   <p>
     <a href="https://www.npmjs.com/package/codrive"><img alt="npm version" src="https://img.shields.io/npm/v/codrive?style=flat-square&color=cb3837"></a>
@@ -13,29 +13,39 @@
   <p><strong>English</strong> · <a href="./README.zh-CN.md">简体中文</a></p>
 </div>
 
+## Give AI the goal. Save your attention for decisions.
+
+Working with AI often means assigning the next step, asking for updates, and checking results yourself. As the work grows, every conversation needs your attention.
+
+Codrive gives Codex App a workflow that keeps moving: you confirm the goal and boundaries, and Codex breaks down tasks, does the work, reviews results independently, and revises the plan as it learns. When a new product decision needs your input, it asks. Follow progress on the board or return to the relevant Codex conversation to discuss the details.
+
+**Runs locally, with no separate database, Redis, or Docker deployment.** Codrive manages tasks and scheduling; Codex understands your project and performs the work.
+
 <p align="center">
-  <img src="https://raw.githubusercontent.com/lzj960515/codrive/main/docs/images/codrive-board.jpg" alt="Codrive local product board with sample projects and task details">
+  <img src="https://raw.githubusercontent.com/lzj960515/codrive/main/docs/images/codrive-board.jpg" alt="Example Codrive board showing projects, task stages, and task details">
 </p>
 
-## What is Codrive?
+## From a goal to a verified result
 
-Codrive is a lightweight local service that connects Codex App conversations, a product board, filesystem-backed state, and reusable Skills. Describe a product goal in Codex App, confirm the plan, and Codrive keeps each task moving through general work, independent review, and integration until the entire task is complete.
+| What you need | How Codrive helps |
+| --- | --- |
+| A substantial change, before you know all the tasks | Create a milestone with a goal, scope, and acceptance criteria. Codex investigates and builds the initial plan. Small changes can be independent tasks. |
+| A plan that adapts when work uncovers something new | Reassess discoveries, add investigations or missing tasks, and revise work that has not started within the agreed goal. |
+| Your input on the decisions that matter | Ask a specific question and restrict affected work while unrelated tasks and necessary investigations continue. |
+| Confidence in an AI's completed work | Send every work result through independent review. Findings return to the original task for another work and review round. |
+| Delivery that continues beyond a code merge | Continue release, migration, or verification when required by the task. Check milestone acceptance evidence and add tasks for anything still missing. |
 
-Codex still understands the repository, writes and reviews code, runs tests, resolves conflicts, and makes product decisions. Codrive provides the durable workflow around that work: task state, isolated conversations, scheduling, recovery, and a clear activity history.
+### Plans evolve. Goals stay clear.
 
-> **One command, local state, no infrastructure.** Codrive does not require Docker, PostgreSQL, Redis, or a hosted service.
+Suppose you want to complete a Social migration. Start with a milestone and let Codex investigate existing consumers and break down the migration. If execution uncovers a missed consumer, the plan can gain another migration task. If the change would alter product behavior, Codex explains the impact and asks for your decision first.
 
-## Why Codrive?
+When all tasks finish, Codex checks whether the migration meets its acceptance criteria. Missing runtime evidence leads to more verification work; a completed task count alone does not complete the milestone.
 
-- **Visible work.** Every work and review execution appears in Codex App.
-- **Focused context.** Work and Review use separate conversations; each task's Review conversation continues across review rounds.
-- **Continuous delivery.** Approved results move to integration, which either completes the task, opens the next work round, or sends a newly changed candidate back to Review.
-- **Dynamic planning.** Codex selects useful work from current product and repository facts instead of following a fixed dependency graph.
-- **Local ownership.** Product documents, task state, execution history, and credentials stay on your machine.
+The project's `PROJECT.md` holds lasting product facts and rules. Milestones describe stage goals; tasks describe concrete deliverables. **Adding everyday work does not require rewriting the product contract.**
 
-## Quick start
+## Get started
 
-You need Node.js 24 or newer, Git, and a Codex login available in `~/.codex`.
+You need **Node.js 24 or newer, Git, and Codex App**, with a working Codex login (using credentials in `~/.codex` by default).
 
 ```bash
 npm install --global codrive@latest
@@ -43,115 +53,79 @@ codrive setup
 codrive
 ```
 
-`setup` initializes an empty state directory at schema v5 and installs the exact package's managed Skills and Hook. Codrive then prints the local board URL and log location. After setup:
+`setup` installs the bundled Skills and activity Hook. When Codrive starts, the terminal prints your local board URL.
 
-1. In Codex, run `/hooks`, review the four Codrive activity Hook definitions, and trust their current hashes.
-2. Open the target project directory in Codex App.
-3. Describe the product work and ask Codex to use Codrive.
+1. Run `/hooks` in Codex, then review and trust the four Codrive activity Hook definitions.
+2. Open your project directory in Codex App.
+3. Describe the work and ask Codex to use Codrive. Confirm the plan to start execution.
+
+For example:
 
 ```text
-Use Codrive to add a leaderboard to this project, then start development after I confirm the plan.
+Use Codrive to add a leaderboard to this project.
+Confirm the scope and acceptance criteria with me, then create a milestone and start the work.
 ```
 
-While the service is running, Codrive checks the npm latest stable release about once per hour. An open board receives the result without a page refresh and shows an update prompt when a newer version is available. **Check again** refreshes the status immediately and starts a new hourly interval.
+Keep using ordinary conversation for follow-up work:
 
-The update window shows the installed version, the latest stable release, the last check time, and separate status rows for Codrive's four managed Skills and one managed Codex Hook. Automatic checks only update this status: installation still requires your confirmation. The update worker installs the exact release, stops Codrive and its App Server, migrates and validates local state, synchronizes all five bundled resources while stopped, starts the new service, and verifies the running version before recording success. The command-line equivalent is:
-
-```bash
-codrive upgrade
-```
-
-Startup migrates supported older local state under the state lock before App Server or Recovery begins, then requires managed Skill and Hook markers to match the installed package. Use `codrive upgrade` to install and synchronize the complete package, or `codrive setup` to initialize or repair managed resources. An unsuccessful conversion or resource check keeps normal execution stopped.
-
-Codex owns Hook review and trust. After setup or any release that changes the Hook definition, use `/hooks` in Codex to review and trust the new hash. Codex does not expose a public per-Hook API that lets Codrive persist that decision on the user's behalf; the process-wide bypass would also trust unrelated user and project Hooks, so Codrive does not use it. The update window shows an action prompt until all four Codrive definitions are enabled and trusted, and `codrive doctor` reports static installation and runtime trust as separate checks.
-
-The board also provides runtime settings for per-project concurrency, the primary model, the fallback model, their independent reasoning efforts, and optional Semantic Atlas automatic maintenance. When the public `semantic-atlas` command is installed and the user enables it, every ordinary task turn loads `$semantic-atlas`; the Skill decides from the actual task whether business understanding or observation is relevant and stops without a query or record for mechanical work. For code-backed work, Codrive resolves the reported worktree to one persistent Git repository before Integration, then checks only that repository after the task is merged. It creates at most one normal independently reviewed maintenance task for each repository and leaves all candidate and business-domain interpretation inside Semantic Atlas. One Work delivery currently represents one Git repository; multi-repository delivery reports are not supported. Codrive does not install or diagnose Semantic Atlas. Each project inherits the global models and reasoning efforts by default and can override them from its product detail page; the override applies when the project's next Codex turn starts. Available models (including `gpt-6-astra`) and supported efforts come from Codex App Server. Choosing the model default clears any previous effort override on the next turn. The completed and cancelled board columns can be sorted by their terminal time, newest first or oldest first. See [Semantic Atlas automatic maintenance](./docs/architecture/semantic-atlas-maintenance.md).
-
-Projects can be archived without changing their `active`, `idle`, or `cancelled` lifecycle status. Archiving is available only when the project and all of its tasks have no active, retrying, reporting, input-waiting, or scheduled-wait execution. It pauses future scheduling, hides the project from the default board, and keeps `PROJECT.md`, tasks, activity history, execution evidence, and Codex conversation references on disk. The archived drawer provides historical access and restore controls. Restoring a project leaves it paused until you explicitly continue it; Codrive never permanently deletes the project or archives its Codex conversations.
-
-An open board uses an authenticated Socket.IO connection to watch only the selected project, the open task, and system updates. Archive and restore additionally publish a project-list invalidation to authenticated board connections. Realtime events are small invalidation signals: the browser rereads the matching HTTP snapshot instead of accepting state over the socket. Switching projects or tasks changes rooms, while reconnecting restores the current rooms and scoped reads without reloading the page or discarding the current UI state. See [Realtime synchronization](./docs/architecture/realtime-sync.md) for the full contract.
-
-While a task turn is running, its detail panel also shows one replaceable current-activity signal. The managed Codex Hook reports lifecycle activity to `/api/hooks/activity`; that accepted request is the only live activity and renewal source. Tool events display the canonical safe tool name, such as `apply_patch`, `Bash`, or an MCP tool name. Opening a task reads only the latest Hook activity and otherwise waits for the next signal. All activity stays in process memory and contains only a category, safe tool label, and execution identity, never prompts, reasoning, command arguments, output, paths, transcripts, or environment values.
-
-The same in-memory bridge keeps a Hook `lastSeen` window for the exact task execution. A service restart starts a fresh window instead of guessing that a quiet turn has stopped. After ten minutes without an accepted Hook request, Codrive checks the saved thread and turn through App Server once per minute: a running turn starts a new ten-minute window, a completed turn enters the normal report path, and only an unambiguously interrupted or failed turn is eligible to resume. App Server may report a persisted thread as not loaded after restart; its exact terminal turn remains authoritative when no turn is active. Missing, unreadable, contradictory, superseded, paused, or capacity-blocked work stays unchanged and is checked again later; Codrive does not create a persisted presence state.
-
-## How it works
-
-![Codrive product loop and scheduling architecture](https://raw.githubusercontent.com/lzj960515/codrive/main/docs/architecture/codrive-orchestration.png)
-
-1. **Plan.** Codex turns a product goal into tasks and selects the next work from the latest product and repository facts.
-2. **Work.** Each selected task runs in its own persistent Codex conversation. Code work uses an isolated Git worktree; releases, migrations, and verification can produce a reviewable result without a commit.
-3. **Review.** The first Review starts an independent conversation named `[review] <task title>`, and later rounds continue it. Codrive checks once at startup for an enabled `code-review` Skill and keeps that result in memory for the process lifetime. When available at startup, initial, resumed, and scheduled-resume Review turns explicitly load `$code-review`; later Skill changes take effect after Codrive restarts. Findings return to the work conversation for an evidence-based next result.
-4. **Integrate.** The original task conversation merges a code-backed result or verifies a no-code result, then explicitly completes the task, requests more work, or sends a changed candidate back to Review. Each repository still has one integration lease.
-
-Codrive persists lifecycle state and enforces scheduling boundaries; Codex handles the work that requires judgment. Projects have independent concurrency limits, and planning runs again when its facts change rather than whenever a slot happens to become free.
-
-`PROJECT.md` is the single current product-facts source for every project and task turn. After registration, Agents edit that local file directly and send a small change notification containing document revisions and digests instead of retransmitting the full document. Codrive validates the file, records the decision summary in its append-only event history, replaces stale task selection, and replans.
-
-An ordinary unstarted backlog task can change its title, result boundary, and acceptance criteria through a command guarded by the task's current `updatedAt`. When that revision also changes product facts, the same command accepts the edited `PROJECT.md` and advances planning once. Started tasks continue through their current execution lifecycle, changes after completion or cancellation become follow-up tasks, and Codrive remains the sole writer of task lifecycle JSON.
-
-Task state has three distinct layers: the board-visible business status, the next `work | review | integrate` action, and the attempt's runtime status. Every completed work result owns one immutable activity and an optional `candidateCommit`; Review and integration bind that exact activity instead of scanning older candidates. Integration completion is a separate decision from Git merge completion, so one task can continue into release, migration, or verification work after code is merged.
-
-State schema v5 preserves task delivery bindings and adds milestone goals and persistent planning. Supported older local state is backed up, converted, and validated under the state lock before normal service startup; runtime accepts only the current model. Existing tasks remain independent, while temporary planning is replaced with pending visible persistent selection. See [Product facts lifecycle](./docs/architecture/product-facts.md).
-
-Review findings represent real delivery blockers in supported product and operational paths, not unconditional instructions. The work conversation fixes valid issues or records evidence for findings that do not apply; the same independent Review conversation then reevaluates the newly recorded work result.
-
-Waiting and recovery are part of the same workflow. A task can pause until a specific time without holding project capacity, capacity errors can move work to a fallback model, and an authoritatively interrupted task can resume from its persisted conversation and execution state. Recovery rechecks the exact action, attempt, thread, turn, project capacity, and integration lease before starting one replacement turn. The task timeline records actual recovery transitions and surfaces only decisions or failures that need attention.
-
-## Milestone goals
-
-A milestone defines a stage outcome, its scope, and evidence-based acceptance. It can start without tasks: its owner investigates and creates the initial work. Discoveries and task results keep the plan current; authorized omissions are handled autonomously, and only new business choices need your decision. Unrelated work continues while a question is pending.
-
-Adding tasks does not require changing `PROJECT.md`. That document stays the current product contract; milestone goals and task plans have their own lifecycle. Finishing every task triggers final assessment. Missing runtime or delivery evidence creates ordinary verification work before the milestone is marked done. All planning and execution conversations remain visible in the current project. See [Milestones and continuous planning](./docs/architecture/milestones.md).
-
-## Codex conversations
-
-| Work | Conversation behavior |
+| Intent | Example request |
 | --- | --- |
-| Work | One persistent Codex conversation per task for code, release, migration, verification, and Review feedback |
-| Integration | Continues the work conversation and decides whether the whole task is complete |
-| Review | Uses one `[review]`-prefixed independent persistent conversation per task and loads the startup-detected `$code-review` Skill |
-| Milestone assessment | Uses one visible persistent `[里程碑]` conversation per milestone |
-| Task selection | Uses one visible persistent `[调度]` conversation per project |
+| Add a small task | Use Codrive to add an independent task: fix the settings page's return link and verify that it opens the project. |
+| Adjust a plan | The leaderboard also needs weekly rankings. Assess the impact with me, then update the milestone plan. |
+| Check progress | Check this project's Codrive progress. What needs a decision from me? |
+| Pause scheduling | Pause scheduling of further tasks for this project. |
 
-Task details link each execution and activity to its source conversation. They also show blockers, scheduled continuation, decision requests, test evidence, review findings, and Git results in one chronological timeline.
+## Follow the board. Make decisions in context.
 
-## Built-in Skills
+- **The task board** shows work across its stages, including completed and cancelled tasks. Active milestone cards filter the board; with none selected, all tasks remain visible.
+- **The milestone page** brings together goals, acceptance criteria, open questions, and related tasks. Completed milestones remain available for reference.
+- **Task details** show activity history, a current execution summary, review results, and conversation links. You can cancel unfinished tasks while no AI is executing. Recovery controls appear when applicable, and scheduled waits can be rescheduled or resumed early.
+- **Project information** has its own page for product documentation and project model settings. Archiving preserves history; restoring a project leaves scheduling paused until you resume it.
+
+Planning, milestone assessment, task execution, and independent review all use visible, persistent Codex conversations under the project. You can inspect the process, add context, and participate when a decision needs you.
+
+## Work at your pace
+
+Settings let you choose project concurrency, primary and fallback models, and each model's reasoning effort. Projects can inherit global model settings or override them. Changes take effect on the next execution turn.
+
+When model capacity is unavailable, Codrive retries and can switch to the configured fallback. Scheduled waits release capacity and resume when due. Confirmed interruptions can recover through the original conversation. Issues requiring your attention stay recorded in the details.
+
+If you already use Semantic Atlas, you can enable automatic maintenance in settings. After relevant code work completes, ordinary tasks maintain your project's business knowledge. See [Semantic Atlas automatic maintenance](./docs/architecture/semantic-atlas-maintenance.md).
+
+### Updates and everyday commands
+
+While running, Codrive periodically checks for new versions and shows an update prompt on the board. You initiate installation, either there or with `codrive upgrade`. The upgrade installs the new version, migrates supported local data, synchronizes Skills and the Hook, then restarts and verifies the service. If Hook definitions change, review and trust them again through Codex's `/hooks`.
+
+| Command | Purpose |
+| --- | --- |
+| `codrive` | Start the service and local board in the background |
+| `codrive status` | Check local service status |
+| `codrive stop` / `codrive restart` | Stop or restart the service |
+| `codrive upgrade` | Update to the latest version |
+| `codrive setup` | Initialize or repair managed Skills and the Hook |
+| `codrive doctor` | Check the environment, login, and managed resources |
+| `codrive serve` | Run in the foreground |
+
+## Local data and execution access
+
+Codrive stores project state, activity history, and logs in `~/.codrive` by default. Its local service listens only on `127.0.0.1` and requires an access token. AI requests still use the model service configured through Codex.
+
+Automatic tasks have full local access: they can edit files, execute commands, test, commit, and merge without individual terminal approvals. Use trusted repositories and give tasks clear goals and authorization boundaries.
+
+## Learn more and contribute
+
+Codrive ships four Skills with distinct roles:
 
 | Skill | Purpose |
 | --- | --- |
-| `$codrive-forge` | Register a product contract with milestone goals or initial tasks |
-| `$codrive-task` | Select project work, assess milestone goals, or execute the current task stage |
-| `$codrive-work` | Add authorized goals and tasks or revise unstarted work |
-| `$codrive-control` | Inspect progress, revise backlog tasks, record product-document changes, and control execution |
+| `$codrive-forge` | Turn initial product goals into a project, milestones, and tasks |
+| `$codrive-work` | Add work or adjust plans in an existing project |
+| `$codrive-task` | Select work, assess milestones, and execute task stages |
+| `$codrive-control` | Check progress, maintain product facts, and control execution |
 
-Skills read live context from Codrive, so task messages stay short and product state remains consistent across conversations. After `$codrive-task` reads the current task definition, acceptance criteria, stage, activity history, and repository rules, it loads other available Skills that match the actual work for that stage.
+For implementation details, read [Milestones and continuous planning](./docs/architecture/milestones.md), [Product facts lifecycle](./docs/architecture/product-facts.md), and [Board realtime synchronization](./docs/architecture/realtime-sync.md).
 
-## Commands
-
-```text
-codrive                         Start Codrive and the local board in the background
-codrive start                   Start Codrive in the background
-codrive stop                    Stop Codrive
-codrive restart                 Restart Codrive
-codrive upgrade                 Install the latest release through the stopped-state migration barrier
-codrive status                  Show local service status
-codrive setup                   Initialize fresh v5 state and install or repair managed resources
-codrive doctor                  Check runtime, Codex, login, and managed resources
-codrive import <project.json>   Import a product
-codrive serve                   Run in the foreground
-codrive --version               Show the installed version
-```
-
-## Local data and security
-
-Codrive stores its state and logs under `~/.codrive` by default. The product event log is append-only, while `codrive.log` contains operational lifecycle records without prompts, chat messages, or report bodies.
-
-The HTTP API and Socket.IO endpoint listen only on `127.0.0.1` and use the same random access token. Automated Codex tasks run with full local access so they can edit, test, commit, merge, and clean up without terminal approval. Register only repositories and product instructions you trust.
-
-## Development
-
-Codrive uses Node.js 24 or newer and pnpm 11.5.1.
+Local development uses Node.js 24 or newer and pnpm 11.5.1:
 
 ```bash
 corepack enable
