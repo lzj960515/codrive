@@ -35,6 +35,7 @@ class OutputElement {
     contains: (name: string) => this.classes.has(name),
   };
   onclick: (() => void) | null = null;
+  elements?: { namedItem(name: string): OutputElement };
   setAttribute(name: string, value: string) { this.attributes.set(name, value); }
   querySelector(selector: string): OutputElement | null {
     return selector === "[data-project-info]" ? this : null;
@@ -44,15 +45,21 @@ class OutputElement {
   addEventListener() {}
 }
 
-function client(search: string, snapshot = archived) {
+function client(search: string, snapshot = archived, pathname = "/") {
   const elements = new Map<string, OutputElement>();
   const element = (id: string) => {
     if (!elements.has(id)) elements.set(id, new OutputElement());
     return elements.get(id)!;
   };
+  element("settings-form").elements = { namedItem: element };
   const body = new OutputElement();
   let location = "/" + search;
   const responses: Record<string, unknown> = {
+    "/api/system/settings": {
+      settings: { maxConcurrentTasks: 2, models: { primary: "primary", fallback: "fallback" } },
+      availableModels: [],
+      semanticAtlas: { installed: true, automaticMaintenance: false },
+    },
     "/api/board": [],
     "/api/board/archived": { projects: [snapshot] },
     "/api/board/projects/archived": snapshot,
@@ -66,7 +73,7 @@ function client(search: string, snapshot = archived) {
       querySelector: () => null, querySelectorAll: () => [], addEventListener() {},
     },
     window: {
-      location: { pathname: "/", search },
+      location: { pathname, search },
       history: { replaceState: (_state: unknown, _title: string, url: string) => { location = url; } },
     },
     localStorage: { getItem: () => null, setItem() {} },
@@ -83,6 +90,19 @@ function client(search: string, snapshot = archived) {
 }
 
 describe("workspace navigation", () => {
+  it("opens global settings and provides a working return link to the workspace", async () => {
+    const page = client("", archived, "/settings");
+    await page.run("refresh()");
+    const content = page.element("project").innerHTML;
+    expect(content).toContain("<h1>运行设置</h1>");
+    expect(content).toContain('href="/">← 返回工作区</a>');
+    expect(content).toContain('id="settings-form"');
+    expect(content).toContain('name="maxConcurrentTasks"');
+    expect(content).toContain('name="primary"');
+    expect(content).toContain('name="fallback"');
+    expect(page.element("offline").style.display).toBe("none");
+  });
+
   it("keeps archived milestone history reachable after initial and scoped refreshes", async () => {
     const page = client("?project=archived&tab=milestones&milestone=goal");
     await page.run("refresh()");

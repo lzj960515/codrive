@@ -651,7 +651,7 @@ export const boardStyles = `
   .milestone-reset { flex-shrink: 0; padding: 7px 11px; color: var(--muted); background: white; border: 1px solid var(--line-strong); border-radius: 8px; cursor: pointer; font-size: 11px; }
   .milestone-reset:hover:enabled { color: var(--ink); border-color: #aebcaf; }
   .milestone-reset:disabled { opacity: .45; cursor: default; }
-  .milestone-filter-card { position: relative; flex: 0 0 320px; max-width: 72vw; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: white; }
+  .milestone-filter-card { position: relative; flex: 0 0 320px; min-width: 0; max-width: 100%; padding: 12px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: white; }
   .milestone-filter-card:hover { border-color: #aebcaf; }
   .milestone-filter-card:has(.milestone-filter[aria-pressed="true"]) { background: #e8eee8; border-color: #91a694; }
   .milestone-filter-heading { display: flex; min-width: 0; gap: 9px; align-items: center; }

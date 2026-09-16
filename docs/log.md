@@ -2,6 +2,9 @@
 
 ## 2026-09-16
 
+- Fixed the global settings return link so the page renders independently of project details, with an executed-client navigation regression test.
+- Kept milestone filter cards compact when summaries are long and constrained their width to the available space on narrow screens.
+
 - Reconciled reviewed business-map candidates for milestone ownership and continuous planning, preserving discovery reassessment, affected-work restrictions, and evidence-based acceptance.
 - Added the source-verified model-settings capability, including complete project overrides, route-specific reasoning effort, and next-turn application.
 

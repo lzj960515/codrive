@@ -943,7 +943,7 @@ export function renderBoardClient(accessToken: string): string {
       const modelForm = createModelRoutingForm(availableModels, escapeHtml);
       host.innerHTML =
         '<div class="page-screen settings-screen">'+
-          '<header class="settings-header"><a class="eyebrow-link" href="'+escapeHtml(returnHref)+'">← 返回工作区</a><div><h1>运行设置</h1><p>调整后续任务的并发数、模型路由和产品集成。</p></div></header>'+
+          '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回工作区</a><div><h1>运行设置</h1><p>调整后续任务的并发数、模型路由和产品集成。</p></div></header>'+
           '<section class="integration-card" data-installed="'+String(semanticAtlas.installed)+'">'+
             '<div><span class="integration-kicker">理解层</span><h2>Semantic Atlas</h2><p>在普通任务合入后检查当前可行动候选，并创建独立的业务地图维护任务。</p></div>'+
             (semanticAtlas.installed
