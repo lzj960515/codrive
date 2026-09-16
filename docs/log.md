@@ -1,5 +1,10 @@
 # Documentation log
 
+## 2026-09-16
+
+- Kept all task states visible in the task board, limited homepage filters to active milestone cards, and added an inline detail action plus filter reset.
+- Documented manual cancellation for idle tasks, serialized execution checks, and retained-conversation activity checks before cancellation.
+
 ## 2026-09-15
 
 - Separated current tasks from milestone history in the project workspace, reused the task detail panel for goals, and kept project facts and settings on their own page. Preserved terminal tasks, archived project history, and workspace location across reloads and project-information navigation.

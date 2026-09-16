@@ -59,6 +59,8 @@ import type {
 import {
   applyTaskReport,
   startTaskExecution,
+  taskCanBeCancelled,
+  taskHasActiveTurn,
   validateTaskReport,
 } from "../domain/workflow.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
@@ -2233,6 +2235,10 @@ export class WorkflowEngine {
   ): Promise<Task> {
     return this.enqueue(async () => {
       const found = await this.requireTask(taskId);
+      if (["done", "cancelled"].includes(found.task.status)) return found.task;
+      if (cancellationInput.cancelledBy === "user") {
+        await this.assertTaskCanBeCancelled(found.project, found.task);
+      }
       const cancellation = {
         ...cancellationInput,
         reason: requireCancellationReason(cancellationInput.reason),
@@ -3625,6 +3631,27 @@ export class WorkflowEngine {
     return dispatched ? (await this.requireTask(current.id)).task : current;
   }
 
+  private async assertTaskCanBeCancelled(project: Project, task: Task): Promise<void> {
+    if (isProjectArchived(project)) {
+      throw new WorkflowConflictError("项目已归档，请恢复项目后再取消任务。");
+    }
+    const runningMessage = "任务正在执行，暂时无法取消。请等待本轮结束后重试。";
+    if (!taskCanBeCancelled(project, task)) throw new WorkflowConflictError(runningMessage);
+
+    // 普通阻塞会结束执行，但工作与审查对话仍可由用户手动继续。
+    const activities = await this.store.listTaskActivities(project.id, task.id);
+    const { conversations } = projectTaskActivities(activities, task.workActivityId);
+    const threadIds = new Set([
+      task.currentExecution?.threadId,
+      conversations.workThreadId,
+      conversations.reviewThreadId,
+    ].filter((threadId): threadId is string => Boolean(threadId)));
+    const activeThreads = await Promise.all(
+      [...threadIds].map(threadId => this.dispatcher.isThreadActive(threadId)),
+    );
+    if (activeThreads.some(Boolean)) throw new WorkflowConflictError(runningMessage);
+  }
+
   private async cancelTaskInternal(
     project: Project,
     task: Task,
@@ -3633,9 +3660,7 @@ export class WorkflowEngine {
     if (["done", "cancelled"].includes(task.status)) return task;
     const now = cancellation.cancelledAt;
     const execution = task.currentExecution;
-    const wasActive = execution
-      ? activeExecutionStatuses.has(execution.status)
-      : false;
+    const wasActive = taskHasActiveTurn(task);
     const cancelled: Task = {
       ...task,
       status: "cancelled",

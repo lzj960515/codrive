@@ -58,15 +58,16 @@ The four managed Skills remain the entry points: Forge registers product goals, 
 
 ## Project workspace
 
-The task tab focuses on current work. Its milestone selector shows only active
-milestones; selecting one filters unfinished tasks, and its goal detail opens in
-the same side panel used for task details. Completed and cancelled tasks leave
-the current board without changing their stored state.
+The task tab retains all task states, including completed and cancelled work.
+One row of cards offers only active milestones as filters. With no selected card,
+the board shows every project task, including independent tasks and tasks from
+completed milestones. Reset clears the filter. Each card keeps its title, status,
+and summary; a separate detail link beside the title opens the familiar side panel
+without changing the filter. Selecting a milestone includes all its task states.
 
 The milestone tab lists all goals with active and completed filters. Its detail
 shows the goal, acceptance criteria, current questions, evidence, and every
 associated task directly. Opening a task keeps a return path to the milestone.
-Independent completed and cancelled tasks remain accessible through task history.
 Completion remains an explicit milestone assessment, never a task-count inference.
 
 Project information stays on a separate page for `PROJECT.md`, model settings,
@@ -74,3 +75,12 @@ and registration details. Workspace URLs retain the project, view, filters, and
 open detail when reloading or returning from project information. Archived
 projects retain read access to goals and tasks through the same workspace;
 scheduling stays paused until the existing restore and resume controls are used.
+
+Users can cancel unfinished tasks from task details when no AI turn is executing.
+The HTTP view derives eligibility from execution state, independently of the board
+stage. The serialized cancellation command checks current state again and reads
+any attached conversation to reject a manually resumed active turn. Pending,
+running, and active report turns cannot be cancelled; idle blockers, decisions,
+scheduled waits, and capacity retry waits can. Cancellation preserves history,
+clears scheduled resumes, and uses the existing planning and milestone updates.
+Agent-directed and project cancellation retain their explicit interruption path.

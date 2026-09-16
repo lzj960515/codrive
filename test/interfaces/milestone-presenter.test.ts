@@ -9,15 +9,14 @@ const goal = (overrides: Partial<MilestoneView> = {}): MilestoneView => ({
 });
 
 describe("milestone presentation", () => {
-  it("filters milestone and independent tasks without changing task order", () => {
+  it("filters milestones without changing task order", () => {
     const view = createMilestonePresenter(escape);
     const tasks = [{ id: "a", milestoneId: "m" }, { id: "b", milestoneId: null }, { id: "c", milestoneId: "m" }];
     expect(view.filterTasks(tasks, "m").map(task => task.id)).toEqual(["a", "c"]);
-    expect(view.filterTasks(tasks, "independent").map(task => task.id)).toEqual(["b"]);
     expect(view.filterTasks(tasks, "all")).toEqual(tasks);
   });
 
-  it("keeps terminal work off the homepage while retaining milestone and independent history", () => {
+  it("includes all task statuses in every ownership filter", () => {
     const view = createMilestonePresenter(escape);
     const tasks = [
       { id: "active", milestoneId: "m", status: "working" },
@@ -26,21 +25,35 @@ describe("milestone presentation", () => {
       { id: "cancelled", milestoneId: null, status: "cancelled" },
       { id: "queued", milestoneId: null, status: "backlog" },
     ];
-    expect(view.filterTasks(tasks, "all", "current").map(task => task.id)).toEqual(["active", "queued"]);
-    expect(view.filterTasks(tasks, "m", "all").map(task => task.id)).toEqual(["active", "completed"]);
-    expect(view.filterTasks(tasks, "m", "history").map(task => task.id)).toEqual(["independent", "cancelled"]);
+    expect(view.filterTasks(tasks, "all")).toEqual(tasks);
+    expect(view.filterTasks(tasks, "m").map(task => task.id)).toEqual(["active", "completed"]);
   });
 
-  it("offers active goal filters with pending decisions without duplicating navigation", () => {
+  it("separates active goal selection from an adjacent detail action", () => {
     const view = createMilestonePresenter(escape);
     const markup = view.activeFilters([goal(), goal({ id: "past", title: "Past goal", status: "done" })], "m");
-    expect(markup).toContain("全部未完成");
-    expect(markup).toContain("独立任务");
+    expect(markup).not.toContain("filter-label");
+    expect(markup).toContain('data-milestone-filter="all">重置</button>');
+    expect(markup).not.toContain("全部未完成");
+    expect(markup).not.toContain("独立任务");
     expect(markup).toContain("Keep &lt;export>?");
     expect(markup).toContain('data-milestone-filter="m" aria-pressed="true"');
     expect(markup).not.toContain("Past goal");
-    expect(markup).not.toContain("data-open-milestone");
+    expect(markup.match(/data-open-milestone="m"/g)).toHaveLength(1);
+    expect(markup).toMatch(/<button[^>]*data-milestone-filter="m"[^>]*>[\s\S]*?<\/button><button[^>]*data-open-milestone="m"/);
+    expect(markup).toContain('class="milestone-excerpt"');
+    expect(markup).toContain('class="milestone-filter-card"');
     expect(markup).not.toContain("查看全部里程碑");
+  });
+
+  it("retains milestone access when no goal is selected", () => {
+    const view = createMilestonePresenter(escape);
+    const markup = view.activeFilters([goal()], "");
+    expect(markup).toContain('data-milestone-filter="m" aria-pressed="false"');
+    expect(markup).toContain('data-open-milestone="m"');
+    expect(markup).not.toContain('aria-pressed="true"');
+    expect(view.activeFilters([goal()], "all")).toContain('data-milestone-filter="all" disabled>重置</button>');
+    expect(view.activeFilters([], "all")).toBe("");
   });
 
   it("keeps the full milestone collection discoverable with status filters", () => {

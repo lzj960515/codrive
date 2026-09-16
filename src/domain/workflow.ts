@@ -1,5 +1,6 @@
 import type {
   ExecutionModelRouting,
+  Project,
   Task,
   TaskAction,
   TaskReport,
@@ -15,6 +16,18 @@ const occupiedExecutionStatuses = new Set([
   "waiting_for_input",
   "waiting_for_resume",
 ]);
+
+/** 看板状态表示工作阶段；取消资格取决于本轮是否仍在执行。 */
+export function taskCanBeCancelled(project: Project, task: Task): boolean {
+  return !project.archivedAt && !["done", "cancelled"].includes(task.status) && !taskHasActiveTurn(task);
+}
+
+export function taskHasActiveTurn(task: Task): boolean {
+  const execution = task.currentExecution;
+  if (!execution) return false;
+  return execution.status === "pending" || execution.status === "running" ||
+    (execution.status === "awaiting_report" && !execution.turnCompletedAt);
+}
 
 export function startTaskExecution(
   task: Task,

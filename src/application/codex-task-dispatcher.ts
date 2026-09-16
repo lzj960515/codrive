@@ -24,6 +24,10 @@ export class CodexTaskDispatcher implements TaskDispatcher {
     private readonly skillAvailability: TaskDispatchSkillAvailability,
   ) {}
 
+  isThreadActive(threadId: string): Promise<boolean> {
+    return this.codex.isThreadActive(threadId);
+  }
+
   async attachConversation(
     request: DispatchRequest,
   ): Promise<TaskConversationAttachment> {

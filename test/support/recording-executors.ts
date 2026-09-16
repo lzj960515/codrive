@@ -49,6 +49,10 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
   ) => Promise<void>;
   conversationActive = false;
 
+  async isThreadActive(_threadId: string): Promise<boolean> {
+    return this.conversationActive;
+  }
+
   async attachConversation(
     request: DispatchRequest,
   ): Promise<TaskConversationAttachment> {

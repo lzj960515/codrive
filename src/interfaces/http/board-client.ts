@@ -68,7 +68,6 @@ export function renderBoardClient(accessToken: string): string {
     let selectedTaskId = workspaceParams.get("task");
     let selectedMilestoneId = workspaceParams.get("scope") || "all";
     let workspaceTab = workspaceParams.get("tab") === "milestones" ? "milestones" : "tasks";
-    let showTaskHistory = workspaceParams.get("history") === "1";
     let openedMilestoneId = workspaceParams.get("milestone");
     let milestoneStatusFilter = ["active", "done"].includes(workspaceParams.get("status")) ? workspaceParams.get("status") : "all";
     let detailReturnFocus = null;
@@ -416,7 +415,7 @@ export function renderBoardClient(accessToken: string): string {
         documentScroll: document.scrollingElement?.scrollTop ?? 0,
         boardScrollLeft: document.querySelector(".board-wrap")?.scrollLeft ?? 0,
         boardScrollTop: document.querySelector(".board-wrap")?.scrollTop ?? 0,
-        milestoneScrollLeft: document.querySelector(".milestone-filters")?.scrollLeft ?? 0,
+        milestoneScrollLeft: document.querySelector(".milestone-filter-options")?.scrollLeft ?? 0,
         milestoneListScroll: document.querySelector(".milestone-list")?.scrollTop ?? 0,
         detailScroll: document.getElementById("task-detail-content")?.scrollTop ?? 0,
         sidebarScroll: document.getElementById("projects")?.scrollTop ?? 0
@@ -440,7 +439,7 @@ export function renderBoardClient(accessToken: string): string {
         board.scrollLeft = state.boardScrollLeft;
         board.scrollTop = state.boardScrollTop;
       }
-      const milestoneFilters = document.querySelector(".milestone-filters");
+      const milestoneFilters = document.querySelector(".milestone-filter-options");
       if (milestoneFilters) milestoneFilters.scrollLeft = state.milestoneScrollLeft;
       const milestoneList = document.querySelector(".milestone-list");
       if (milestoneList) milestoneList.scrollTop = state.milestoneListScroll;
@@ -587,7 +586,6 @@ export function renderBoardClient(accessToken: string): string {
       if (selectedProjectId) params.set("project", selectedProjectId);
       if (workspaceTab !== "tasks") params.set("tab", workspaceTab);
       if (selectedMilestoneId !== "all") params.set("scope", selectedMilestoneId);
-      if (showTaskHistory) params.set("history", "1");
       if (milestoneStatusFilter !== "all") params.set("status", milestoneStatusFilter);
       if (openedMilestoneId) params.set("milestone", openedMilestoneId);
       if (selectedTaskId) params.set("task", selectedTaskId);
@@ -606,7 +604,6 @@ export function renderBoardClient(accessToken: string): string {
       selectedMilestoneId = "all";
       openedMilestoneId = null;
       workspaceTab = "tasks";
-      showTaskHistory = false;
       milestoneStatusFilter = "all";
       detailReturnFocus = null;
     }
@@ -695,7 +692,7 @@ export function renderBoardClient(accessToken: string): string {
       archivedHost.innerHTML = archivedSnapshots.length
         ? archivedSnapshots.map(({ project, tasks, milestones }) =>
             '<div class="archived-project-row">'+
-              '<a class="archived-project-link" href="/?project='+encodeURIComponent(project.id)+(milestones.length ? '&tab=milestones' : '&history=1')+'"><b>'+escapeHtml(project.name)+'</b><small>'+tasks.length+' 个任务 · '+escapeHtml(formatTime(project.archivedAt))+'</small></a>'+
+              '<a class="archived-project-link" href="/?project='+encodeURIComponent(project.id)+(milestones.length ? '&tab=milestones' : '')+'"><b>'+escapeHtml(project.name)+'</b><small>'+tasks.length+' 个任务 · '+escapeHtml(formatTime(project.archivedAt))+'</small></a>'+
               '<button class="archived-project-restore" type="button" data-unarchive-project="'+escapeHtml(project.id)+'">恢复</button>'+
             '</div>'
           ).join("")
@@ -787,11 +784,7 @@ export function renderBoardClient(accessToken: string): string {
       });
       host.querySelectorAll("[data-milestone-filter]").forEach(button => {
         button.onclick = () => {
-          const viewState = captureViewState();
-          selectedMilestoneId = button.dataset.milestoneFilter;
-          showTaskHistory = false;
-          renderWorkspace();
-          restoreViewState(viewState);
+          selectTaskScope(button.dataset.milestoneFilter);
         };
       });
       host.querySelectorAll("[data-milestone-status]").forEach(button => {
@@ -803,14 +796,17 @@ export function renderBoardClient(accessToken: string): string {
       host.querySelectorAll("[data-open-milestone]").forEach(button => {
         button.onclick = () => openMilestone(button.dataset.openMilestone);
       });
-      host.querySelector("[data-task-history]")?.addEventListener("click", () => {
-        showTaskHistory = !showTaskHistory;
-        renderWorkspace();
-      });
+    }
+
+    function selectTaskScope(scope) {
+      const viewState = captureViewState();
+      selectedMilestoneId = scope;
+      renderWorkspace();
+      restoreViewState(viewState);
     }
 
     function currentMilestoneFilter(milestones) {
-      if (!["all", "independent"].includes(selectedMilestoneId) && !milestones.some(item => item.id === selectedMilestoneId && item.status === "active")) selectedMilestoneId = "all";
+      if (selectedMilestoneId !== "all" && !milestones.some(item => item.id === selectedMilestoneId && item.status === "active")) selectedMilestoneId = "all";
       return selectedMilestoneId;
     }
 
@@ -838,18 +834,8 @@ export function renderBoardClient(accessToken: string): string {
 
     function workspaceContent(tasks, milestones, taskFilter) {
       if (workspaceTab === "milestones") return milestoneView.list(milestones, milestoneStatusFilter);
-      const visibleTasks = milestoneView.filterTasks(tasks, taskFilter, showTaskHistory ? "history" : "current");
-      const visibleColumns = columns.filter(([key]) => showTaskHistory === ["done", "cancelled"].includes(key));
-      const historyCount = milestoneView.filterTasks(tasks, "independent", "history").length;
-      const historyButton = showTaskHistory || historyCount
-        ? '<button class="quiet-button" type="button" data-task-history>'+ (showTaskHistory ? '返回当前任务' : '独立任务历史 · '+historyCount)+'</button>' : '';
-      const taskTitle = showTaskHistory ? "独立任务历史" : taskFilter === "all" ? "全部未完成任务" : taskFilter === "independent" ? "独立任务" : milestones.find(item => item.id === taskFilter).title;
-      const taskHeading = !showTaskHistory && !["all", "independent"].includes(taskFilter)
-        ? '<button class="quiet-button" type="button" data-open-milestone="'+escapeHtml(taskFilter)+'">'+escapeHtml(taskTitle)+' · '+visibleTasks.length+' 项任务 · 目标详情 ↗</button>'
-        : '<span>'+escapeHtml(taskTitle)+' · '+visibleTasks.length+'</span>';
-      return (showTaskHistory ? '' : milestoneView.activeFilters(milestones, taskFilter))+
-        '<div class="workspace-task-tools">'+taskHeading+historyButton+'</div>'+
-        renderTaskBoard(visibleTasks, visibleColumns);
+      const visibleTasks = milestoneView.filterTasks(tasks, taskFilter);
+      return milestoneView.activeFilters(milestones, taskFilter)+renderTaskBoard(visibleTasks, columns);
     }
 
     function renderWorkspace() {
@@ -1179,17 +1165,17 @@ export function renderBoardClient(accessToken: string): string {
         : '';
       const activityTimeline = renderActivityHistory(task.id, activities, currentDecisionRequest?.id);
       const controls = [
-        task.status === "blocked" && !currentSnapshot()?.project.archivedAt && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry>重试</button>' : ''
+        task.status === "blocked" && !currentSnapshot()?.project.archivedAt && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry>重试</button>' : '',
+        task.canCancel ? '<button class="action-button danger" type="button" data-cancel-task>取消任务</button>' : ''
       ].filter(Boolean).join("");
       host.innerHTML =
-        '<header class="detail-head">'+(openedMilestoneId ? '<button class="quiet-button" type="button" data-back-milestone>← 里程碑</button>' : '<strong>任务详情</strong>')+'<button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
+        '<header class="detail-head"><div class="detail-heading"><strong>任务详情</strong>'+(task.milestoneTitle ? '<span aria-hidden="true">·</span><button class="detail-milestone-link" type="button" '+(openedMilestoneId ? 'data-back-milestone' : 'data-open-milestone="'+escapeHtml(task.milestoneId)+'"')+' title="'+escapeHtml(task.milestoneTitle)+'">'+escapeHtml(task.milestoneTitle)+'</button>' : '')+'</div><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
         '<div class="detail-body">'+
           '<div class="detail-status"><span></span>'+escapeHtml(label(task.displayStatus))+'</div>'+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
-          (task.milestoneTitle && !openedMilestoneId ? '<button type="button" class="task-milestone" data-open-milestone="'+escapeHtml(task.milestoneId)+'">'+escapeHtml(task.milestoneTitle)+'</button>' : '')+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
           (task.milestoneWait ? '<section class="milestone-task-wait"><b>等待前置结果</b><p>'+escapeHtml(task.milestoneWait.summary)+'</p>'+(task.milestoneWait.threadId ? '<a href="codex://threads/'+escapeHtml(task.milestoneWait.threadId)+'">打开里程碑对话 ↗</a>' : '')+'</section>' : '')+
-          (controls ? '<div class="detail-actions">'+controls+'</div>' : '')+cancellation+scheduledResume+integrationWait+currentConversation+
+          (controls ? '<div class="detail-actions">'+controls+'</div><p class="task-action-status" role="status" aria-live="polite"></p>' : '')+cancellation+scheduledResume+integrationWait+currentConversation+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+
           '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.displayStatus))+'</dd>'+
@@ -1219,6 +1205,22 @@ export function renderBoardClient(accessToken: string): string {
           copyTaskId.textContent = "复制 ID";
           copyTaskId.classList.remove("copied");
         }, 1600);
+      });
+      host.querySelector("[data-cancel-task]")?.addEventListener("click", async event => {
+        const button = event.currentTarget;
+        const status = host.querySelector(".task-action-status");
+        button.disabled = true;
+        status.textContent = "正在取消…";
+        try {
+          await command("task.control", {
+            taskId: task.id, action: "cancel", decisionBasis: "user_confirmed",
+            reason: "用户在任务详情中取消任务"
+          });
+          await refreshCurrentTaskAndProject();
+        } catch (error) {
+          status.textContent = error.message;
+          button.disabled = false;
+        }
       });
       host.querySelector("[data-retry]")?.addEventListener("click", async () => {
         await command("task.control", { taskId: task.id, action: "retry" });

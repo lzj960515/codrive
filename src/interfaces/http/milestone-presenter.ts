@@ -14,13 +14,8 @@ export interface MilestoneView {
 
 /** 此函数同时供页面内联脚本和展示行为测试使用。 */
 export function createMilestonePresenter(escapeHtml: (value: string) => string) {
-  function filterTasks<T extends { milestoneId?: string | null; status?: string }>(tasks: T[], selected: string, visibility: "all" | "current" | "history" = "all"): T[] {
-    return tasks.filter(task => {
-      const terminal = task.status === "done" || task.status === "cancelled";
-      if (visibility === "history") return !task.milestoneId && terminal;
-      if (visibility === "current" && terminal) return false;
-      return selected === "all" || (selected === "independent" ? !task.milestoneId : task.milestoneId === selected);
-    });
+  function filterTasks<T extends { milestoneId?: string | null }>(tasks: T[], selected: string): T[] {
+    return tasks.filter(task => selected === "all" || task.milestoneId === selected);
   }
 
   function state(milestone: MilestoneView): string {
@@ -33,15 +28,16 @@ export function createMilestonePresenter(escapeHtml: (value: string) => string) 
 
   function activeFilters(milestones: MilestoneView[], selected: string): string {
     const active = milestones.filter(milestone => milestone.status === "active");
-    const scopeButtons = [{ id: "all", title: "全部未完成" }, { id: "independent", title: "独立任务" }].map(option =>
-      '<button class="milestone-scope" type="button" data-milestone-filter="' + option.id + '" aria-pressed="' + (selected === option.id) + '">' + option.title + '</button>',
-    ).join("");
     const goals = active.map(milestone =>
-      '<button class="milestone-filter" type="button" data-milestone-filter="' + escapeHtml(milestone.id) + '" aria-pressed="' + (selected === milestone.id) + '" data-state="' + state(milestone) + '">' +
-      '<span class="milestone-heading"><strong>' + escapeHtml(milestone.title) + '</strong><span class="milestone-state">' + escapeHtml(milestone.statusLabel) + '</span></span>' +
-      '<span class="milestone-excerpt">' + escapeHtml(summary(milestone)) + '</span></button>',
+      '<div class="milestone-filter-card" data-state="' + state(milestone) + '">' +
+      '<div class="milestone-filter-heading"><button class="milestone-filter" type="button" data-milestone-filter="' + escapeHtml(milestone.id) + '" aria-pressed="' + (selected === milestone.id) + '" title="' + escapeHtml(milestone.title) + '"><strong>' + escapeHtml(milestone.title) + '</strong></button>' +
+      '<button class="milestone-detail-link" type="button" data-open-milestone="' + escapeHtml(milestone.id) + '" aria-label="查看' + escapeHtml(milestone.title) + '详情">详情</button>' +
+      '<span class="milestone-state">' + escapeHtml(milestone.statusLabel) + '</span></div>' +
+      '<span class="milestone-excerpt" title="' + escapeHtml(summary(milestone)) + '">' + escapeHtml(summary(milestone)) + '</span></div>',
     ).join("");
-    return '<nav class="milestone-filters" aria-label="按里程碑筛选未完成任务">' + scopeButtons + goals + '</nav>';
+    if (!active.length) return "";
+    return '<nav class="milestone-filters" aria-label="筛选任务"><div class="milestone-filter-options">' + goals + '</div><button class="milestone-reset" type="button" data-milestone-filter="all"' + (selected === "all" ? ' disabled' : '') + '>重置</button></nav>';
+
   }
 
   function list(milestones: MilestoneView[], filter: "all" | "active" | "done"): string {

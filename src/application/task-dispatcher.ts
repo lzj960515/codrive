@@ -17,6 +17,7 @@ export interface TaskConversationAttachment {
 }
 
 export interface TaskDispatcher {
+  isThreadActive(threadId: string): Promise<boolean>;
   attachConversation(
     request: DispatchRequest,
   ): Promise<TaskConversationAttachment>;

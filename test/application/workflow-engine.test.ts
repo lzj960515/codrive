@@ -4221,4 +4221,85 @@ describe("WorkflowEngine", () => {
     });
     expect(projectExecutor.interrupted).toHaveLength(1);
   });
+  describe("user task cancellation", () => {
+    const cancellation = { cancelledBy: "user" as const, decisionBasis: "user_confirmed" as const, reason: "用户在任务详情中取消任务" };
+
+    it.each(["work", "review", "integrate"] as const)("rejects an active %s turn without interrupting it", async action => {
+      const created = await registerProject(1);
+      const task = action === "work" ? created.tasks[0]! : await bindNoCodeWork(store, created.project.id, created.tasks[0]!, "work-result");
+      const status = action === "work" ? "working" : action === "review" ? "reviewing" : "integrating";
+      await store.saveTask(created.project.id, { ...task, status, currentExecution: {
+        attemptId: "busy", reportOpportunityId: "op", action, status: "running", threadId: "busy-thread", turnId: "busy-turn", startedAt: now.toISOString(), modelRouting: testModelRouting(),
+        ...(task.workActivityId ? { workActivityId: task.workActivityId } : {}),
+      }});
+      await expect(workflow.cancelTask(task.id, cancellation)).rejects.toThrow(/正在执行/);
+      expect((await store.findTask(task.id))!.task.status).toBe(status);
+      expect(taskDispatcher.interrupted).toHaveLength(0);
+    });
+
+    it.each(["pending", "awaiting_report"] as const)("rejects %s before its turn has ended", async status => {
+      const created = await registerProject(1);
+      const task = created.tasks[0]!;
+      await store.saveTask(created.project.id, { ...task, status: "working", currentExecution: {
+        attemptId: "busy", reportOpportunityId: "op", action: "work", status, startedAt: now.toISOString(), modelRouting: testModelRouting(),
+      }});
+      await expect(workflow.cancelTask(task.id, cancellation)).rejects.toThrow(/正在执行/);
+    });
+
+    it.each(["waiting_for_input", "waiting_for_resume", "retry_scheduled", "failed", "interrupted", "awaiting_report"] as const)("allows cancellation during %s when no turn is active", async status => {
+      const created = await registerProject(1);
+      const task = created.tasks[0]!;
+      await store.saveTask(created.project.id, { ...task, status: "blocked", currentExecution: {
+        attemptId: "idle", reportOpportunityId: "op", action: "work", status, threadId: "idle-thread", turnId: "ended-turn", startedAt: now.toISOString(), turnCompletedAt: now.toISOString(), modelRouting: testModelRouting(),
+        ...(status === "waiting_for_resume" ? { scheduledResume: { resumeAt: "2026-08-04T00:00:00.000Z", reason: "等待服务恢复", resumePrompt: "检查服务" } } : {}),
+      }});
+      const cancelled = await workflow.cancelTask(task.id, cancellation);
+      expect(cancelled.status).toBe("cancelled");
+      expect(taskDispatcher.interrupted).toHaveLength(0);
+      expect(cancelled.currentExecution).not.toHaveProperty("scheduledResume");
+      await workflow.resumeScheduledTasks(new Date("2026-08-05T00:00:00.000Z"));
+      expect((await store.findTask(task.id))!.task.status).toBe("cancelled");
+    });
+
+    it("rejects cancellation when a waiting conversation was manually continued", async () => {
+      const created = await registerProject(1);
+      const task = created.tasks[0]!;
+      await store.saveTask(created.project.id, { ...task, status: "waiting_for_input", currentExecution: {
+        attemptId: "waiting", reportOpportunityId: "op", action: "work", status: "waiting_for_input", threadId: "continued-thread", startedAt: now.toISOString(), modelRouting: testModelRouting(),
+      }});
+      taskDispatcher.conversationActive = true;
+      await expect(workflow.cancelTask(task.id, cancellation)).rejects.toThrow(/正在执行/);
+      expect(taskDispatcher.interrupted).toHaveLength(0);
+    });
+
+    it("rejects cancellation when a blocked task resumes its retained conversation", async () => {
+      const created = await registerProject(1);
+      const task = created.tasks[0]!;
+      await finishProjectExecution({ projectId: created.project.id, outcome: "selected", summary: "开始", taskIds: [task.id] });
+      await finishTaskExecution(task.id, { outcome: "blocked", summary: "排查依赖" });
+      expect((await store.findTask(task.id))!.task.currentExecution).toBeUndefined();
+      taskDispatcher.conversationActive = true;
+      await expect(workflow.cancelTask(task.id, cancellation)).rejects.toThrow(/正在执行/);
+      expect((await store.findTask(task.id))!.task.status).toBe("blocked");
+      expect(taskDispatcher.interrupted).toHaveLength(0);
+    });
+
+    it("checks current execution after a queued dispatch rather than trusting the earlier idle view", async () => {
+      const created = await registerProject(1);
+      const task = created.tasks[0]!;
+      let releaseDispatch!: () => void;
+      const dispatchGate = new Promise<void>(resolve => { releaseDispatch = resolve; });
+      const dispatchStarted = new Promise<void>(resolve => {
+        taskDispatcher.beforeStartTurn = async () => { resolve(); await dispatchGate; };
+      });
+      const selection = finishProjectExecution({ projectId: created.project.id, outcome: "selected", summary: "开始", taskIds: [task.id] });
+      await dispatchStarted;
+      const cancellationResult = expect(workflow.cancelTask(task.id, cancellation)).rejects.toThrow(/正在执行/);
+      releaseDispatch();
+      await selection;
+      await cancellationResult;
+      expect(taskDispatcher.started).toHaveLength(1);
+    });
+  });
+
 });

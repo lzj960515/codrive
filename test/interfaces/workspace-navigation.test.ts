@@ -10,7 +10,7 @@ const milestone = {
 const task = {
   id: "task", projectId: "archived", milestoneId: "goal", milestoneTitle: "首版可用",
   title: "实现问候", description: "显示 Hello World", status: "done", displayStatus: "done",
-  acceptanceCriteria: ["显示问候"], reviewCount: 1,
+  acceptanceCriteria: ["显示问候"], reviewCount: 1, cancellation: null as { reason: string } | null,
 };
 const archived = {
   project: {
@@ -114,14 +114,44 @@ describe("workspace navigation", () => {
     expect(page.element("task-detail-content").innerHTML).toContain("问候验证通过");
   });
 
-  it("routes archived projects without milestones to independent task history", async () => {
-    const page = client("?project=archived&history=1", {
+  it("routes archived projects without milestones to the complete task board", async () => {
+    const page = client("?project=archived", {
       ...archived, milestones: [], tasks: [{ ...task, milestoneId: "", milestoneTitle: "" }],
     });
     await page.run("refresh()");
     expect(page.element("offline").style.display).toBe("none");
-    expect(page.element("archived-project-list").innerHTML).toContain("/?project=archived&history=1");
-    expect(page.element("project").innerHTML).toContain("独立任务历史");
+    expect(page.element("archived-project-list").innerHTML).toContain("/?project=archived");
     expect(page.element("project").innerHTML).toContain("实现问候");
+  });
+
+  it("filters task ownership without hiding completed or cancelled work", async () => {
+    const page = client("?project=archived", {
+      ...archived, milestones: [{ ...milestone, status: "active" }, { ...milestone, id: "past", title: "旧里程碑" }],
+      tasks: [task, { ...task, id: "independent", title: "独立完成项", milestoneId: "", milestoneTitle: "" },
+        { ...task, id: "cancelled", title: "独立取消项", milestoneId: "", milestoneTitle: "", status: "cancelled", cancellation: { reason: "测试取消" } },
+        { ...task, id: "past-task", title: "旧里程碑任务", milestoneId: "past" }],
+    });
+    await page.run("refresh()");
+    const all = page.element("project").innerHTML;
+    expect(all).toContain('data-milestone-filter="all" disabled>重置</button>');
+    expect(all).toContain("实现问候");
+    expect(all).toContain("独立完成项");
+    expect(all).toContain("独立取消项");
+    expect(all).toContain("旧里程碑任务");
+    expect(all).not.toContain('data-milestone-filter="past"');
+    expect(all).not.toContain('data-milestone-filter="independent"');
+    expect(all).not.toContain("独立任务历史");
+    expect(all).not.toContain("filter-label");
+    page.run('selectTaskScope("goal")');
+    const goal = page.element("project").innerHTML;
+    expect(goal).toContain('data-milestone-filter="goal" aria-pressed="true"');
+    expect(goal).toContain('data-column="done"');
+    expect(goal).toContain('data-column="cancelled"');
+    expect(goal).toContain("实现问候");
+    expect(goal).not.toContain("独立完成项");
+    expect(goal).not.toContain("workspace-task-tools");
+    page.run('selectTaskScope("all")');
+    expect(page.element("project").innerHTML).toContain("独立完成项");
+    expect(page.element("project").innerHTML).toContain("旧里程碑任务");
   });
 });

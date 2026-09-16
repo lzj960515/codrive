@@ -276,6 +276,43 @@ describe("HTTP API", () => {
     return response.json() as ProjectSnapshot;
   }
 
+  it("exposes cancellation for idle work and rejects a stale request after execution starts", async () => {
+    const created = await registerProject();
+    const task = created.tasks[0]!;
+    const headers = { "x-codrive-token": "secret" };
+    const detail = () => server.inject({ url: `/api/tasks/${task.id}`, headers });
+    expect((await detail()).json().task.canCancel).toBe(true);
+    await store.saveTask(created.project.id, { ...task, status: "working", currentExecution: {
+      attemptId: "busy", reportOpportunityId: "op", action: "work", status: "running", startedAt: task.createdAt, modelRouting: testModelRouting(),
+    }});
+    expect((await detail()).json().task.canCancel).toBe(false);
+    const cancel = () => command({ type: "task.control", payload: {
+      taskId: task.id, action: "cancel", decisionBasis: "user_confirmed", reason: "用户在任务详情中取消任务",
+    }});
+    expect((await cancel()).statusCode).toBe(409);
+    expect((await store.findTask(task.id))!.task.status).toBe("working");
+    await store.saveTask(created.project.id, { ...task, status: "blocked" });
+    expect((await detail()).json().task.canCancel).toBe(true);
+    expect((await cancel()).statusCode).toBe(200);
+    expect((await detail()).json().task).toMatchObject({
+      status: "cancelled", canCancel: false, cancellation: { cancelledBy: "user", decisionBasis: "user_confirmed" },
+    });
+    const activities = await store.listTaskActivities(created.project.id, task.id);
+    expect(activities.at(-1)).toMatchObject({ type: "cancelled", summary: "用户在任务详情中取消任务" });
+    expect(taskDispatcher.interrupted).toHaveLength(0);
+  });
+
+  it("hides cancellation on completed tasks and archived projects", async () => {
+    const created = await registerProject();
+    const task = created.tasks[0]!;
+    const detail = () => server.inject({ url: `/api/tasks/${task.id}`, headers: { "x-codrive-token": "secret" } });
+    await store.saveTask(created.project.id, { ...task, status: "done" });
+    expect((await detail()).json().task.canCancel).toBe(false);
+    await store.saveTask(created.project.id, task);
+    await store.saveProject({ ...created.project, archivedAt: new Date().toISOString(), scheduling: "paused" });
+    expect((await detail()).json().task.canCancel).toBe(false);
+  });
+
   async function appendTaskReportActivity(
     projectId: string,
     action: TaskAction,
@@ -2216,7 +2253,7 @@ describe("HTTP API", () => {
     expect(page.body).toContain("navigator.clipboard.writeText(task.id)");
     expect(page.body).toContain("复制任务 ID");
     expect(page.body).toContain("取消理由");
-    expect(page.body).not.toContain("data-cancel-task");
+    expect(page.body).toContain("data-cancel-task");
     expect(page.body).not.toContain('data-project-action="cancel"');
     expect(page.body).toContain('id="mobile-projects"');
     expect(page.body).toContain("验收标准");

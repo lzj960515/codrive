@@ -298,11 +298,11 @@ describe("RecoveryManager", () => {
     expect(suppressed).toContain("project_paused");
   });
 
-  it("ignores the interrupted notification produced by task cancellation", async () => {
+  it("ignores the interrupted notification produced by agent-directed task cancellation", async () => {
     const execution = (await store.findTask(taskId))!.task.currentExecution!;
     await workflow.cancelTask(taskId, {
-      cancelledBy: "user",
-      decisionBasis: "user_confirmed",
+      cancelledBy: "codex",
+      decisionBasis: "agent_decision",
       reason: "Stop this task",
     });
 

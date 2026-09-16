@@ -1,3 +1,4 @@
+import { taskCanBeCancelled } from "../../domain/workflow.js";
 import { milestoneTaskWait } from "./milestone-view.js";
 import { projectTaskActivities } from "../../domain/task-activity.js";
 import type { Project, ProjectSnapshot, Task } from "../../domain/types.js";
@@ -66,6 +67,7 @@ export async function createTaskDetailView(
       currentExecution,
       modelRouting: task.currentExecution?.modelRouting ?? null,
       cancellation: task.cancellation ?? null,
+      canCancel: taskCanBeCancelled(project, task),
       reviewCount: projection.conversations.reviewCount,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
