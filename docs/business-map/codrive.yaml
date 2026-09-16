@@ -2,18 +2,37 @@ schemaVersion: 1
 map:
   id: codrive
   title: Codrive
-  summary: Codrive uses one global opt-in, read at ordinary task-turn dispatch and again when a completed Integration is consumed, to govern task-time business understanding and reviewed, repository-scoped Semantic Atlas maintenance.
+  summary: Codrive coordinates local product work with global or project-specific model settings and opt-in, reviewed, repository-scoped Semantic Atlas maintenance.
 
 nodes:
   - id: codrive
     kind: domain
     name: Codrive
-    summary: Coordinates local product tasks and opt-in, reviewed business-map maintenance after their completed integrations.
+    summary: Coordinates local product tasks, their effective model settings, and opt-in, reviewed business-map maintenance after their completed integrations.
     aliases: []
     anchors:
       - kind: document
         value: AGENTS.md
         description: Current product and task-lifecycle contract.
+
+  - id: codrive.model-settings
+    kind: capability
+    name: Global and project model settings
+    summary: Projects inherit global primary and fallback models with independently selected reasoning effort, or replace the complete pair with project settings; clearing the override restores global inheritance for planning and task turns.
+    notes: Settings changes apply at the next turn and preserve active turns. Capacity fallback uses the fallback model's own effort. Available models and supported efforts come from the Codex model catalog; an omitted effort uses the selected model's default.
+    aliases:
+      - Model routing
+      - Reasoning effort settings
+    anchors:
+      - kind: file
+        value: src/application/system-settings-service.ts
+        description: Global and project settings, catalog validation, and effective configuration.
+      - kind: file
+        value: src/application/model-routing.ts
+        description: Next-turn settings and independent primary and fallback reasoning effort.
+      - kind: file
+        value: test/application/workflow-engine.test.ts
+        description: Active-turn preservation and new effort settings on planning retries and task resumes.
 
   - id: codrive.semantic-atlas-automatic-maintenance
     kind: capability
@@ -42,6 +61,11 @@ nodes:
         description: Starts repository-scoped reconciliation after task completion.
 
 relations:
+  - from: codrive.model-settings
+    type: part_of
+    to: codrive
+    summary: Model settings govern the models and reasoning effort used by Codrive planning and task turns.
+
   - from: codrive.semantic-atlas-automatic-maintenance
     type: part_of
     to: codrive
