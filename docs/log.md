@@ -2,6 +2,8 @@
 
 ## 2026-09-16
 
+- Replaced the default patch release rule with change-based version selection: new product capabilities require minor, while fixes and maintenance use patch; assess the complete unpublished change set.
+
 - Fixed the global settings return link so the page renders independently of project details, with an executed-client navigation regression test.
 - Kept milestone filter cards compact when summaries are long and constrained their width to the available space on narrow screens.
 

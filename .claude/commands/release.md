@@ -11,16 +11,22 @@ step. The local command verifies and versions the release, then pushes its Git
 commit and tag. The `Release` GitHub Actions workflow owns npm authentication
 and publication through the protected `npm` environment.
 
-## Version input
+## Version selection
 
-`$ARGUMENTS` must be one of:
+An explicit `$ARGUMENTS` value is `patch` or `minor`; follow the user's chosen
+release type. When omitted, select the type from the complete change set between
+the currently published version's Git tag and the release candidate. Read both
+the commits and their resulting diff to identify the user-visible changes.
 
-- `patch` for backward-compatible fixes.
-- `minor` for backward-compatible features.
+- Choose `minor` when the release adds product capabilities or extends the
+  workflow, including a release that combines features with fixes. Milestones
+  and continuous planning are a feature release: `0.11.x` becomes `0.12.0`.
+- Choose `patch` when the release contains only backward-compatible fixes or
+  maintenance. Subsequent settings-page or layout fixes to `0.12.0` become
+  `0.12.1`.
 
-Use `patch` when no argument is provided. Commit the release candidate before
-starting this workflow so `npm version` creates a dedicated version commit and
-tag.
+Commit the release candidate before starting this workflow so `npm version`
+creates a dedicated version commit and tag.
 
 ## Execution steps
 
@@ -42,7 +48,9 @@ npm view codrive version --json
 ```
 
 The local `package.json` version must equal the published npm version before
-bumping. Resolve version drift before creating a release commit.
+bumping. Resolve version drift before creating a release commit. Apply the
+version-selection rule above and briefly state the selected type, target version,
+and reason before proceeding.
 
 ### 3. Verify the package
 
