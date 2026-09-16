@@ -2,6 +2,8 @@
 
 ## 2026-09-16
 
+- Condensed both READMEs to the product essentials, removed business-specific examples and interface instructions, and refreshed the board screenshot using the current UI with synthetic reading-project data.
+
 - Rewrote both READMEs around goals, evolving milestone plans, independent review, and evidence-based acceptance; simplified onboarding and daily-use examples, removed the technical diagram, and linked implementation details to their owning documents.
 
 - Moved task retry and cancellation into compact controls beside the task status; kept early resume and rescheduling together in the scheduled-resume card.
