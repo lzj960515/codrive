@@ -2235,9 +2235,9 @@ describe("HTTP API", () => {
     expect(page.body).toContain("用 Codrive 的方式帮我做一个经营太空货运公司的游戏");
     expect(page.body).toContain("Codrive 更新");
     expect(page.body).toContain("数据保存在本机");
-    expect(page.body).toContain("当前对话");
-    expect(page.body).toContain("打开当前对话");
-    expect(page.body).toContain("前往当前对话回复");
+    expect(page.body).toContain('aria-label="当前执行"');
+    expect(page.body).toContain("打开对话");
+    expect(page.body).toContain("前往回复");
     expect(page.body).toContain("前往对应对话回复");
     expect(page.body).toContain("data-activity-thread");
     expect(page.body).toContain("历史决定请求");

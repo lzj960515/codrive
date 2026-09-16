@@ -37,7 +37,9 @@ export function createExecutionActivityRenderer(
     marker.className = "current-activity-marker";
     marker.setAttribute("aria-hidden", "true");
     const copy = options.createElement("span");
+    copy.className = "current-activity-copy";
     copy.textContent = activity.label;
+    copy.title = activity.label;
     next.append(marker, copy);
     if (activity.occurredAt) {
       const occurredAt = options.createElement("time") as HTMLTimeElement;

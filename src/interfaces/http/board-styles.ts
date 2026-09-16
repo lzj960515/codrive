@@ -333,6 +333,14 @@ export const boardStyles = `
   .detail-body { min-width: 0; max-width: 100%; padding: 22px 22px 42px; }
   .detail-status { display: flex; gap: 7px; align-items: center; margin-bottom: 11px; color: var(--signal); font: 900 10px/1 var(--condensed); letter-spacing: .1em; text-transform: uppercase; }
   .detail-status span { width: 8px; height: 8px; background: currentColor; border-radius: 50%; }
+  .task-status-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 11px; }
+  .task-status-row .detail-status { margin-bottom: 0; }
+  .task-status-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .task-action-button { min-height: 26px; padding: 4px 8px; color: #59665e; background: transparent; border: 1px solid var(--line-strong); border-radius: 6px; cursor: pointer; font: 600 11px/1.4 var(--ui); }
+  .task-action-button:hover:enabled { color: #24483d; background: #f0f4ef; border-color: #aebcaf; }
+  .task-action-button.danger:hover:enabled { color: #a13d2f; background: #fff3ef; border-color: #dfb3a8; }
+  .task-action-button:disabled { opacity: .5; cursor: default; }
+  .task-action-button:focus-visible, .current-conversation-link:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
   .task-id-row { display: flex; gap: 8px; align-items: center; margin-bottom: 13px; }
   .task-id-row code { min-width: 0; overflow: hidden; color: #64706a; font: 600 10px/1.3 ui-monospace, "SFMono-Regular", monospace; text-overflow: ellipsis; white-space: nowrap; }
   .copy-id-button { flex: none; padding: 5px 8px; color: #41504a; background: #eef1ed; border: 1px solid #d8ddd8; border-radius: 7px; cursor: pointer; font: 800 9px/1 var(--condensed); letter-spacing: .04em; }
@@ -364,21 +372,22 @@ export const boardStyles = `
   .cancellation-card small, .cancellation-meta { display: block; margin-top: 9px; color: #9d655c; font-size: 10px; }
   .planning-notice.cancellation, .planning-panel.cancellation { color: #71342b; background: #fff0ed; border-color: #e9b8af; }
   .planning-notice.blocked, .planning-panel.blocked { color: #71342b; background: #fff0ed; border-color: #e9b8af; }
-  .current-conversation { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 14px; align-items: center; margin-top: 20px; padding: 14px; background: linear-gradient(135deg, #f8fbf8, #edf4f0); border: 1px solid #cbdcd3; border-radius: 13px; box-shadow: 0 8px 22px rgba(25,39,33,.055); }
-  .current-conversation-copy { display: grid; min-width: 0; gap: 7px; }
-  .current-conversation-copy > span { color: #75817b; font: 900 9px/1 var(--condensed); letter-spacing: .12em; text-transform: uppercase; }
-  .current-conversation-copy > div { display: flex; min-width: 0; gap: 7px; align-items: center; color: #24483d; font-size: 12px; }
-  .current-conversation-copy b, .current-conversation-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .current-conversation { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px 12px; align-items: center; margin-top: 16px; padding: 10px 12px; background: #f5f8f4; border: 1px solid #dce5dc; border-radius: 8px; }
+  .current-conversation-copy { display: flex; min-width: 0; gap: 6px; align-items: center; color: #64756a; font-size: 11px; }
+  .current-conversation-copy b { flex-shrink: 0; color: #31594b; font-weight: 600; }
+  .current-conversation-copy > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .current-conversation-copy i { color: #a3aea8; font-style: normal; }
-  .current-conversation .detail-link { min-height: 34px; padding-inline: 12px; white-space: nowrap; }
-  .current-execution-activity { position: relative; display: grid; grid-column: 1 / -1; min-height: 35px; overflow: hidden; border-top: 1px solid rgba(89,119,105,.16); }
-  .current-activity-entry { display: grid; grid-area: 1 / 1; grid-template-columns: auto minmax(0,1fr) auto; gap: 9px; align-items: center; padding: 10px 2px 0; color: #31594b; font-size: 11px; font-weight: 750; }
+  .current-conversation-link { padding: 3px 0; color: #547561; font-size: 11px; text-underline-offset: 3px; white-space: nowrap; }
+  .current-conversation-link:hover { color: #a94628; }
+  .current-execution-activity { position: relative; display: grid; grid-column: 1 / -1; min-width: 0; min-height: 22px; overflow: hidden; }
+  .current-activity-entry { display: grid; min-width: 0; grid-area: 1 / 1; grid-template-columns: auto minmax(0,1fr) auto; gap: 7px; align-items: center; padding: 2px 0; color: #31594b; font-size: 11px; line-height: 1.5; font-weight: 500; }
+  .current-activity-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .current-activity-entry.entering { animation: activity-roll-in .3s cubic-bezier(.2,.8,.2,1) both; }
   .current-activity-entry.leaving { animation: activity-roll-out .3s cubic-bezier(.2,.8,.2,1) both; }
-  .current-activity-marker { width: 7px; height: 7px; background: var(--signal); border-radius: 50%; box-shadow: 0 0 0 4px rgba(244,91,53,.11); }
+  .current-activity-marker { width: 5px; height: 5px; background: var(--signal); border-radius: 50%; }
   .current-activity-entry time { color: #8a9690; font-size: 9px; font-weight: 600; white-space: nowrap; }
   .current-activity-waiting { color: #84908a; font-weight: 600; }
-  .current-activity-waiting .current-activity-marker { background: #aeb8b2; box-shadow: 0 0 0 4px rgba(112,130,120,.09); }
+  .current-activity-waiting .current-activity-marker { background: #aeb8b2; }
   .activity-section { margin-inline: 0; }
   .activity-history { min-width: 0; max-width: 100%; }
   .activity-history-reveal { display: flex; width: calc(100% - 24px); min-height: 40px; align-items: center; gap: 9px; margin: 0 0 13px 24px; padding: 9px 11px; color: #58645e; background: linear-gradient(135deg, #fbfcf9, #f4f7f3); border: 1px solid #d9dfda; border-radius: 10px; box-shadow: 0 3px 10px rgba(25,39,33,.035); cursor: pointer; text-align: left; }
@@ -603,8 +612,6 @@ export const boardStyles = `
     .column { scroll-snap-align: start; }
     .task-detail { width: 100vw; }
     .detail-body { padding: 20px 18px 38px; }
-    .current-conversation { grid-template-columns: 1fr; }
-    .current-conversation .detail-link { width: 100%; }
     .activity-card header { align-items: flex-start; flex-direction: column; gap: 7px; }
     .activity-card-actions { width: 100%; justify-content: space-between; }
     .activity-git { grid-template-columns: 60px minmax(0,1fr); }

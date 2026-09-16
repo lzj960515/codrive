@@ -90,6 +90,30 @@ function client(search: string, snapshot = archived, pathname = "/") {
 }
 
 describe("workspace navigation", () => {
+  it.each([
+    { status: "backlog", canCancel: true, currentExecution: null, buttons: ["data-cancel-task"] },
+    { status: "blocked", canCancel: true, currentExecution: null, buttons: ["data-retry", "data-cancel-task"] },
+    { status: "blocked", canCancel: true, currentExecution: { action: "work", status: "waiting_for_resume", scheduledResume: { reason: "等待自然周期", resumeAt: "2026-09-17T00:00:00Z" } }, buttons: ["data-cancel-task"] },
+    { status: "working", canCancel: false, currentExecution: { action: "work", status: "running", threadId: "thread" }, buttons: [] },
+    { status: "done", canCancel: false, currentExecution: null, buttons: [] },
+  ])("keeps $status task controls beside its status", ({ status, canCancel, currentExecution, buttons }) => {
+    const page = client("?project=archived&task=task");
+    page.run(`taskDetail = ${JSON.stringify({ task: { ...task, status, displayStatus: status, canCancel, currentExecution }, activities: [], currentDecisionRequest: null })}; renderTaskDetail();`);
+    const content = page.element("task-detail-content").innerHTML;
+    const statusRow = content.slice(content.indexOf('class="task-status-row"'), content.indexOf('class="task-id-row"'));
+    for (const selector of ["data-retry", "data-cancel-task"]) {
+      if (buttons.some(button => button === selector)) expect(statusRow).toContain(selector);
+      else expect(content).not.toContain(selector);
+    }
+    expect(statusRow).not.toContain("data-continue-now");
+    if (currentExecution?.scheduledResume) {
+      const scheduleCard = content.match(/<section class="scheduled-resume-card">[\s\S]*?<\/section>/)?.[0];
+      expect(scheduleCard).toContain("data-continue-now");
+      expect(scheduleCard).toContain("data-reschedule-at");
+    } else expect(content).not.toContain("data-continue-now");
+    if (currentExecution?.threadId) expect(content).toContain('href="codex://threads/thread"');
+  });
+
   it("opens global settings and provides a working return link to the workspace", async () => {
     const page = client("", archived, "/settings");
     await page.run("refresh()");

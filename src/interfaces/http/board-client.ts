@@ -105,7 +105,7 @@ export function renderBoardClient(accessToken: string): string {
     const renderActivityEntry = createActivityRenderer({
       getHost: () => document.getElementById("current-execution-activity"),
       createElement: tagName => document.createElement(tagName),
-      formatTime,
+      formatTime: value => new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
       schedule: (callback, delay) => window.setTimeout(callback, delay)
     });
     const createUpdateRenderer = ${systemUpdateRenderer};
@@ -1151,31 +1151,32 @@ export function renderBoardClient(accessToken: string): string {
         ? '<div class="cancellation-card"><b>任务已取消</b><p>此任务来自旧版本，未保存结构化取消理由。</p><small>'+escapeHtml(formatTime(task.updatedAt))+'</small></div>'
         : '';
       const scheduledResume = task.currentExecution?.scheduledResume
-        ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="action-button" type="button" data-continue-now>提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at></label><button class="action-button" type="button" data-reschedule>保存时间</button></div></section>'
+        ? '<section class="scheduled-resume-card"><div><b>计划恢复</b><p>'+escapeHtml(task.currentExecution.scheduledResume.reason)+'</p><time>'+escapeHtml(formatTime(task.currentExecution.scheduledResume.resumeAt))+'</time></div><div class="scheduled-resume-actions"><button class="task-action-button" type="button" data-continue-now>提前继续</button><label>重新安排<input type="datetime-local" data-reschedule-at></label><button class="action-button" type="button" data-reschedule>保存时间</button></div></section>'
         : '';
       const integrationWait = task.integrationWait
         ? '<section class="integration-wait-card"><p>'+escapeHtml(task.integrationWait.message)+'</p></section>'
         : '';
       const currentConversation = task.currentExecution
-        ? '<section class="current-conversation">'+
-            '<div class="current-conversation-copy"><span>当前对话</span><div><b>'+escapeHtml(label(task.currentExecution.action))+'</b><i aria-hidden="true">·</i><strong>'+escapeHtml(label(task.currentExecution.status))+'</strong></div></div>'+
-            (task.currentExecution.threadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(task.currentExecution.threadId)+'">'+(task.currentExecution.status === "waiting_for_input" ? "前往当前对话回复" : "打开当前对话")+' <span>↗</span></a>' : '')+
+        ? '<section class="current-conversation" aria-label="当前执行">'+
+            '<div class="current-conversation-copy"><b>'+escapeHtml(label(task.currentExecution.action))+'</b><i aria-hidden="true">·</i><span>'+escapeHtml(label(task.currentExecution.status))+'</span></div>'+
+            (task.currentExecution.threadId ? '<a class="current-conversation-link" href="codex://threads/'+escapeHtml(task.currentExecution.threadId)+'">'+(task.currentExecution.status === "waiting_for_input" ? "前往回复" : "打开对话")+' ↗</a>' : '')+
             '<div id="current-execution-activity" class="current-execution-activity" role="status" aria-live="polite" aria-atomic="true"></div>'+
           '</section>'
         : '';
       const activityTimeline = renderActivityHistory(task.id, activities, currentDecisionRequest?.id);
       const controls = [
-        task.status === "blocked" && !currentSnapshot()?.project.archivedAt && !task.currentExecution?.scheduledResume ? '<button class="action-button" data-retry>重试</button>' : '',
-        task.canCancel ? '<button class="action-button danger" type="button" data-cancel-task>取消任务</button>' : ''
+        task.status === "blocked" && !currentSnapshot()?.project.archivedAt && !task.currentExecution?.scheduledResume ? '<button class="task-action-button" type="button" data-retry>重试</button>' : '',
+        task.canCancel ? '<button class="task-action-button danger" type="button" data-cancel-task>取消任务</button>' : ''
       ].filter(Boolean).join("");
       host.innerHTML =
         '<header class="detail-head"><div class="detail-heading"><strong>任务详情</strong>'+(task.milestoneTitle ? '<span aria-hidden="true">·</span><button class="detail-milestone-link" type="button" '+(openedMilestoneId ? 'data-back-milestone' : 'data-open-milestone="'+escapeHtml(task.milestoneId)+'"')+' title="'+escapeHtml(task.milestoneTitle)+'">'+escapeHtml(task.milestoneTitle)+'</button>' : '')+'</div><button id="close-detail" class="icon-button" type="button" aria-label="关闭任务详情">×</button></header>'+
         '<div class="detail-body">'+
-          '<div class="detail-status"><span></span>'+escapeHtml(label(task.displayStatus))+'</div>'+
+          '<div class="task-status-row"><div class="detail-status"><span></span>'+escapeHtml(label(task.displayStatus))+'</div>'+(controls ? '<div class="task-status-actions">'+controls+'</div>' : '')+'</div>'+
+          (controls ? '<p class="task-action-status" role="status" aria-live="polite"></p>' : '')+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
           (task.milestoneWait ? '<section class="milestone-task-wait"><b>等待前置结果</b><p>'+escapeHtml(task.milestoneWait.summary)+'</p>'+(task.milestoneWait.threadId ? '<a href="codex://threads/'+escapeHtml(task.milestoneWait.threadId)+'">打开里程碑对话 ↗</a>' : '')+'</section>' : '')+
-          (controls ? '<div class="detail-actions">'+controls+'</div><p class="task-action-status" role="status" aria-live="polite"></p>' : '')+cancellation+scheduledResume+integrationWait+currentConversation+
+          cancellation+scheduledResume+integrationWait+currentConversation+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+
           '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.displayStatus))+'</dd>'+

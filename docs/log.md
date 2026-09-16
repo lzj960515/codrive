@@ -2,6 +2,9 @@
 
 ## 2026-09-16
 
+- Moved task retry and cancellation into compact controls beside the task status; kept early resume and rescheduling together in the scheduled-resume card.
+- Simplified the current execution panel to two rows with an inline conversation link, short activity time, and full command tooltip.
+
 - Replaced the default patch release rule with change-based version selection: new product capabilities require minor, while fixes and maintenance use patch; assess the complete unpublished change set.
 
 - Fixed the global settings return link so the page renders independently of project details, with an executed-client navigation regression test.
