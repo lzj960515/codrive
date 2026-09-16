@@ -2,6 +2,9 @@
 
 ## 2026-09-16
 
+- Reconciled reviewed business-map candidates for milestone ownership and continuous planning, preserving discovery reassessment, affected-work restrictions, and evidence-based acceptance.
+- Added the source-verified model-settings capability, including complete project overrides, route-specific reasoning effort, and next-turn application.
+
 - Kept all task states visible in the task board, limited homepage filters to active milestone cards, and added an inline detail action plus filter reset.
 - Documented manual cancellation for idle tasks, serialized execution checks, and retained-conversation activity checks before cancellation.
 
