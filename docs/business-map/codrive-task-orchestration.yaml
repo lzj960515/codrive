@@ -2,13 +2,13 @@ schemaVersion: 1
 map:
   id: codrive.task-orchestration
   title: Codrive task orchestration
-  summary: Codrive gives each task an independent, persistent Review conversation, explicitly guides lifecycle-owned Skills, and lets codrive-task select content-specific Skills from authoritative stage context.
+  summary: Codrive plans milestone goals from current evidence, adjusts ordinary tasks as discoveries change the plan, and verifies goal completion while retaining independent Review and persistent role-owned conversations.
 
 nodes:
   - id: codrive.task-orchestration
     kind: domain
     name: Codrive task orchestration
-    summary: Coordinates each task's work, independent Review, and integration while preserving the conversation identity owned by each role.
+    summary: Coordinates milestone assessment, project-wide task selection, and each task's work, independent Review, and completion while preserving role-owned conversations.
     aliases: []
     anchors:
       - kind: document
@@ -50,6 +50,77 @@ nodes:
         value: README.md
         description: Describes short task messages and context-driven Skill selection.
 
+  - id: codrive.task-orchestration.product-facts
+    kind: data
+    name: Product facts
+    summary: PROJECT.md owns current product capabilities and long-term rules; adding a task or milestone does not require changing those facts.
+    aliases: [产品契约, 产品事实]
+    anchors:
+      - kind: document
+        value: docs/architecture/product-facts.md
+        description: Separates accepted product facts from task additions and milestone goals.
+
+  - id: codrive.task-orchestration.milestone
+    kind: data
+    name: Milestone
+    summary: A project milestone owns one stage goal, its accepted scope, acceptance criteria, and evidence-based completion; it stays active until assessed as done.
+    notes: Discoveries, assessments, and resolutions remain milestone activities. Unresolved questions and prerequisite deliveries restrict explicitly affected tasks without creating another milestone business status.
+    aliases: [里程碑, 阶段目标]
+    anchors:
+      - kind: file
+        value: src/domain/milestone.ts
+        description: Defines goals, reports, plans, and milestone activities.
+      - kind: file
+        value: src/domain/milestone-activity.ts
+        description: Resolves current questions and affected-task restrictions from activities.
+
+  - id: codrive.task-orchestration.task
+    kind: data
+    name: Task
+    summary: A concrete delivery optionally belongs to one milestone in its project and follows work, independent Review, and integration or completion judgment.
+    notes: Started tasks retain their accepted definitions and milestone membership. Unstarted tasks may be amended; invalidated deliveries can be cancelled and replaced with reasoned ordinary tasks.
+    aliases: [任务, 独立任务]
+    anchors:
+      - kind: file
+        value: src/domain/types.ts
+        description: Defines task ownership, execution, and report contracts.
+      - kind: file
+        value: src/domain/task-definition.ts
+        description: Limits definition changes to eligible unstarted tasks.
+
+  - id: codrive.task-orchestration.continuous-planning
+    kind: capability
+    name: Evidence-driven milestone planning
+    summary: A milestone owner assesses goals and new evidence, creates necessary tasks, revises unstarted work, and requests user decisions only for unresolved scope, business results, or permissions.
+    notes: Project selection chooses eligible tasks across milestones and independent work. Selection and assessment share one automatic planning position per project and use visible persistent conversations. Findings within accepted goals authorize investigation and omitted work; they do not expand the goal's authority.
+    aliases: [持续规划, 任务规划, 执行中发现, 计划调整]
+    anchors:
+      - kind: file
+        value: src/application/planning-coordinator.ts
+        description: Maintains persistent selection and milestone-assessment executions.
+      - kind: symbol
+        value: WorkflowEngine.reportDiscovery
+        description: Records a milestone task's non-terminal discovery and triggers reassessment.
+      - kind: symbol
+        value: WorkflowEngine.applyMilestoneAssessment
+        description: Applies accepted additions, updates, cancellations, and resolutions.
+      - kind: document
+        value: skills/codrive-task/references/planning.md
+        description: Defines evidence-based planning and the boundary for asking the user.
+
+  - id: codrive.task-orchestration.deliver-milestone
+    kind: scenario
+    name: Deliver a milestone through changing evidence
+    summary: Start from a goal, execute reviewed tasks, investigate discoveries while unrelated work continues, and accept completion only against current goal criteria and evidence.
+    aliases: [里程碑规划与验收]
+    anchors:
+      - kind: document
+        value: docs/architecture/milestones.md
+        description: Current milestone planning, restriction, decision, and acceptance contract.
+      - kind: file
+        value: test/application/milestone-workflow.test.ts
+        description: Exercises empty goals, concurrent discoveries, prerequisite waits, and completion boundaries.
+
 relations:
   - from: codrive.task-orchestration.independent-review-conversation
     type: part_of
@@ -60,4 +131,129 @@ relations:
     to: codrive.task-orchestration
     summary: Stage-specific Skill selection keeps content routing inside the task workflow while Codrive owns lifecycle guidance.
 
-flows: []
+  - from: codrive.task-orchestration.product-facts
+    type: part_of
+    to: codrive.task-orchestration
+    summary: Product facts provide the stable product context used by task planning.
+  - from: codrive.task-orchestration.milestone
+    type: part_of
+    to: codrive.task-orchestration
+    summary: Milestones define stage goals and acceptance independently of individual task completion.
+  - from: codrive.task-orchestration.task
+    type: part_of
+    to: codrive.task-orchestration
+    summary: Tasks are concrete deliveries whether independent or assigned to a milestone.
+  - from: codrive.task-orchestration.continuous-planning
+    type: part_of
+    to: codrive.task-orchestration
+    summary: Continuous planning coordinates goals, discoveries, and eligible work.
+  - from: codrive.task-orchestration.deliver-milestone
+    type: part_of
+    to: codrive.task-orchestration.continuous-planning
+    summary: Milestone delivery is the evidence-driven planning and acceptance scenario.
+  - from: codrive.task-orchestration.deliver-milestone
+    type: reads
+    to: codrive.task-orchestration.product-facts
+    summary: Planning uses current accepted product facts without rewriting them for every task.
+  - from: codrive.task-orchestration.deliver-milestone
+    type: writes
+    to: codrive.task-orchestration.milestone
+    summary: Assessment records plans, questions, resolutions, evidence, and goal completion.
+  - from: codrive.task-orchestration.deliver-milestone
+    type: writes
+    to: codrive.task-orchestration.task
+    summary: Accepted plans create milestone tasks, amend eligible definitions, or cancel invalidated work.
+
+flows:
+  - id: codrive.task-orchestration.deliver-milestone-flow
+    name: Deliver a milestone through changing evidence
+    summary: A goal can begin without tasks; discoveries and reviewed deliveries change its plan, unresolved choices restrict only affected work, and current evidence determines final acceptance.
+    scenario: codrive.task-orchestration.deliver-milestone
+    startsAt: assess-goal
+    steps:
+      - id: assess-goal
+        kind: action
+        name: Assess the goal and current evidence
+        summary: The owner reads accepted scope, product facts, task results, and unresolved activities in the milestone's persistent conversation.
+        concept: codrive.task-orchestration.milestone
+      - id: goal-satisfied
+        kind: decision
+        name: Is the milestone ready for acceptance?
+        summary: Current acceptance evidence must be sufficient and necessary work and unresolved sources must be closed; task counts alone cannot prove completion.
+      - id: complete-milestone
+        kind: outcome
+        name: Accept milestone completion
+        summary: Preserve the accepted goal and evidence and stop automatic assessment of the completed milestone.
+        concept: codrive.task-orchestration.milestone
+      - id: user-decision-needed
+        kind: decision
+        name: Does the next step need a business decision?
+        summary: Distinguish necessary work within accepted authority from changes to scope, business outcomes, or permissions.
+      - id: request-decision
+        kind: action
+        name: Ask the user and preserve affected-work restrictions
+        summary: Record the question in the milestone conversation; unrelated work and investigation continue, and later evidence may refine or resolve the question.
+      - id: other-work-available
+        kind: decision
+        name: Can work continue within accepted authority?
+        summary: Restrict only affected tasks while independent investigation and unrelated work remain eligible.
+      - id: organize-work
+        kind: action
+        name: Adjust the evidence-backed plan
+        summary: Add omitted delivery or investigation tasks, amend unstarted work, or cancel and replace invalidated work; retain dependencies after a scope answer until its prerequisite delivery is complete.
+        concept: codrive.task-orchestration.continuous-planning
+      - id: select-eligible-work
+        kind: action
+        name: Select eligible tasks across the project
+        summary: Project selection accounts for capacity and unresolved restrictions while allowing independent tasks and other milestones to progress.
+        concept: codrive.task-orchestration.task
+      - id: execute-and-review
+        kind: action
+        name: Execute and independently review the delivery
+        summary: Ordinary work, Review, and integration judgments produce evidence; non-terminal discoveries can be reported during any stage.
+        concept: codrive.task-orchestration.independent-review-conversation
+      - id: new-evidence
+        kind: decision
+        name: What can advance the milestone?
+        summary: New discoveries, stage results, or a user decision require a fresh assessment; evidence arriving during an assessment remains pending for the next one.
+      - id: wait-for-evidence
+        kind: action
+        name: Await evidence or a decision
+        summary: Keep the goal active until a task result, discovery, user reply, or explicit replanning supplies the next input.
+    transitions:
+      - from: assess-goal
+        to: goal-satisfied
+      - from: goal-satisfied
+        when: criteria satisfied and no necessary unfinished work
+        to: complete-milestone
+      - from: goal-satisfied
+        when: more work or decisions needed
+        to: user-decision-needed
+      - from: user-decision-needed
+        when: existing authority is sufficient
+        to: organize-work
+      - from: user-decision-needed
+        when: user choice or permission required
+        to: request-decision
+      - from: request-decision
+        to: other-work-available
+      - from: other-work-available
+        when: independent investigation or unrelated work remains
+        to: organize-work
+      - from: other-work-available
+        when: waiting for answer or new evidence
+        to: wait-for-evidence
+      - from: organize-work
+        to: select-eligible-work
+      - from: select-eligible-work
+        to: execute-and-review
+      - from: execute-and-review
+        to: new-evidence
+      - from: new-evidence
+        when: discovery or stage result received
+        to: assess-goal
+      - from: new-evidence
+        when: no new evidence yet
+        to: wait-for-evidence
+      - from: wait-for-evidence
+        to: assess-goal
