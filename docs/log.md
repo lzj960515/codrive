@@ -2,6 +2,8 @@
 
 ## 2026-09-16
 
+- Fixed repeated milestone messages after conversation recovery: context reads preserve active execution identity, inactive owners require a coherent live turn before adoption, and accepted assessments survive turn interruption without being requested again.
+
 - Limited milestone reassessment to explicit planning inputs, unresolved prerequisite tasks ending, and final acceptance. Routine task reports stay within their own lifecycle; owner-planned cancellations request another assessment only when prerequisite waits remain unresolved.
 
 - Organized both READMEs around what Codrive is, why to use it, and how to start, with direct product descriptions instead of narrative framing.

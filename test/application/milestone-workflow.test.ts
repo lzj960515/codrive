@@ -812,6 +812,41 @@ describe("Milestone workflow", () => {
     ).toBe("waiting_for_input");
   });
 
+  it("settles an accepted assessment after its turn is interrupted without sending another assessment", async () => {
+    const env = await setup();
+    const report = await reportFor(env, {
+      plan: {
+        tasks: [
+          {
+            key: "delivery",
+            title: "Deliver",
+            description: "Finish delivery",
+            acceptanceCriteria: [],
+          },
+        ],
+      },
+    });
+    await env.workflow.submitMilestoneReport(report);
+    const execution = (await env.store.findMilestone(env.milestoneId))!
+      .milestone.currentExecution!;
+    await env.workflow.recoverMilestoneExecution(
+      env.milestoneId,
+      execution.attemptId,
+      execution.turnId,
+      "recover",
+    );
+    const milestone = (await env.store.findMilestone(env.milestoneId))!
+      .milestone;
+    expect(milestone.currentExecution).toMatchObject({
+      status: "completed",
+      result: report,
+    });
+    expect(assessmentCount(env)).toBe(1);
+    expect(milestone.planning.evaluatedRevision).toBe(
+      milestone.planning.revision,
+    );
+  });
+
   it("keeps a missing-report reminder pending while its project is paused", async () => {
     const env = await setup();
     await env.workflow.controlProject(env.projectId, "pause");

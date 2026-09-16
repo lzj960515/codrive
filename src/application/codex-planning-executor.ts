@@ -47,7 +47,11 @@ export class CodexPlanningExecutor implements PlanningExecutor {
       await this.codex.interruptTurn(execution.threadId, execution.turnId);
   }
   async activeTurnId(threadId: string): Promise<string | undefined> {
-    return (await this.codex.readTurnSnapshot(threadId, "")).activeTurnIds[0];
+    const snapshot = await this.codex.readTurnSnapshot(threadId, "");
+    // 恢复后的历史轮次可能残留 inProgress，只有一致的活跃快照才能接管执行身份。
+    if (snapshot.threadStatus !== "active" || snapshot.activeTurnIds.length !== 1)
+      return undefined;
+    return snapshot.activeTurnIds[0];
   }
   isThreadActive(threadId: string): Promise<boolean> {
     return this.codex.isThreadActive(threadId);

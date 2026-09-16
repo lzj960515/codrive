@@ -1,9 +1,12 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { CodexGateway } from "../../src/application/codex-gateway.js";
+import type {
+  CodexGateway,
+  CodexTurnSnapshot,
+} from "../../src/application/codex-gateway.js";
 import { CodexPlanningExecutor } from "../../src/application/codex-planning-executor.js";
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
 import type { Project } from "../../src/domain/types.js";
@@ -57,7 +60,7 @@ class RecordingGateway implements CodexGateway {
   async readTurnStatus(): Promise<null> {
     return null;
   }
-  async readTurnSnapshot() {
+  async readTurnSnapshot(): Promise<CodexTurnSnapshot> {
     return { threadStatus: "idle" as const, activeTurnIds: [], turn: null };
   }
   async listModels(): Promise<[]> {
@@ -227,6 +230,155 @@ describe("CodexPlanningExecutor", () => {
         "setThreadName",
         "startTurn",
       ]);
+    },
+  );
+
+  it.each([
+    ["idle", ["historical_turn"]],
+    ["notLoaded", ["historical_turn"]],
+    ["systemError", ["historical_turn"]],
+    ["active", ["historical_turn", "current_turn"]],
+    ["active", []],
+  ] as const)(
+    "does not adopt an ambiguous or inactive conversation (%s, %j)",
+    async (threadStatus, activeTurnIds) => {
+      const gateway = new RecordingGateway();
+      vi.spyOn(gateway, "readTurnSnapshot").mockResolvedValue({
+        threadStatus,
+        activeTurnIds: [...activeTurnIds],
+        turn: null,
+      });
+      const executor = new CodexPlanningExecutor(gateway);
+      expect(await executor.activeTurnId("project_thread")).toBeUndefined();
+    },
+  );
+
+  it("adopts a uniquely active user turn", async () => {
+    const gateway = new RecordingGateway();
+    vi.spyOn(gateway, "readTurnSnapshot").mockResolvedValue({
+      threadStatus: "active",
+      activeTurnIds: ["user_turn"],
+      turn: null,
+    });
+    expect(
+      await new CodexPlanningExecutor(gateway).activeTurnId("project_thread"),
+    ).toBe("user_turn");
+  });
+
+  it.each([false, true])(
+    "preserves a recovered assessment when stale history omits the current turn: %s",
+    async (omitsCurrentTurn) => {
+      const directory = await mkdtemp(
+        join(tmpdir(), "codrive-planning-stale-turn-"),
+      );
+      directories.push(directory);
+      const store = new ProjectStore(directory);
+      const gateway = new RestartableGateway();
+      const workflow = new WorkflowEngine(
+        store,
+        new RecordingTaskDispatcher(),
+        { maxConcurrentTasks: 2, models: testModels },
+        new TestRepositoryPathResolver(),
+        new CodexPlanningExecutor(gateway),
+      );
+      const snapshot = await workflow.registerProject({
+        name: "Example",
+        repositoryPath: "/workspace/example",
+        defaultBranch: "main",
+        productDocument: "# Example\n",
+        tasks: [],
+        milestones: [
+          {
+            title: "Deliver",
+            description: "Verify delivery",
+            acceptanceCriteria: [],
+          },
+        ],
+      });
+      const milestone = snapshot.milestones[0]!;
+      const original = milestone.currentExecution!;
+      await workflow.recoverMilestoneExecution(
+        milestone.id,
+        original.attemptId,
+        original.turnId,
+        "recover",
+      );
+      const recovered = (await store.findMilestone(milestone.id))!.milestone
+        .currentExecution!;
+      const readSnapshot = vi
+        .spyOn(gateway, "readTurnSnapshot")
+        .mockResolvedValue({
+          threadStatus: "active",
+          activeTurnIds: omitsCurrentTurn
+            ? [original.turnId!]
+            : [original.turnId!, recovered.turnId!],
+          turn: null,
+        });
+
+      const context = await workflow.milestoneContext(milestone.id);
+      expect(context.milestone.currentExecution).toEqual(recovered);
+      const report = {
+        milestoneId: milestone.id,
+        attemptId: recovered.attemptId,
+        reportOpportunityId: recovered.reportOpportunityId,
+        definitionVersion: milestone.definitionVersion,
+        planningRevision: recovered.planningRevision!,
+        outcome: "progress" as const,
+        summary: "Plan delivery",
+        plan: {
+          tasks: [
+            {
+              key: "delivery",
+              title: "Deliver",
+              description: "Finish delivery",
+              acceptanceCriteria: [],
+            },
+          ],
+        },
+      };
+      await workflow.submitMilestoneReport(report);
+      expect(
+        (await workflow.milestoneContext(milestone.id)).milestone
+          .currentExecution,
+      ).toMatchObject({ attemptId: recovered.attemptId, result: report });
+      await workflow.completeMilestoneTurn(
+        milestone.id,
+        recovered.attemptId,
+        recovered.turnId!,
+      );
+      const starts = gateway.calls.filter(
+        ({ method }) => method === "startTurn",
+      ).length;
+      readSnapshot.mockResolvedValue({
+        threadStatus: "idle",
+        activeTurnIds: [original.turnId!],
+        turn: null,
+      });
+      for (let i = 0; i < 3; i += 1) {
+        await workflow.milestoneContext(milestone.id);
+        await workflow.reconcile();
+      }
+      const final = (await store.findMilestone(milestone.id))!.milestone;
+      expect(final.currentExecution).toMatchObject({
+        status: "completed",
+        attemptId: recovered.attemptId,
+        result: report,
+      });
+      expect(final.planning.evaluatedRevision).toBe(final.planning.revision);
+      expect(
+        gateway.calls.filter(({ method }) => method === "startTurn"),
+      ).toHaveLength(starts);
+
+      readSnapshot.mockResolvedValue({
+        threadStatus: "active",
+        activeTurnIds: ["user_reply"],
+        turn: null,
+      });
+      const reply = await workflow.milestoneContext(milestone.id);
+      expect(reply.milestone.currentExecution?.turnId).toBe("user_reply");
+      expect(reply.milestone.currentExecution?.attemptId).not.toBe(
+        recovered.attemptId,
+      );
     },
   );
 

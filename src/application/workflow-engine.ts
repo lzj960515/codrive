@@ -1095,7 +1095,8 @@ export class WorkflowEngine {
         );
         return;
       }
-      if (decision === "complete" && execution.turnId) {
+      // 已接纳的评估结果在轮次中断后仍然有效，恢复只收尾，不重复请求评估。
+      if ((decision === "complete" || execution.result) && execution.turnId) {
         const completed =
           await this.requirePlanningCoordinator().completeTurn<Milestone>(
             milestoneId,

@@ -55,6 +55,8 @@ All member tasks reaching terminal states triggers assessment, not automatic mil
 
 All conversations are visible in the current project. Each turn rereads authoritative context. Automatic dispatch checks for an already active role conversation, including a user-started reply, and accepts plans through serialized identity/version validation. After a milestone reaches `done`, replies in its persistent conversation remain historical discussion outside the planning execution lifecycle, preserving completion and leaving the project's planning slot available. Model routing, retries, report opportunities, and recovery reuse planning execution mechanisms.
 
+Context reads preserve the identity of an active planning execution. Live `turn/started` notifications adopt user replies; context synchronization of an inactive owner requires an active thread with exactly one in-progress turn. Historical or ambiguous snapshots cannot replace a dispatched execution or erase its accepted report. An accepted milestone assessment remains effective if its turn is interrupted: recovery settles that execution and only schedules another assessment when a newer planning revision exists.
+
 The four managed Skills remain the entry points: Forge registers product goals, Work adds or revises authorized work, Task routes selection/assessment/task stages, and Control reads current progress and applies confirmed controls. Detailed AI judgment lives in `codrive-task/references/planning.md`; this page owns the product lifecycle.
 
 

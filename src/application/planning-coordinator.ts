@@ -304,6 +304,12 @@ export class PlanningCoordinator {
   }
 
   async synchronizeConversation<T extends Owner>(owner: T): Promise<T> {
+    // 已调度的执行由实时通知和恢复流程推进，读取历史 context 保留其执行身份。
+    if (
+      owner.currentExecution?.turnId &&
+      inFlight.has(owner.currentExecution.status)
+    )
+      return owner;
     const threadId = isMilestone(owner)
       ? owner.threadId
       : owner.planningThreadId;
