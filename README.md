@@ -1,6 +1,6 @@
 <div align="center">
   <h1>Codrive</h1>
-  <p><strong>Set the goal. Let Codex keep the work moving.</strong></p>
+  <p><strong>Automated task management for Codex App.</strong></p>
 
   <p>
     <a href="https://www.npmjs.com/package/codrive"><img alt="npm version" src="https://img.shields.io/npm/v/codrive?style=flat-square&color=cb3837"></a>
@@ -12,18 +12,20 @@
   <p><strong>English</strong> · <a href="./README.zh-CN.md">简体中文</a></p>
 </div>
 
-Codrive turns goals into ongoing work in **Codex App**. Agree on the scope, then let Codex plan, execute, review, and verify the result. Follow progress on a local board and join the conversation when a decision needs you.
+## What is Codrive?
+
+Codrive is a local task manager for **Codex App**. It organizes agreed goals into milestones and tasks, coordinates execution, independent review, and acceptance, and displays progress on a board.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/lzj960515/codrive/main/docs/images/codrive-board.jpg" alt="Codrive board with milestones, tasks, and activity">
 </p>
 
-## How it works
+## Why Codrive?
 
-- **Plan around goals.** Milestones define the outcome and acceptance criteria; Codex investigates and breaks down the work. Small changes can be independent tasks.
-- **Adapt as work progresses.** New findings lead to investigations, additional tasks, or plan changes within the agreed scope. Decisions beyond it come back to you.
-- **Review and verify.** Every work result receives independent review. Milestones finish when acceptance evidence is complete.
-- **Stay involved when needed.** Planning, execution, and review use persistent project conversations. Read the history, add context, or step in at any time.
+- **Automatic execution:** Break down goals and schedule tasks, including independent work for small changes.
+- **Adaptive planning:** Add tasks and revise plans as new findings emerge. Decisions beyond the authorized scope come back to you.
+- **Independent review:** Review every work result independently and verify milestone completion against acceptance evidence.
+- **Visible progress:** Follow the board and revisit planning, execution, and review in project conversations. Join at any time.
 
 ## Get started
 

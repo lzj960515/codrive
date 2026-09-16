@@ -2,6 +2,8 @@
 
 ## 2026-09-16
 
+- Organized both READMEs around what Codrive is, why to use it, and how to start, with direct product descriptions instead of narrative framing.
+
 - Condensed both READMEs to the product essentials, removed business-specific examples and interface instructions, and refreshed the board screenshot using the current UI with synthetic reading-project data.
 
 - Rewrote both READMEs around goals, evolving milestone plans, independent review, and evidence-based acceptance; simplified onboarding and daily-use examples, removed the technical diagram, and linked implementation details to their owning documents.

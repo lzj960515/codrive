@@ -1,6 +1,6 @@
 <div align="center">
   <h1>Codrive</h1>
-  <p><strong>交代目标，让 Codex 持续推进。</strong></p>
+  <p><strong>面向 Codex App 的自动任务管理工具。</strong></p>
 
   <p>
     <a href="https://www.npmjs.com/package/codrive"><img alt="npm version" src="https://img.shields.io/npm/v/codrive?style=flat-square&color=cb3837"></a>
@@ -12,18 +12,20 @@
   <p><a href="./README.md">English</a> · <strong>简体中文</strong></p>
 </div>
 
-Codrive 让 **Codex App** 围绕目标持续工作。你确认范围，Codex 负责规划、执行、审查和验收；你通过本地看板了解进度，在需要决定时参与对话。
+## Codrive 是什么？
+
+Codrive 是运行在本机的 **Codex App** 任务管理工具。它将已确认的目标组织成里程碑和任务，自动推进执行、独立审查与验收，并通过看板展示进度。
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/lzj960515/codrive/main/docs/images/codrive-board.jpg" alt="Codrive 看板：里程碑、任务与活动记录">
 </p>
 
-## 如何推进工作
+## 为什么使用 Codrive？
 
-- **围绕目标规划。** 里程碑明确结果与验收标准，由 Codex 调查并拆解任务；小改动可以独立推进。
-- **随发现调整计划。** 在已确认范围内补充调查、追加任务或调整计划，超出范围的决定交给你。
-- **独立审查，按证据验收。** 每份工作结果都经过独立审查，里程碑满足验收标准后才完成。
-- **随时参与。** 规划、执行和审查都保留在项目对话中，你可以查看过程、补充背景或接手讨论。
+- **自动推进：** 根据目标拆解和安排任务，小改动也可独立执行。
+- **动态规划：** 根据新发现补充任务、调整计划，超出授权范围时请求你的决定。
+- **独立审查：** 每份工作结果经过独立审查，里程碑按验收证据确认完成。
+- **过程可见：** 看板汇总进度，项目对话保留规划、执行和审查过程，支持随时参与。
 
 ## 开始使用
 
