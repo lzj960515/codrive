@@ -2,6 +2,8 @@
 
 ## 2026-09-16
 
+- Limited milestone reassessment to explicit planning inputs, unresolved prerequisite tasks ending, and final acceptance. Routine task reports stay within their own lifecycle; owner-planned cancellations request another assessment only when prerequisite waits remain unresolved.
+
 - Organized both READMEs around what Codrive is, why to use it, and how to start, with direct product descriptions instead of narrative framing.
 
 - Condensed both READMEs to the product essentials, removed business-specific examples and interface instructions, and refreshed the board screenshot using the current UI with synthetic reading-project data.

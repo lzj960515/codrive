@@ -100,6 +100,7 @@ async function reportTask(
   env: Awaited<ReturnType<typeof setup>>,
   taskId: string,
   outcome: TaskReport["outcome"],
+  details: Partial<TaskReport> = {},
 ) {
   const task = (await env.store.findTask(taskId))!.task;
   const execution = task.currentExecution!;
@@ -110,6 +111,7 @@ async function reportTask(
     outcome,
     summary: "Verified",
     tests: "evidence verified",
+    ...details,
   });
   await env.workflow.completeTurn(
     taskId,
@@ -117,7 +119,306 @@ async function reportTask(
     execution.turnId!,
   );
 }
+async function planTwoTasks(waitForFirst = false) {
+  const env = await setup();
+  await env.workflow.submitMilestoneReport(
+    await reportFor(env, {
+      plan: {
+        tasks: [
+          {
+            key: "first",
+            title: "Investigate",
+            description: "Check evidence",
+            acceptanceCriteria: [],
+          },
+          {
+            key: "second",
+            title: "Deliver",
+            description: "Finish delivery",
+            acceptanceCriteria: [],
+          },
+        ],
+        ...(waitForFirst
+          ? {
+              resolutions: [
+                {
+                  sourceActivityIds: [],
+                  summary: "Delivery requires investigation evidence",
+                  affectedTaskIds: ["second"],
+                  waitForTaskIds: ["first"],
+                },
+              ],
+            }
+          : {}),
+      },
+    }),
+  );
+  await finishAssessment(env);
+  const tasks = (await env.store.getProject(env.projectId))!.tasks;
+  const first = tasks.find((task) => task.title === "Investigate")!;
+  const second = tasks.find((task) => task.title === "Deliver")!;
+  await selectTasks(env, waitForFirst ? [first.id] : [first.id, second.id]);
+  return { ...env, first, second };
+}
+
+function assessmentCount(env: Awaited<ReturnType<typeof setup>>) {
+  return env.planner.started.filter((request) => request.milestone).length;
+}
+
 describe("Milestone workflow", () => {
+  it("keeps ordinary review and rework inside the task until the milestone needs final acceptance", async () => {
+    const env = await planTwoTasks();
+    const initial = assessmentCount(env);
+    const outcomes: TaskReport["outcome"][] = [
+      "completed",
+      "changes_requested",
+      "completed",
+      "approved",
+      "work_required",
+      "completed",
+      "approved",
+      "completed",
+    ];
+    for (const outcome of outcomes) {
+      await reportTask(
+        env,
+        env.first.id,
+        outcome,
+        outcome === "changes_requested"
+          ? { findings: ["Fix missing evidence"] }
+          : {},
+      );
+      expect(assessmentCount(env)).toBe(initial);
+    }
+    expect((await env.store.findTask(env.first.id))!.task.status).toBe("done");
+    for (const outcome of ["completed", "approved"] as const) {
+      await reportTask(env, env.second.id, outcome);
+      expect(assessmentCount(env)).toBe(initial);
+    }
+    await reportTask(env, env.second.id, "completed");
+    expect(assessmentCount(env)).toBe(initial + 1);
+    await env.workflow.submitMilestoneReport(
+      await reportFor(env, {
+        outcome: "completed",
+        evidence: ["Both reviewed deliveries satisfy the goal"],
+      }),
+    );
+    await finishAssessment(env);
+    expect(
+      (await env.store.findMilestone(env.milestoneId))!.milestone.status,
+    ).toBe("done");
+  });
+
+  it.each(["done", "cancelled"] as const)(
+    "reassesses an explicitly awaited task only when it is %s",
+    async (status) => {
+      const env = await planTwoTasks(true);
+      const initial = assessmentCount(env);
+      await reportTask(env, env.first.id, "completed");
+      expect(assessmentCount(env)).toBe(initial);
+      await reportTask(env, env.first.id, "approved");
+      expect(assessmentCount(env)).toBe(initial);
+      if (status === "done") {
+        await reportTask(env, env.first.id, "completed");
+      } else {
+        await env.workflow.cancelTask(env.first.id, {
+          reason: "Investigation cannot continue",
+          decisionBasis: "agent_decision",
+          cancelledBy: "codex",
+        });
+      }
+      expect(assessmentCount(env)).toBe(initial + 1);
+      expect((await env.store.findTask(env.second.id))!.task.status).toBe(
+        "backlog",
+      );
+      const context = await env.workflow.milestoneContext(env.milestoneId);
+      expect(context.projection.restrictedTaskIds).toContain(env.second.id);
+    },
+  );
+
+  it("ignores completed tasks from superseded prerequisite waits", async () => {
+    const env = await planTwoTasks(true);
+    await env.workflow.controlProject(env.projectId, "replan");
+    const context = await env.workflow.milestoneContext(env.milestoneId);
+    await env.workflow.submitMilestoneReport(
+      await reportFor(env, {
+        plan: {
+          resolutions: [
+            {
+              sourceActivityIds: context.projection.unresolvedActivities.map(
+                (activity) => activity.id,
+              ),
+              summary: "Delivery can proceed independently",
+            },
+          ],
+        },
+      }),
+    );
+    await finishAssessment(env);
+    await selectTasks(env, [env.second.id]);
+    const initial = assessmentCount(env);
+    for (const outcome of ["completed", "approved", "completed"] as const)
+      await reportTask(env, env.first.id, outcome);
+    expect(assessmentCount(env)).toBe(initial);
+  });
+
+  it("does not reassess ordinary blockers or retries, but retains explicit discoveries", async () => {
+    const env = await planTwoTasks();
+    const initial = assessmentCount(env);
+    await reportTask(env, env.first.id, "blocked");
+    expect(assessmentCount(env)).toBe(initial);
+    await env.workflow.retryTask(env.first.id);
+    expect(assessmentCount(env)).toBe(initial);
+    const task = (await env.store.findTask(env.first.id))!.task;
+    await env.workflow.reportDiscovery({
+      taskId: task.id,
+      attemptId: task.currentExecution!.attemptId,
+      requestId: "missing-consumer",
+      summary: "Another consumer needs investigation",
+      evidence: ["Found another interface consumer"],
+    });
+    expect(assessmentCount(env)).toBe(initial + 1);
+  });
+
+  it("waits for all ordinary tasks to end before assessing cancellations", async () => {
+    const env = await planTwoTasks();
+    const initial = assessmentCount(env);
+    for (const [index, task] of [env.first, env.second].entries()) {
+      await env.workflow.cancelTask(task.id, {
+        reason: "Delivery no longer needed",
+        decisionBasis: "user_confirmed",
+        cancelledBy: "codex",
+      });
+      expect(assessmentCount(env)).toBe(initial + (index === 1 ? 1 : 0));
+    }
+  });
+
+  it("keeps an awaited result received during assessment pending for another evaluation", async () => {
+    const env = await planTwoTasks(true);
+    await env.workflow.controlProject(env.projectId, "replan");
+    const report = await reportFor(env);
+    const initial = assessmentCount(env);
+    for (const outcome of ["completed", "approved", "completed"] as const)
+      await reportTask(env, env.first.id, outcome);
+    expect(assessmentCount(env)).toBe(initial);
+    expect(
+      (await env.store.findMilestone(env.milestoneId))!.milestone.planning
+        .revision,
+    ).toBe(report.planningRevision + 1);
+    await env.workflow.submitMilestoneReport(report);
+    await finishAssessment(env);
+    expect(assessmentCount(env)).toBe(initial + 1);
+  });
+
+  it.each(["needs_input", "scheduled_wait"] as const)(
+    "keeps %s in the task without waking the milestone",
+    async (outcome) => {
+      const env = await planTwoTasks(true);
+      const initial = assessmentCount(env);
+      await reportTask(
+        env,
+        env.first.id,
+        outcome === "needs_input" ? "needs_input" : "blocked",
+        outcome === "needs_input"
+          ? { question: "Which account should I use?" }
+          : {
+              resumeAt: "2099-01-01T00:00:00Z",
+              resumePrompt: "Check verification results",
+            },
+      );
+      expect(assessmentCount(env)).toBe(initial);
+    },
+  );
+
+  it("reassesses a planned cancellation when its prerequisite wait remains unresolved", async () => {
+    const env = await planTwoTasks(true);
+    await env.workflow.controlProject(env.projectId, "replan");
+    const task = (await env.store.findTask(env.first.id))!.task;
+    const initial = assessmentCount(env);
+    await env.workflow.submitMilestoneReport(
+      await reportFor(env, {
+        plan: {
+          cancellations: [
+            {
+              taskId: task.id,
+              expectedUpdatedAt: task.updatedAt,
+              reason: "This investigation cannot produce the required evidence",
+              decisionBasis: "agent_decision",
+            },
+          ],
+        },
+      }),
+    );
+    await finishAssessment(env);
+    expect(assessmentCount(env)).toBe(initial + 1);
+    const context = await env.workflow.milestoneContext(env.milestoneId);
+    expect(context.projection.restrictedTaskIds).toContain(env.second.id);
+    expect((await env.store.findTask(task.id))!.task.status).toBe("cancelled");
+  });
+
+  it("does not reassess a prerequisite cancellation already resolved by the owner's plan", async () => {
+    const env = await planTwoTasks(true);
+    await env.workflow.controlProject(env.projectId, "replan");
+    const context = await env.workflow.milestoneContext(env.milestoneId);
+    const task = (await env.store.findTask(env.first.id))!.task;
+    const initial = assessmentCount(env);
+    await env.workflow.submitMilestoneReport(
+      await reportFor(env, {
+        plan: {
+          cancellations: [
+            {
+              taskId: task.id,
+              expectedUpdatedAt: task.updatedAt,
+              reason: "Existing evidence is sufficient",
+              decisionBasis: "agent_decision",
+            },
+          ],
+          resolutions: [
+            {
+              sourceActivityIds: context.projection.unresolvedActivities.map(
+                ({ id }) => id,
+              ),
+              summary: "Investigation no longer needed; delivery can continue",
+            },
+          ],
+        },
+      }),
+    );
+    await finishAssessment(env);
+    expect((await env.store.findTask(task.id))!.task.status).toBe("cancelled");
+    expect(assessmentCount(env)).toBe(initial);
+    expect(
+      (await env.workflow.milestoneContext(env.milestoneId)).projection
+        .restrictedTaskIds,
+    ).toEqual([]);
+  });
+
+  it("accepts evidence-backed completion with planned cancellations without another assessment", async () => {
+    const env = await planTwoTasks();
+    await env.workflow.controlProject(env.projectId, "replan");
+    const tasks = (await env.store.getProject(env.projectId))!.tasks;
+    const initial = assessmentCount(env);
+    await env.workflow.submitMilestoneReport(
+      await reportFor(env, {
+        outcome: "completed",
+        evidence: ["Existing delivery verified against acceptance criteria"],
+        plan: {
+          cancellations: tasks.map((task) => ({
+            taskId: task.id,
+            expectedUpdatedAt: task.updatedAt,
+            reason: "Existing delivery makes this task obsolete",
+            decisionBasis: "agent_decision" as const,
+          })),
+        },
+      }),
+    );
+    await finishAssessment(env);
+    expect(assessmentCount(env)).toBe(initial);
+    expect(
+      (await env.store.findMilestone(env.milestoneId))!.milestone.status,
+    ).toBe("done");
+  });
+
   it("starts from only a goal and applies new tasks once without changing product facts", async () => {
     const env = await setup();
     expect(env.planner.started[0]?.milestone?.id).toBe(env.milestoneId);
@@ -281,13 +582,23 @@ describe("Milestone workflow", () => {
     await reportTask(env, deletion.id, "approved");
     const integrating = (await env.store.findTask(deletion.id))!.task;
     expect(taskHoldsIntegrationLease(integrating)).toBe(true);
-    // 阶段报告已经触发负责人，此时新的决定应只暂停删除任务。
+    await env.workflow.reportDiscovery({
+      taskId: deletion.id,
+      attemptId: integrating.currentExecution!.attemptId,
+      requestId: "remaining-consumer",
+      summary: "Consumer still reads the source",
+      evidence: ["Consumer reads old source"],
+    });
+    const discovery = (await env.workflow.milestoneContext(env.milestoneId))
+      .projection.unresolvedActivities[0]!;
+    // 明确的新发现触发负责人，只暂停删除任务并等待迁移交付。
     const report = await reportFor(env, {
       outcome: "needs_input",
       plan: {
         resolutions: [
           {
-            sourceActivityIds: [],
+            sourceActivityIds: [discovery.id],
+            waitForTaskIds: [migration.id],
             summary: "Consumer still reads the source",
             question: "Keep compatibility?",
             affectedTaskIds: [deletion.id],
@@ -458,6 +769,10 @@ describe("Milestone workflow", () => {
       task.id,
       execution.attemptId,
       execution.turnId!,
+    );
+    await env.workflow.observePlanningTurn(
+      (await env.store.findMilestone(env.milestoneId))!.milestone.threadId!,
+      "scope_question",
     );
     await env.workflow.submitMilestoneReport(
       await reportFor(env, {

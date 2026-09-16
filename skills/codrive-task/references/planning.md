@@ -30,7 +30,7 @@ node <skill-directory>/scripts/codrive-task.mjs milestone-context <milestone-id>
 2. **检查新事实。** 从发现与有效阶段报告检查遗漏的消费者、依赖、验证及失效前提。短小只读核实可当轮完成；需要较长调查、代码修改、运行验证时创建普通任务，继续经过独立 Review。
 3. **组织处置。** 原任务内细节继续原任务；独立漏项追加任务；证据不足安排调查；重复来源关联到同一项任务或问题；无关增强保留候选并说明不影响本目标。处置引用 `sourceActivityIds`，对新结论保留反证和取代依据。
 4. **保护受影响工作。** 需要暂缓时，在处置中列出确实受影响的 `affectedTaskIds`。调查和无关任务继续。已开始任务保持定义、归属和候选；Codrive 持久化活动后中断在途 turn，恢复前检查未决影响。确认交付失效才使用有版本及理由的取消并生成替代任务。
-5. **形成下一步或验收。** 继续执行时说明等待哪些任务或决定。成员任务全部结束后逐项核对当前验收、待处理来源、取消/替代缺口及所需运行证据；缺证据创建普通验证任务。只有所有必要结果和证据成立才报告完成。
+5. **形成下一步或验收。** 需要某项调查、验证或前置交付结束后继续判断时，在处置的 `waitForTaskIds` 中记录对应任务。任务完成或取消后，Codrive 会重新启动评估。成员任务全部结束后逐项核对当前验收、待处理来源、取消/替代缺口及所需运行证据；缺证据创建普通验证任务。只有所有必要结果和证据成立才报告完成。
 
 ### 等待用户期间继续推进
 
@@ -62,7 +62,7 @@ node <skill-directory>/scripts/codrive-task.mjs milestone-report <milestone-id> 
 - `cancellations`：已证实需要取消任务的 `taskId`、`expectedUpdatedAt`、`decisionBasis`、`reason`，沿用 `agent_decision | user_confirmed`。
 - `resolutions`：`sourceActivityIds`、`summary`，可附 `question`、`affectedTaskIds`、`waitForTaskIds`。任务引用使用现有 ID 或同一计划 `tasks[].key`，Codrive 在接受时统一转成新任务 ID。
 
-已有未结束成员任务或有效未决活动足以支撑 `progress` 等待，保持现有处置即可。明确交付限制使用 `waitForTaskIds`；初始问题或初始等待的 `sourceActivityIds` 可为空，后续处置引用真实来源活动。等待任务应指向尚未取得所需有效交付的任务。外部条件要到指定时点核实，创建普通任务并沿其计划恢复能力处理。没有可推进来源时补充工作、明确阻塞或完成目标。
+普通任务沿自身阶段继续，负责人在明确新发现、指定等待任务结束、全部成员任务结束或目标与决定变化时评估。等待最终验收可保持 `progress`；需要中途重新判断的交付使用 `waitForTaskIds`，需要暂缓的任务另列 `affectedTaskIds`。初始问题或初始等待的 `sourceActivityIds` 可为空，后续处置引用真实来源活动。等待任务应指向尚未取得所需有效交付的任务。外部条件要到指定时点核实，创建普通任务并沿其计划恢复能力处理。没有可推进来源时补充工作、明确阻塞或完成目标。
 
 任务发现通过主 Skill 的非终态 `discovery` 命令登记；Review 的 `findings` 继续专指当前交付阻塞。
 

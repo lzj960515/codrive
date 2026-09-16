@@ -765,6 +765,16 @@ export class WorkflowEngine {
       updatedAt: this.now(),
     };
     await this.store.saveMilestone(projectId, completed);
+    const cancelledTaskIds = (report.plan?.cancellations ?? []).map(
+      ({ taskId }) => taskId,
+    );
+    // 同轮已消解的等待无需重评；仍等待已取消交付的任务需要负责人继续处置。
+    if (
+      completed.status === "active" &&
+      cancelledTaskIds.length &&
+      (await this.milestoneWaitsForTasks(projectId, milestoneId, cancelledTaskIds))
+    )
+      await this.advanceMilestone(milestoneId);
     await this.recordMilestoneActivity({ ...activity, appliedAt: this.now() });
     await this.recordEvent({
       type:
@@ -849,6 +859,42 @@ export class WorkflowEngine {
       milestoneId,
       state: { milestone: updated },
     });
+  }
+
+  private async reassessMilestoneAfterTaskEnd(task: Task): Promise<void> {
+    const { projectId, milestoneId } = task;
+    if (!milestoneId) return;
+    const snapshot = await this.requireSnapshot(projectId);
+    const milestone = snapshot.milestones.find(({ id }) => id === milestoneId)!;
+    if (milestone.status !== "active") return;
+    const memberTasks = snapshot.tasks.filter(
+      (member) => member.milestoneId === milestoneId,
+    );
+    const allTasksEnded = memberTasks.every((task) =>
+      ["done", "cancelled"].includes(task.status),
+    );
+    if (
+      allTasksEnded ||
+      (await this.milestoneWaitsForTasks(projectId, milestoneId, [task.id]))
+    )
+      await this.advanceMilestone(milestoneId);
+  }
+
+  private async milestoneWaitsForTasks(
+    projectId: string,
+    milestoneId: string,
+    taskIds: readonly string[],
+  ): Promise<boolean> {
+    const activities = await this.store.listMilestoneActivities(
+      projectId,
+      milestoneId,
+    );
+    const { unresolvedActivities } = projectMilestoneActivities(activities);
+    return unresolvedActivities.some(
+      (activity) =>
+        activity.type === "resolution" &&
+        activity.resolution.waitForTaskIds?.some((id) => taskIds.includes(id)),
+    );
   }
 
   private async restrictedTaskIds(projectId: string): Promise<Set<string>> {
@@ -2250,6 +2296,8 @@ export class WorkflowEngine {
         cancellation,
       );
       if (cancelled !== found.task) {
+        // 外部取消按等待或最终验收通知负责人；计划内取消在处置落地后判断。
+        await this.reassessMilestoneAfterTaskEnd(cancelled);
         await this.revisePlanning(found.project.id, "task_cancelled");
       }
       await this.reconcileInternal();
@@ -3350,8 +3398,8 @@ export class WorkflowEngine {
       before: taskLifecycleState(task),
       after: taskLifecycleState(completed),
     });
-    if (task.milestoneId) await this.advanceMilestone(task.milestoneId);
     if (completed.status === "done" && task.status !== "done") {
+      await this.reassessMilestoneAfterTaskEnd(completed);
       await this.revisePlanning(project.id, "task_completed");
     }
     return completed;
@@ -3721,7 +3769,6 @@ export class WorkflowEngine {
         });
       }
     }
-    if (task.milestoneId) await this.advanceMilestone(task.milestoneId);
     return cancelled;
   }
 
