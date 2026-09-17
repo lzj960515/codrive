@@ -207,15 +207,13 @@ export class CodexAppServerClient implements CodexGateway {
       { cwds },
     );
     return response.data.flatMap(({ hooks }) =>
-      hooks.map(
-        ({ eventName, command, statusMessage, enabled, trustStatus }) => ({
-          eventName,
-          command,
-          statusMessage,
-          enabled,
-          trustStatus,
-        }),
-      ),
+      hooks.map((hook) => ({
+        eventName: hook.eventName,
+        command: hook.handlerType === "command" ? hook.command : null,
+        statusMessage: hook.statusMessage,
+        enabled: hook.enabled,
+        trustStatus: hook.trustStatus,
+      })),
     );
   }
 

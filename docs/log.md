@@ -1,5 +1,12 @@
 # Documentation log
 
+## 2026-09-17
+
+- Updated the bundled Codex CLI dependency to 0.154.0, which supports configurable
+  thread unloading; regenerated the App Server protocol and adapted non-command
+  Hook metadata to the existing nullable command contract. Automatic conversation
+  unsubscribe remains a separate integration change.
+
 ## 2026-09-16
 
 - Fixed repeated milestone messages after conversation recovery: context reads preserve active execution identity, inactive owners require a coherent live turn before adoption, and accepted assessments survive turn interruption without being requested again.

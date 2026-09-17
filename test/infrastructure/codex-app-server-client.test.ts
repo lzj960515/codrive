@@ -80,6 +80,13 @@ describe("CodexAppServerClient", () => {
           enabled: true,
           trustStatus: "trusted",
         },
+        ...["mcpTool", "prompt", "agent"].map(() => ({
+          eventName: "preToolUse",
+          command: null,
+          statusMessage: "Reporting Codrive activity",
+          enabled: true,
+          trustStatus: "trusted",
+        })),
       ]);
       await expect(
         client.hasSkill("/workspace/game", "code-review"),
@@ -226,7 +233,7 @@ lines.on("line", (line) => {
         ],
         nextCursor: "page_2"
       };
-  if (request.method === "hooks/list") result = { data: [{ cwd: request.params.cwds[0], warnings: [], errors: [], hooks: [{ eventName: "preToolUse", command: "node \\\"/home/user/.codex/hooks/codrive/codrive-activity-hook.mjs\\\"", statusMessage: "Reporting Codrive activity", enabled: true, trustStatus: "trusted" }] }] };
+  if (request.method === "hooks/list") result = { data: [{ cwd: request.params.cwds[0], warnings: [], errors: [], hooks: [{ handlerType: "command", eventName: "preToolUse", command: "node \\\"/home/user/.codex/hooks/codrive/codrive-activity-hook.mjs\\\"", statusMessage: "Reporting Codrive activity", enabled: true, trustStatus: "trusted" }, ...["mcpTool", "prompt", "agent"].map((handlerType) => ({ handlerType, eventName: "preToolUse", statusMessage: "Reporting Codrive activity", enabled: true, trustStatus: "trusted", ...(handlerType === "mcpTool" ? { server: "example", tool: "check" } : {}) }))] }] };
   if (request.method === "skills/list") result = { data: [{ cwd: request.params.cwds[0], errors: [], skills: [
     { name: "code-review", description: "Review code", path: "/home/user/.agents/skills/code-review/SKILL.md", scope: "user", enabled: true },
     { name: "disabled-review", description: "Disabled review", path: "/home/user/.agents/skills/disabled-review/SKILL.md", scope: "user", enabled: false }
