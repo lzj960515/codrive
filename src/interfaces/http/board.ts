@@ -54,6 +54,24 @@ export function renderBoardPage(accessToken: string): string {
 
   <button id="nav-backdrop" class="nav-backdrop" type="button" aria-label="关闭项目列表"></button>
 
+  <dialog id="decision-reply-dialog" class="decision-reply-dialog" aria-labelledby="decision-reply-title" aria-describedby="decision-reply-context">
+    <form id="decision-reply-form" class="decision-reply-panel">
+      <header class="decision-reply-head">
+        <h2 id="decision-reply-title">回复当前决定</h2>
+        <button id="decision-reply-close" class="icon-button" type="button" aria-label="关闭回复">×</button>
+      </header>
+      <p id="decision-reply-context" class="decision-reply-context"></p>
+      <label class="decision-reply-label" for="decision-reply-message">你的回复</label>
+      <textarea id="decision-reply-message" rows="5" maxlength="20000" placeholder="填写你的决定或补充说明…" aria-describedby="decision-reply-error" autofocus></textarea>
+      <p id="decision-reply-error" class="decision-reply-error" role="alert"></p>
+      <footer class="decision-reply-actions">
+        <button id="decision-reply-cancel" class="quiet-button" type="button">取消</button>
+        <button id="decision-reply-send" class="primary-button" type="submit">发送</button>
+      </footer>
+    </form>
+  </dialog>
+  <p id="decision-reply-notice" class="decision-reply-notice" role="status" aria-live="polite"></p>
+
   <div id="project-archive-dialog" class="archive-backdrop" role="dialog" aria-modal="true" aria-labelledby="project-archive-title" hidden>
     <section class="archive-panel" tabindex="-1">
       <div class="archive-symbol" aria-hidden="true">A</div>

@@ -46,6 +46,8 @@ codrive
 
 Continue in conversation to add work, adjust plans, check progress, or pause scheduling.
 
+When a decision is needed, choose **Reply here** on the board to send your answer to the original conversation. The dialog closes after a successful send and execution continues. The adjacent conversation link remains available for the full context.
+
 ## Everyday commands
 
 | Command | Purpose |

@@ -1,3 +1,5 @@
+import { createDecisionReplyController } from "./decision-reply-controller.js";
+import { createDecisionReplyPresenter } from "./decision-reply-presenter.js";
 import { createMilestonePresenter } from "./milestone-presenter.js";
 import { createModelRoutingForm } from "./model-routing-form.js";
 import { createRealtimeWatchCoordinator } from "./board-realtime-client.js";
@@ -27,6 +29,8 @@ export function renderBoardClient(accessToken: string): string {
   const orderTerminalTasks = sortTerminalTasks.toString();
   const modelRoutingForm = createModelRoutingForm.toString();
   const milestonePresenter = createMilestonePresenter.toString();
+  const decisionReplyController = createDecisionReplyController.toString();
+  const decisionReplyPresenter = createDecisionReplyPresenter.toString();
   return `<script>
     const TOKEN = ${token};
     const boardLayout = ${layout};
@@ -137,6 +141,53 @@ export function renderBoardClient(accessToken: string): string {
     const command = (type, payload) => api("/api/commands", {
       method: "POST",
       body: JSON.stringify({ type, payload })
+    });
+
+    const createDecisionReplyController = ${decisionReplyController};
+    const createDecisionReplyPresenter = ${decisionReplyPresenter};
+    const decisionActions = createDecisionReplyPresenter(escapeHtml);
+    let replyNoticeTimer = null;
+    let replyReturnTarget = null;
+    const replyDialog = document.getElementById("decision-reply-dialog");
+    const decisionReply = createDecisionReplyController({
+      dialog: replyDialog,
+      message: document.getElementById("decision-reply-message"),
+      question: document.getElementById("decision-reply-context"),
+      status: document.getElementById("decision-reply-error"),
+      submit: document.getElementById("decision-reply-send"),
+      cancel: document.getElementById("decision-reply-cancel"),
+      close: document.getElementById("decision-reply-close"),
+      send: payload => command("decision.reply", payload),
+      onSent: () => {
+        const notice = document.getElementById("decision-reply-notice");
+        notice.textContent = "回复已发送";
+        window.clearTimeout(replyNoticeTimer);
+        replyNoticeTimer = window.setTimeout(() => { notice.textContent = ""; }, 4000);
+        void refreshCurrentTaskAndProject();
+      }
+    });
+    document.addEventListener("click", event => {
+      const button = event.target.closest("[data-decision-reply]");
+      if (!button) return;
+      replyReturnTarget = button.dataset.decisionReply;
+      decisionReply.open(JSON.parse(button.dataset.decisionReply), button.dataset.decisionQuestion);
+    });
+    document.getElementById("decision-reply-form").addEventListener("submit", event => {
+      event.preventDefault();
+      void decisionReply.send();
+    });
+    document.getElementById("decision-reply-cancel").onclick = decisionReply.close;
+    document.getElementById("decision-reply-close").onclick = decisionReply.close;
+    replyDialog.addEventListener("close", () => {
+      const original = Array.from(document.querySelectorAll("[data-decision-reply]"))
+        .find(button => button.dataset.decisionReply === replyReturnTarget);
+      const fallback = document.getElementById("close-detail") || document.querySelector("[data-project-info], .eyebrow-link");
+      (original || fallback)?.focus({ preventScroll: true });
+      replyReturnTarget = null;
+    });
+    replyDialog.addEventListener("cancel", event => {
+      event.preventDefault();
+      decisionReply.close();
     });
 
     const activeUpdatePhases = ["checking", "installing", "stopping", "migrating", "syncing_resources", "restarting"];
@@ -771,7 +822,7 @@ export function renderBoardClient(accessToken: string): string {
       }
     }
 
-    const milestoneView = (${milestonePresenter})(escapeHtml);
+    const milestoneView = (${milestonePresenter})(escapeHtml, decisionActions);
 
     function bindWorkspaceNavigation(host) {
       host.querySelectorAll("[data-workspace-tab]").forEach(button => {
@@ -869,7 +920,7 @@ export function renderBoardClient(accessToken: string): string {
       const planningBanner = cancellationReason
         ? '<div class="planning-notice cancellation"><b>取消理由</b><span title="'+escapeHtml(cancellationReason)+'">'+escapeHtml(cancellationReason)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'">查看详情</a></div>'
         : attentionCopy
-        ? '<div class="planning-notice '+escapeHtml(attention.kind)+'"><b>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</b><span title="'+escapeHtml(attentionCopy)+'">'+escapeHtml(attentionCopy)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'#attention">查看详情</a></div>'
+        ? '<div class="planning-notice '+escapeHtml(attention.kind)+'"><b>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</b><span title="'+escapeHtml(attentionCopy)+'">'+escapeHtml(attentionCopy)+'</span><a href="/projects/'+encodeURIComponent(project.id)+'#attention">查看详情</a>'+(attention.decisionReply ? decisionActions(attention.decisionReply, attentionCopy, null) : '')+'</div>'
         : '';
       host.innerHTML =
         '<header class="workspace-header">'+
@@ -1003,7 +1054,7 @@ export function renderBoardClient(accessToken: string): string {
       const workflowNotice = cancellationReason
         ? '<section id="planning" class="product-panel planning-panel cancellation"><div class="panel-heading"><span>取消理由</span><b>'+escapeHtml(label(project.cancellation.decisionBasis))+'</b></div><p>'+escapeHtml(cancellationReason)+'</p><div class="cancellation-meta">'+escapeHtml(label(project.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(project.cancellation.cancelledAt))+'</div></section>'
         : attention
-        ? '<section id="attention" class="product-panel planning-panel '+escapeHtml(attention.kind)+'"><div class="panel-heading"><span>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</span><b>'+escapeHtml(formatTime(attention.occurredAt))+'</b></div><p>'+escapeHtml(attention.summary)+'</p>'+(attention.question ? '<div class="decision-question">'+escapeHtml(attention.question)+'</div>' : '')+'</section>'
+        ? '<section id="attention" class="product-panel planning-panel '+escapeHtml(attention.kind)+'"><div class="panel-heading"><span>'+escapeHtml(attention.kind === "decision_requested" ? "请求决定" : "项目阻塞")+'</span><b>'+escapeHtml(formatTime(attention.occurredAt))+'</b></div><p>'+escapeHtml(attention.summary)+'</p>'+(attention.question ? '<div class="decision-question">'+escapeHtml(attention.question)+'</div>' : '')+(attention.decisionReply ? decisionActions(attention.decisionReply, attention.question || attention.summary, project.planningThreadId) : '')+'</section>'
         : '';
       const notice = archiveNotice+workflowNotice;
       const projectControls = project.archivedAt
@@ -1175,7 +1226,7 @@ export function renderBoardClient(accessToken: string): string {
           (controls ? '<p class="task-action-status" role="status" aria-live="polite"></p>' : '')+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
           '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
-          (task.milestoneWait ? '<section class="milestone-task-wait"><b>等待前置结果</b><p>'+escapeHtml(task.milestoneWait.summary)+'</p>'+(task.milestoneWait.threadId ? '<a href="codex://threads/'+escapeHtml(task.milestoneWait.threadId)+'">打开里程碑对话 ↗</a>' : '')+'</section>' : '')+
+          (task.milestoneWait ? '<section class="milestone-task-wait"><b>等待前置结果</b><p>'+escapeHtml(task.milestoneWait.summary)+'</p>'+decisionActions(task.milestoneWait.decisionReply, task.milestoneWait.summary, task.milestoneWait.threadId, "打开里程碑对话")+'</section>' : '')+
           cancellation+scheduledResume+integrationWait+currentConversation+
           '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+
@@ -1291,7 +1342,7 @@ export function renderBoardClient(accessToken: string): string {
         ["合入提交", evidence.mergedCommit]
       ].filter(([, value]) => value);
       const question = evidence.question
-        ? '<div class="activity-question '+(isCurrentDecision ? "current" : "historical")+'"><b>'+(isCurrentDecision ? "当前需要决定" : "历史决定请求")+'</b><p>'+escapeHtml(evidence.question)+'</p>'+(isCurrentDecision && activity.threadId ? '<a class="detail-link primary" href="codex://threads/'+escapeHtml(activity.threadId)+'">前往对应对话回复 <span>↗</span></a>' : '<small>'+(isCurrentDecision ? "当前执行未关联 Codex 对话。" : "此问题保留为历史活动。")+'</small>')+'</div>'
+        ? '<div class="activity-question '+(isCurrentDecision ? "current" : "historical")+'"><b>'+(isCurrentDecision ? "当前需要决定" : "历史决定请求")+'</b><p>'+escapeHtml(evidence.question)+'</p>'+(isCurrentDecision && activity.threadId ? decisionActions(taskDetail.decisionReply, evidence.question, activity.threadId) : '<small>'+(isCurrentDecision ? "当前执行未关联 Codex 对话。" : "此问题保留为历史活动。")+'</small>')+'</div>'
         : '';
       const findings = evidence.findings?.length
         ? '<div class="activity-evidence-block"><b>审查发现</b><ul>'+evidence.findings.map(finding => '<li>'+escapeHtml(finding)+'</li>').join("")+'</ul></div>'
@@ -1377,6 +1428,7 @@ export function renderBoardClient(accessToken: string): string {
     };
     document.getElementById("nav-backdrop").onclick = () => document.body.classList.remove("nav-open");
     document.addEventListener("keydown", event => {
+      if (replyDialog.open) return;
       const archiveDialog = document.getElementById("project-archive-dialog");
       if (event.key === "Tab" && !archiveDialog.hidden) {
         const focusable = Array.from(archiveDialog.querySelectorAll("button:not([disabled])"));

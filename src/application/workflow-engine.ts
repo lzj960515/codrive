@@ -1,4 +1,11 @@
 import {
+  taskDecisionReply,
+  projectDecisionReply,
+  milestoneDecisionReply,
+  type DecisionReplyInput,
+  type DecisionReplyTarget,
+} from "../domain/decision-reply.js";
+import {
   validateTaskDefinitionUpdate,
   applyTaskDefinitionChanges,
 } from "../domain/task-definition.js";
@@ -253,6 +260,8 @@ export class WorkflowEngine {
     source: LifecycleEventSource,
   ): Promise<unknown> {
     switch (command.type) {
+      case "decision.reply":
+        return this.replyToDecision(command.payload);
       case "milestone.create":
         return this.createMilestone(command.payload);
       case "milestone.update_definition":
@@ -1038,6 +1047,178 @@ export class WorkflowEngine {
         }
       }
     }
+  }
+
+  replyToDecision(
+    input: DecisionReplyInput,
+  ): Promise<Task | Project | Milestone> {
+    return this.enqueue(async () => {
+      const message = input.message.trim();
+      if (!message || message.length > 20_000)
+        throw new WorkflowConflictError("请填写回复，长度不超过 20000 字。");
+      try {
+        if (input.scope === "task")
+          return await this.replyToTaskDecision(input, message);
+        if (input.scope === "milestone") {
+          const { project, milestone } = await this.requireMilestone(input.id);
+          if (!projectCanSchedule(project))
+            throw new WorkflowConflictError(
+              "请先恢复项目运行，再回复当前问题。",
+            );
+          const activities = await this.store.listMilestoneActivities(
+            project.id,
+            milestone.id,
+          );
+          this.assertCurrentDecision(
+            input,
+            milestoneDecisionReply(project, milestone, activities),
+          );
+          return await this.requirePlanningCoordinator().replyToDecision(
+            milestone,
+            message,
+          );
+        }
+        const { project } = await this.requireSnapshot(input.id);
+        this.assertCurrentDecision(input, projectDecisionReply(project));
+        return await this.requirePlanningCoordinator().replyToDecision(
+          project,
+          message,
+        );
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (
+          /another (?:app|process)|already (?:in use|opened|loaded|has an active writer)|thread.*(?:locked|ownership)|different app/i.test(
+            reason,
+          )
+        )
+          throw new WorkflowConflictError(
+            "该会话仍被 Codex App 或其他应用占用，请先在那边释放会话，再重新发送；当前问题仍保留。",
+          );
+        throw error;
+      }
+    });
+  }
+
+  private assertCurrentDecision(
+    input: DecisionReplyInput,
+    target: DecisionReplyTarget | null,
+  ): void {
+    if (
+      !target ||
+      target.scope !== input.scope ||
+      target.id !== input.id ||
+      target.reportOpportunityId !== input.reportOpportunityId
+    )
+      throw new WorkflowConflictError(
+        "当前问题已变化、已回复，或上一轮仍在结束中，请刷新后重试。",
+      );
+  }
+
+  private async replyToTaskDecision(
+    input: DecisionReplyInput,
+    message: string,
+  ): Promise<Task> {
+    const { project, task } = await this.requireTask(input.id);
+    const activities = await this.store.listTaskActivities(project.id, task.id);
+    this.assertCurrentDecision(
+      input,
+      taskDecisionReply(project, task, activities),
+    );
+    if (!(await this.taskCanContinue(project, task)))
+      throw new WorkflowConflictError(
+        "当前任务仍在等待里程碑决定或前置任务，请先处理对应事项。",
+      );
+    const snapshot = await this.requireSnapshot(project.id);
+    if (
+      countActiveTasks(snapshot.tasks) >=
+      projectConcurrencyLimit(project, this.maxConcurrentTasks)
+    )
+      throw new WorkflowConflictError(
+        "项目当前运行名额已满，请等待正在执行的任务结束后再回复。",
+      );
+    if (task.currentExecution!.action === "integrate") {
+      const snapshots = await this.store.listProjects();
+      if (
+        activeIntegrationRepositories(
+          snapshots,
+          await this.allRestrictedTaskIds(snapshots),
+        ).has(resolve(project.repositoryPath))
+      )
+        throw new WorkflowConflictError(
+          "仓库当前正在合入其他任务，请等它结束后再回复。",
+        );
+    }
+    const threadId = task.currentExecution!.threadId!;
+    const taskForTurn = this.prepareTaskForTurn(project, task, {
+      rotateReportOpportunity: true,
+    });
+    const request = await this.taskDispatchRequest(project, taskForTurn);
+    await this.dispatcher.resumeThread(request, threadId);
+    if (await this.dispatcher.isThreadActive(threadId))
+      throw new WorkflowConflictError(
+        "原会话仍在处理上一轮，请等它结束后再发送。",
+      );
+    const execution = taskForTurn.currentExecution!;
+    const pending: Task = {
+      ...taskForTurn,
+      status: statusForTaskAction(execution.action),
+      currentExecution: { ...execution, status: "pending" },
+    };
+    delete pending.currentExecution!.turnId;
+    delete pending.currentExecution!.turnCompletedAt;
+    delete pending.currentExecution!.finishedAt;
+    delete pending.currentExecution!.reportReminderCount;
+    await this.store.saveTask(project.id, pending);
+    let turnId: string;
+    try {
+      const dispatch = await this.dispatcher.replyToDecision(
+        { ...request, task: pending },
+        threadId,
+        message,
+      );
+      if (dispatch.status !== "started")
+        throw new WorkflowConflictError(
+          "原会话仍在处理上一轮，请等它结束后再发送。",
+        );
+      turnId = dispatch.turnId;
+    } catch (error) {
+      await this.store.saveTask(project.id, task);
+      throw error;
+    }
+    const turnStartedAt = this.now();
+    const running: Task = {
+      ...pending,
+      currentExecution: {
+        ...pending.currentExecution!,
+        status: "running",
+        turnId,
+        turnStartedAt,
+        leaseExpiresAt: this.leaseExpiration(),
+      },
+      updatedAt: turnStartedAt,
+    };
+    await this.store.saveTask(project.id, running);
+    await this.recordEvent({
+      type: "decision.replied",
+      projectId: project.id,
+      taskId: task.id,
+      attemptId: execution.attemptId,
+      threadId,
+      turnId,
+      before: taskLifecycleState(task),
+      after: taskLifecycleState(running),
+    });
+    await this.recordEvent({
+      type: "turn.started",
+      projectId: project.id,
+      taskId: task.id,
+      attemptId: execution.attemptId,
+      threadId,
+      turnId,
+      before: taskLifecycleState(task),
+      after: taskLifecycleState(running),
+    });
+    return running;
   }
 
   async observePlanningTurn(threadId: string, turnId: string): Promise<void> {
@@ -4075,6 +4256,17 @@ export class WorkflowEngine {
   private async commandTarget(
     command: CodriveCommand,
   ): Promise<{ projectId?: string; taskId?: string }> {
+    if (command.type === "decision.reply") {
+      const { scope, id } = command.payload;
+      if (scope === "project")
+        return (await this.store.getProject(id)) ? { projectId: id } : {};
+      if (scope === "milestone") {
+        const found = await this.store.findMilestone(id);
+        return found ? { projectId: found.project.id } : {};
+      }
+      const found = await this.store.findTask(id);
+      return found ? { projectId: found.project.id, taskId: id } : {};
+    }
     if ("projectId" in command.payload) {
       return (await this.store.getProject(command.payload.projectId))
         ? { projectId: command.payload.projectId }

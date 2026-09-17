@@ -42,6 +42,26 @@ Persist the affecting activity before interrupting an in-flight task. Dispatch, 
 
 After the required evidence resolves the activity, requeue the original task through normal capacity and integration checks. A still-valid task keeps its definition and resumes with the current decision. An invalidated delivery uses the existing cancellation path and, if needed, an ordinary replacement task. Tasks that have already started retain their original definition and milestone membership.
 
+## Replying to a current decision
+
+The board's **在此回复** action sends one human answer to the existing task,
+project-selection, or milestone-assessment conversation. `decision.reply` carries
+`scope`, the owner `id`, the current `reportOpportunityId`, and `message`.
+The serialized workflow validates that the decision is still current and its
+previous turn has ended, then applies the existing scheduling and model rules.
+A task keeps its attempt and action with a new report opportunity; planning and
+assessment start a new attempt in their existing conversation. Historical or
+superseded questions do not offer this action. Failed sends retain the original
+waiting state and the dialog input; successful sends close the dialog.
+
+Codrive unsubscribes after a managed turn actually completes, fails, or is
+interrupted. Its own App Server uses `thread_unload_delay_secs=0`; per-conversation
+operations wait for `thread/closed` before resuming and starting the next turn.
+A failed start also releases the subscription when a fresh snapshot confirms an
+idle conversation. Submitting a report alone does not release an active turn.
+Codex App can still hold an independent writer lock: a conflicting board reply
+asks the user to release that application and retry, preserving the decision.
+
 ## Completion and conversations
 
 All member tasks reaching terminal states triggers assessment, not automatic milestone completion. The owner checks each acceptance criterion against effective reviewed evidence, unresolved sources and questions, and the reasons for cancellation or replacement. Missing deployment, migration, or runtime evidence creates an ordinary verification task. Completion preserves its definition/evidence baseline and stops automatic evaluation; a new goal is subsequent work.

@@ -41,6 +41,22 @@ export class CodexPlanningExecutor implements PlanningExecutor {
       execution.modelRouting.reasoningEffort,
     );
   }
+  replyToDecision(
+    { project, milestone }: PlanningRequest,
+    threadId: string,
+    message: string,
+  ): Promise<string> {
+    const execution = (milestone ?? project).currentExecution!;
+    const target = milestone ? `里程碑 ${milestone.id}` : `项目 ${project.id}`;
+    return this.codex.startTurn(
+      threadId,
+      project.repositoryPath,
+      `请使用 $codrive-task 继续处理${target}，先读取当前 context 中的执行身份与事实。用户对当前问题的回复：\n\n${message}`,
+      execution.modelRouting.model,
+      execution.modelRouting.reasoningEffort,
+    );
+  }
+
   async interrupt({ project, milestone }: PlanningRequest): Promise<void> {
     const execution = (milestone ?? project).currentExecution;
     if (execution?.threadId && execution.turnId)

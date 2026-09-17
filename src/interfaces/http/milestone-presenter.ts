@@ -1,3 +1,5 @@
+import type { DecisionReplyTarget } from "../../domain/decision-reply.js";
+
 export interface MilestoneView {
   id: string;
   title: string;
@@ -10,10 +12,14 @@ export interface MilestoneView {
   acceptanceCriteria: string[];
   threadId: string | null;
   taskCount: number;
+  decisionReply: DecisionReplyTarget | null;
 }
 
 /** 此函数同时供页面内联脚本和展示行为测试使用。 */
-export function createMilestonePresenter(escapeHtml: (value: string) => string) {
+export function createMilestonePresenter(
+  escapeHtml: (value: string) => string,
+  decisionActions: (target: DecisionReplyTarget | null | undefined, question: string, threadId: string | null, conversationLabel: string) => string,
+) {
   function filterTasks<T extends { milestoneId?: string | null }>(tasks: T[], selected: string): T[] {
     return tasks.filter(task => selected === "all" || task.milestoneId === selected);
   }
@@ -62,9 +68,7 @@ export function createMilestonePresenter(escapeHtml: (value: string) => string) 
   }
 
   function detail(milestone: MilestoneView, tasksMarkup: string): string {
-    const conversation = milestone.threadId
-      ? '<div class="detail-actions"><a class="detail-link primary" href="codex://threads/' + escapeHtml(milestone.threadId) + '">' + (milestone.questions.length ? '前往负责人对话决定' : '打开负责人对话') + ' ↗</a></div>'
-      : '';
+    const conversation = decisionActions(milestone.decisionReply, milestone.questions.join("\n\n"), milestone.threadId, milestone.questions.length ? "前往负责人对话决定" : "打开负责人对话");
     const questions = milestone.questions.length
       ? '<section class="milestone-questions" aria-label="需要决定">' + milestone.questions.map(question => '<p class="milestone-question">' + escapeHtml(question) + '</p>').join("") + '</section>'
       : '';

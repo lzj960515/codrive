@@ -1,3 +1,4 @@
+import { taskDecisionReply } from "../../domain/decision-reply.js";
 import { taskCanBeCancelled } from "../../domain/workflow.js";
 import { milestoneTaskWait } from "./milestone-view.js";
 import { projectTaskActivities } from "../../domain/task-activity.js";
@@ -55,7 +56,7 @@ export async function createTaskDetailView(
       projectId: task.projectId,
       milestoneId: task.milestoneId ?? null,
       milestoneTitle: milestoneOwner?.milestone.title ?? null,
-      milestoneWait: milestoneOwner ? milestoneTaskWait(milestoneOwner.milestone, milestoneActivities, task.id) : null,
+      milestoneWait: milestoneOwner ? milestoneTaskWait(milestoneOwner.milestone, milestoneActivities, task.id, project) : null,
       title: task.title,
       description: task.description,
       acceptanceCriteria: task.acceptanceCriteria,
@@ -74,5 +75,6 @@ export async function createTaskDetailView(
     },
     activities: publicActivities,
     currentDecisionRequest,
+    decisionReply: taskDecisionReply(project, task, activities),
   };
 }

@@ -30,6 +30,7 @@ export function createViewStateElementLocator<
     "data-project",
     "data-project-action",
     "data-copy-task-id",
+    "data-decision-reply",
     "data-task-sort",
     "data-retry",
     "data-cancel-task",

@@ -284,7 +284,7 @@ export function createHttpServer(
       const snapshot = (await dependencies.store.getProject(found.project.id))!;
       const activities = await dependencies.store.listMilestoneActivities(found.project.id, found.milestone.id);
       return {
-        milestone: createMilestoneView(found.milestone, activities, snapshot.tasks.filter(task => task.milestoneId === found.milestone.id).length),
+        milestone: createMilestoneView(found.milestone, activities, snapshot.tasks.filter(task => task.milestoneId === found.milestone.id).length, snapshot.project),
         activities,
       };
     },

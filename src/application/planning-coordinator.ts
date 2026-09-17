@@ -99,6 +99,86 @@ export class PlanningCoordinator {
     return this.dispatch(pending);
   }
 
+  async replyToDecision<T extends Owner>(
+    owner: T,
+    message: string,
+  ): Promise<T> {
+    const request = await this.request(owner);
+    const snapshot = (await this.store.getProject(request.project.id))!;
+    if (
+      [snapshot.project, ...snapshot.milestones].some(
+        (other) =>
+          other.id !== owner.id &&
+          other.currentExecution &&
+          active.has(other.currentExecution.status),
+      )
+    )
+      throw new WorkflowConflictError(
+        "当前项目还有规划或评估正在执行，请等它结束后再回复。",
+      );
+    const threadId = owner.currentExecution!.threadId!;
+    const attachedThreadId = await this.executor.openThread(request);
+    if (threadId !== attachedThreadId)
+      throw new WorkflowConflictError("待决定的原会话已变化，请刷新后重试。");
+    if (await this.executor.isThreadActive?.(threadId))
+      throw new WorkflowConflictError(
+        "原会话仍在处理上一轮，请等它结束后再发送。",
+      );
+    const startedAt = this.options.now();
+    const pending = {
+      ...owner,
+      ...(!isMilestone(owner) ? { requestedAction: "select_tasks" } : {}),
+      currentExecution: {
+        attemptId: this.options.createId(
+          isMilestone(owner) ? "milestone_attempt" : "project_attempt",
+        ),
+        reportOpportunityId: this.options.createId("report_opportunity"),
+        action: isMilestone(owner) ? "assess_milestone" : "select_tasks",
+        status: "pending",
+        threadId,
+        startedAt,
+        planningRevision: owner.planning.revision,
+        ...(isMilestone(owner)
+          ? { definitionVersion: owner.definitionVersion }
+          : {}),
+        modelRouting: prepareModelRoutingForTurn(
+          owner.currentExecution!.modelRouting,
+          this.options.modelSettings(request.project),
+          new Date(startedAt),
+          this.options.modelPrimaryProbeAfterMs,
+        ),
+        leaseExpiresAt: this.options.leaseExpiration(),
+      },
+      updatedAt: startedAt,
+    } as T;
+    await this.save(pending);
+    let turnId: string;
+    try {
+      turnId = await this.executor.replyToDecision(
+        await this.request(pending),
+        threadId,
+        message,
+      );
+    } catch (error) {
+      // 发送失败仍保留原问题与报告机会，用户可以修复占用后重新发送。
+      await this.save(owner);
+      throw error;
+    }
+    const running = {
+      ...pending,
+      currentExecution: {
+        ...pending.currentExecution!,
+        status: "running",
+        turnId,
+        turnStartedAt: this.options.now(),
+      },
+    } as T;
+    await this.save(running);
+    await this.event(running, "decision.replied");
+    await this.event(running, "turn.started");
+    return running;
+  }
+
   async submitReport(
     report: ProjectReport,
     validate: (owner: Project, report: ProjectReport) => Promise<void>,

@@ -1,3 +1,4 @@
+import { projectDecisionReply } from "../../domain/decision-reply.js";
 import type { Milestone, MilestoneActivity } from "../../domain/milestone.js";
 import { createMilestoneView, milestoneTaskWait } from "./milestone-view.js";
 import type { ProjectSnapshot } from "../../domain/types.js";
@@ -37,9 +38,10 @@ export function createBoardView(
         milestone,
         milestoneActivities.get(milestone.id) ?? [],
         tasks.filter(task => task.milestoneId === milestone.id).length,
+        project,
       )),
       tasks: tasks.map((task) => ({
-        ...taskMilestoneView(task, milestonesById, milestoneActivities),
+        ...taskMilestoneView(task, milestonesById, milestoneActivities, project),
         id: task.id,
         title: task.title,
         description: task.description,
@@ -74,13 +76,14 @@ function taskMilestoneView(
   task: ProjectSnapshot["tasks"][number],
   milestones: ReadonlyMap<string, Milestone>,
   activities: ReadonlyMap<string, MilestoneActivity[]>,
+  project: ProjectSnapshot["project"],
 ) {
   const milestone = task.milestoneId ? milestones.get(task.milestoneId) : undefined;
   return {
     milestoneId: milestone?.id ?? null,
     milestoneTitle: milestone?.title ?? null,
     milestoneWait: milestone
-      ? milestoneTaskWait(milestone, activities.get(milestone.id) ?? [], task.id)
+      ? milestoneTaskWait(milestone, activities.get(milestone.id) ?? [], task.id, project)
       : null,
   };
 }
@@ -138,6 +141,7 @@ function projectAttention(project: ProjectSnapshot["project"]) {
     return null;
   }
   return {
+    decisionReply: projectDecisionReply(project),
     kind: result.outcome === "needs_input" ? "decision_requested" : "blocked",
     summary: result.summary,
     question: result.question ?? null,

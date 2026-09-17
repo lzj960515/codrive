@@ -1,6 +1,7 @@
+import { milestoneDecisionReply } from "../../domain/decision-reply.js";
 import { projectMilestoneActivities } from "../../domain/milestone-activity.js";
 import type { Milestone, MilestoneActivity } from "../../domain/milestone.js";
-import type { ProjectSnapshot } from "../../domain/types.js";
+import type { Project, ProjectSnapshot } from "../../domain/types.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
 import type { MilestoneView } from "./milestone-presenter.js";
 
@@ -8,6 +9,7 @@ export function createMilestoneView(
   milestone: Milestone,
   activities: readonly MilestoneActivity[],
   taskCount: number,
+  project: Project,
 ): MilestoneView {
   const projection = projectMilestoneActivities(activities);
   const latest = projection.latestAssessment;
@@ -15,6 +17,7 @@ export function createMilestoneView(
     activity.type === "resolution" && activity.resolution.question ? [activity.resolution.question] : [],
   );
   return {
+    decisionReply: milestoneDecisionReply(project, milestone, activities),
     id: milestone.id,
     title: milestone.title,
     description: milestone.description,
@@ -51,6 +54,7 @@ export function milestoneTaskWait(
   milestone: Milestone,
   activities: readonly MilestoneActivity[],
   taskId: string,
+  project: Project,
 ) {
   const unresolved = projectMilestoneActivities(activities).unresolvedActivities;
   const reasons = unresolved.filter(activity =>
@@ -58,6 +62,7 @@ export function milestoneTaskWait(
   );
   if (!reasons.length) return null;
   return {
+    decisionReply: milestoneDecisionReply(project, milestone, activities),
     summary: reasons.map(activity => activity.summary).join("\n"),
     threadId: milestone.threadId ?? null,
   };

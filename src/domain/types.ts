@@ -1,3 +1,4 @@
+import type { DecisionReplyInput } from "./decision-reply.js";
 import type {
   Milestone,
   CreateMilestoneInput,
@@ -414,6 +415,7 @@ export interface CreateProjectInput {
 }
 
 export type CodriveCommand =
+  | { type: "decision.reply"; payload: DecisionReplyInput }
   | { type: "milestone.create"; payload: CreateMilestoneInput }
   | {
       type: "milestone.update_definition";

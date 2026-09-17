@@ -12,10 +12,9 @@ import type { InitializeResponse } from "./app-server-protocol/InitializeRespons
 import type { ModelListResponse } from "./app-server-protocol/v2/ModelListResponse.js";
 import type { HooksListResponse } from "./app-server-protocol/v2/HooksListResponse.js";
 import type { SkillsListResponse } from "./app-server-protocol/v2/SkillsListResponse.js";
-import type { ThreadResumeResponse } from "./app-server-protocol/v2/ThreadResumeResponse.js";
 import type { ThreadReadResponse } from "./app-server-protocol/v2/ThreadReadResponse.js";
 import type { ThreadStartResponse } from "./app-server-protocol/v2/ThreadStartResponse.js";
-import type { TurnStartResponse } from "./app-server-protocol/v2/TurnStartResponse.js";
+import { CodexThreadSession } from "./codex-thread-session.js";
 import {
   JsonRpcConnection,
   type JsonRpcNotification,
@@ -36,6 +35,7 @@ export class CodexAppServerClient implements CodexGateway {
   private readonly notifications = new EventEmitter();
   private starting: Promise<void> | null = null;
   private stopping = false;
+  private readonly sessions = new Map<string, CodexThreadSession>();
 
   constructor(private readonly options: CodexAppServerOptions = {}) {}
 
@@ -57,7 +57,7 @@ export class CodexAppServerClient implements CodexGateway {
 
   private async startProcess(): Promise<void> {
     const command = resolveCodexCommand(this.options.executable);
-    this.process = spawn(command.executable, [...command.args, "app-server"], {
+    this.process = spawn(command.executable, [...command.args, "app-server", "-c", "thread_unload_delay_secs=0"], {
       stdio: ["pipe", "pipe", "pipe"],
       env: this.options.env ?? process.env,
     });
@@ -66,12 +66,13 @@ export class CodexAppServerClient implements CodexGateway {
     });
     this.connection = new JsonRpcConnection(this.process.stdout, this.process.stdin);
     this.connection.onNotification((notification) => {
-      this.notifications.emit("notification", notification);
+      this.handleNotification(notification);
     });
     this.process.once("exit", (code, signal) => {
       this.connection?.close(
         new Error(`Codex App Server exited (${code ?? signal ?? "unknown"})`),
       );
+      this.disconnectSessions(new Error("Codex App Server disconnected"));
       this.connection = null;
       this.process = null;
       if (!this.stopping) {
@@ -108,18 +109,14 @@ export class CodexAppServerClient implements CodexGateway {
       sandbox: "danger-full-access",
       serviceName: "codrive",
     });
+    this.sessions.set(response.thread.id, new CodexThreadSession(connection, response.thread.id, true));
     await this.setThreadName(response.thread.id, title);
     return response.thread.id;
   }
 
   async resumeThread(threadId: string, cwd: string): Promise<void> {
     await this.start();
-    await this.requireConnection().request<ThreadResumeResponse>("thread/resume", {
-      threadId,
-      cwd,
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
-    });
+    await this.session(threadId).resume(cwd);
   }
 
   async setThreadName(threadId: string, name: string): Promise<void> {
@@ -139,8 +136,8 @@ export class CodexAppServerClient implements CodexGateway {
   ): Promise<string> {
     await this.start();
     const effort = reasoningEffort ?? await this.defaultReasoningEffort(model);
-    const response = await this.requireConnection().request<TurnStartResponse>(
-      "turn/start",
+    return this.session(threadId).startTurn(
+      cwd,
       {
         threadId,
         cwd,
@@ -151,7 +148,6 @@ export class CodexAppServerClient implements CodexGateway {
         input: [{ type: "text", text: prompt, text_elements: [] }],
       },
     );
-    return response.turn.id;
   }
 
   async listModels(): Promise<CodexModelOption[]> {
@@ -279,6 +275,7 @@ export class CodexAppServerClient implements CodexGateway {
   async stop(): Promise<void> {
     this.stopping = true;
     const child = this.process;
+    this.disconnectSessions(new Error("Codex App Server stopped"));
     this.connection?.close();
     this.connection = null;
     this.process = null;
@@ -289,6 +286,50 @@ export class CodexAppServerClient implements CodexGateway {
       child.once("exit", () => resolve());
       child.kill("SIGTERM");
     });
+  }
+
+  private session(threadId: string): CodexThreadSession {
+    let session = this.sessions.get(threadId);
+    if (!session) {
+      session = new CodexThreadSession(this.requireConnection(), threadId);
+      this.sessions.set(threadId, session);
+    }
+    return session;
+  }
+
+  private handleNotification(notification: JsonRpcNotification): void {
+    const params = notification.params as { threadId?: string; turn?: { id?: string; status?: string } } | undefined;
+    const session = params?.threadId ? this.sessions.get(params.threadId) : undefined;
+    if (notification.method === "thread/closed") session?.closed();
+    if (
+      notification.method === "turn/completed" && session && params?.turn?.id &&
+      ["completed", "interrupted", "failed"].includes(params.turn.status ?? "")
+    ) {
+      void this.releaseCompletedTurn(session, params.threadId!, params.turn.id, notification);
+      return;
+    }
+    this.notifications.emit("notification", notification);
+  }
+
+  private async releaseCompletedTurn(
+    session: CodexThreadSession,
+    threadId: string,
+    turnId: string,
+    notification: JsonRpcNotification,
+  ): Promise<void> {
+    try {
+      await session.releaseCompletedTurn(turnId);
+    } catch (error) {
+      this.options.onStderr?.(`Codex thread ${threadId} unsubscribe failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    } finally {
+      // 清理失败也必须让现有工作流收到真实的回合结果。
+      this.notifications.emit("notification", notification);
+    }
+  }
+
+  private disconnectSessions(error: Error): void {
+    for (const session of this.sessions.values()) session.disconnected(error);
+    this.sessions.clear();
   }
 
   private requireConnection(): JsonRpcConnection {

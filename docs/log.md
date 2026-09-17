@@ -2,10 +2,14 @@
 
 ## 2026-09-17
 
+- Added a current-decision reply dialog for task, project, and milestone owners,
+  with original-conversation dispatch, stale-reply protection, and failure rollback.
+- Made Codrive release completed thread subscriptions and wait for unloading
+  before resuming; external Desktop ownership remains an explicit send conflict.
+
 - Updated the bundled Codex CLI dependency to 0.154.0, which supports configurable
   thread unloading; regenerated the App Server protocol and adapted non-command
-  Hook metadata to the existing nullable command contract. Automatic conversation
-  unsubscribe remains a separate integration change.
+  Hook metadata to the existing nullable command contract.
 
 ## 2026-09-16
 

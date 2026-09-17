@@ -140,6 +140,16 @@ function project(): Project {
 }
 
 describe("CodexPlanningExecutor", () => {
+  it("sends the user answer with the project identity to its bound conversation", async () => {
+    const gateway = new RecordingGateway();
+    const owner = project();
+    owner.currentExecution!.modelRouting.reasoningEffort = "ultra";
+    await new CodexPlanningExecutor(gateway).replyToDecision({ project: owner }, "existing_project_thread", "Proceed with the accepted goal.");
+    expect(gateway.calls).toEqual([{ method: "startTurn", args: ["existing_project_thread", owner.repositoryPath, expect.stringContaining("Proceed with the accepted goal."), "gpt-5.6-sol", "ultra"] }]);
+    expect(gateway.calls[0]!.args[2]).toContain(owner.id);
+    expect(gateway.calls[0]!.args[2]).toContain("$codrive-task");
+  });
+
   const directories: string[] = [];
   afterEach(async () => {
     await Promise.all(

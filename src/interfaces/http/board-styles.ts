@@ -419,6 +419,26 @@ export const boardStyles = `
   .activity-question.historical { color: #6d6456; background: #f4f1e9; border-color: #ded8c9; }
   .activity-question .detail-link { min-height: 34px; margin-top: 10px; padding-inline: 12px; }
   .activity-question small { display: block; margin-top: 7px; color: #8e6d3d; font-size: 9px; }
+  .decision-actions { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; margin-top: 10px; }
+  .decision-actions > * { flex: 1 1 auto; min-width: 0; }
+  .planning-notice .decision-actions { grid-column: 1 / -1; justify-content: flex-end; margin-top: 0; }
+  .planning-notice .decision-actions > * { flex: 0 1 auto; min-height: 30px; }
+  .activity-question .decision-actions .detail-link { margin-top: 0; }
+  .decision-reply-dialog { width: min(560px, calc(100% - 28px)); max-height: calc(100dvh - 28px); padding: 0; overflow-y: auto; color: var(--ink); background: #fbfcf9; border: 1px solid #dfe4df; border-radius: 20px; box-shadow: 0 32px 100px rgba(0,0,0,.34); }
+  .decision-reply-dialog::backdrop { background: rgba(8,21,16,.72); backdrop-filter: blur(6px); }
+  .decision-reply-panel { padding: clamp(20px, 4vw, 30px); }
+  .decision-reply-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+  .decision-reply-head h2 { margin: 0; font-size: 21px; }
+  .decision-reply-context { max-height: 26dvh; margin: 0 0 22px; padding: 14px 16px; overflow-y: auto; overflow-wrap: anywhere; color: #655334; background: #fff3d5; border: 1px solid #ecd08f; border-radius: 10px; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
+  .decision-reply-label { display: block; margin-bottom: 9px; font-size: 12px; font-weight: 700; }
+  .decision-reply-panel textarea { display: block; width: 100%; min-height: 130px; max-height: 40dvh; padding: 12px 14px; resize: vertical; color: var(--ink); background: white; border: 1px solid var(--line-strong); border-radius: 10px; font: inherit; font-size: 16px; line-height: 1.6; }
+  .decision-reply-panel textarea:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+  .decision-reply-error { min-height: 18px; margin: 10px 0 14px; color: #a13d2f; font-size: 12px; line-height: 1.5; }
+  .decision-reply-actions { display: flex; justify-content: flex-end; gap: 10px; }
+  .decision-reply-actions button { min-width: 84px; min-height: 40px; }
+  .decision-reply-panel button:disabled, .decision-reply-panel textarea:disabled { opacity: .6; cursor: wait; }
+  .decision-reply-notice { position: fixed; z-index: 90; bottom: 24px; left: 50%; margin: 0; padding: 12px 20px; color: white; background: #24483d; border-radius: 12px; box-shadow: var(--shadow); transform: translateX(-50%); font-size: 13px; }
+  .decision-reply-notice:empty { display: none; }
   .activity-git { display: grid; min-width: 0; max-width: 100%; grid-template-columns: minmax(0,68px) minmax(0,1fr); gap: 7px 9px; margin: 0; padding: 10px 11px; background: #eef3f0; border-radius: 9px; font-size: 9px; }
   .activity-git dt { color: #7d8882; }
   .activity-git dd { min-width: 0; margin: 0; overflow: hidden; color: #34463e; text-overflow: ellipsis; white-space: nowrap; }

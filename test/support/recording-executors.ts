@@ -125,6 +125,10 @@ export class RecordingTaskDispatcher implements TaskDispatcher {
     };
   }
 
+  async replyToDecision(request: DispatchRequest, threadId: string, _message: string): Promise<TurnDispatchResult> {
+    return this.startTurn(request, threadId);
+  }
+
   async interrupt(request: DispatchRequest): Promise<void> {
     this.interrupted.push(request);
   }
@@ -153,6 +157,10 @@ export class RecordingProjectExecutor implements PlanningExecutor {
   async requestReport(request: PlanningRequest, threadId: string): Promise<string> {
     this.reminders.push({ ...request, threadId });
     return `project_reminder_${this.reminders.length}`;
+  }
+
+  async replyToDecision(request: PlanningRequest, threadId: string, _message: string): Promise<string> {
+    return this.startTurn(request, threadId);
   }
 
   async interrupt(request: PlanningRequest): Promise<void> {

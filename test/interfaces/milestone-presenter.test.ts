@@ -1,3 +1,4 @@
+import { createDecisionReplyPresenter } from "../../src/interfaces/http/decision-reply-presenter.js";
 import { describe, expect, it } from "vitest";
 import { createMilestonePresenter, type MilestoneView } from "../../src/interfaces/http/milestone-presenter.js";
 
@@ -5,19 +6,19 @@ const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<",
 const goal = (overrides: Partial<MilestoneView> = {}): MilestoneView => ({
   id: "m", title: "Social migration", description: "Keep existing results", status: "active", statusLabel: "需要决定",
   summary: "Investigating another consumer", questions: ["Keep <export>?"], evidence: [],
-  acceptanceCriteria: ["Existing scenarios work"], threadId: "thread-1", taskCount: 3, ...overrides,
+  acceptanceCriteria: ["Existing scenarios work"], threadId: "thread-1", taskCount: 3, decisionReply: null, ...overrides,
 });
 
 describe("milestone presentation", () => {
   it("filters milestones without changing task order", () => {
-    const view = createMilestonePresenter(escape);
+    const view = createMilestonePresenter(escape, createDecisionReplyPresenter(escape));
     const tasks = [{ id: "a", milestoneId: "m" }, { id: "b", milestoneId: null }, { id: "c", milestoneId: "m" }];
     expect(view.filterTasks(tasks, "m").map(task => task.id)).toEqual(["a", "c"]);
     expect(view.filterTasks(tasks, "all")).toEqual(tasks);
   });
 
   it("includes all task statuses in every ownership filter", () => {
-    const view = createMilestonePresenter(escape);
+    const view = createMilestonePresenter(escape, createDecisionReplyPresenter(escape));
     const tasks = [
       { id: "active", milestoneId: "m", status: "working" },
       { id: "completed", milestoneId: "m", status: "done" },
@@ -30,7 +31,7 @@ describe("milestone presentation", () => {
   });
 
   it("separates active goal selection from an adjacent detail action", () => {
-    const view = createMilestonePresenter(escape);
+    const view = createMilestonePresenter(escape, createDecisionReplyPresenter(escape));
     const markup = view.activeFilters([goal(), goal({ id: "past", title: "Past goal", status: "done" })], "m");
     expect(markup).not.toContain("filter-label");
     expect(markup).toContain('data-milestone-filter="all">重置</button>');
@@ -47,7 +48,7 @@ describe("milestone presentation", () => {
   });
 
   it("retains milestone access when no goal is selected", () => {
-    const view = createMilestonePresenter(escape);
+    const view = createMilestonePresenter(escape, createDecisionReplyPresenter(escape));
     const markup = view.activeFilters([goal()], "");
     expect(markup).toContain('data-milestone-filter="m" aria-pressed="false"');
     expect(markup).toContain('data-open-milestone="m"');
@@ -57,7 +58,7 @@ describe("milestone presentation", () => {
   });
 
   it("keeps the full milestone collection discoverable with status filters", () => {
-    const view = createMilestonePresenter(escape);
+    const view = createMilestonePresenter(escape, createDecisionReplyPresenter(escape));
     const goals = [goal(), goal({ id: "past", title: "Past goal", status: "done", statusLabel: "已完成", questions: [] })];
     const all = view.list(goals, "all");
     expect(all).toContain("Social migration");
@@ -71,7 +72,7 @@ describe("milestone presentation", () => {
   });
 
   it("shows goal, criteria, evidence and full tasks directly in the familiar detail panel", () => {
-    const view = createMilestonePresenter(escape);
+    const view = createMilestonePresenter(escape, createDecisionReplyPresenter(escape));
     const markup = view.detail(goal({ evidence: ["Export <verified>"] }), '<button data-task="a">Completed task</button>');
     expect(markup).toContain('class="detail-head"');
     expect(markup).toContain('aria-label="关闭里程碑详情"');
@@ -86,7 +87,7 @@ describe("milestone presentation", () => {
   });
 
   it("presents goal acceptance independently of task-count progress", () => {
-    const view = createMilestonePresenter(escape);
+    const view = createMilestonePresenter(escape, createDecisionReplyPresenter(escape));
     const markup = view.detail(goal({ status: "done", statusLabel: "已完成", questions: [], threadId: null, evidence: ["Flow verified"] }), "");
     expect(markup).toContain("已完成");
     expect(markup).toContain("Flow verified");

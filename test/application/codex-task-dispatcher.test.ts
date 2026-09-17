@@ -148,6 +148,18 @@ function createDispatcher(
 }
 
 describe("CodexTaskDispatcher", () => {
+  it("sends the exact user answer with stage guidance to the bound conversation", async () => {
+    const gateway = new RecordingGateway();
+    const dispatcher = createDispatcher(gateway, false, true);
+    const current = task();
+    current.currentExecution!.action = "review";
+    current.currentExecution!.modelRouting.reasoningEffort = "ultra";
+    await dispatcher.replyToDecision(request(current), "existing_review_thread", "Only review the agreed changes.");
+    expect(gateway.calls).toEqual([{ method: "startTurn", args: ["existing_review_thread", project.repositoryPath, expect.stringContaining("Only review the agreed changes."), "gpt-5.6-sol", "ultra"] }]);
+    expect(gateway.calls[0]!.args[2]).toContain("$code-review");
+    expect(gateway.calls[0]!.args[2]).toContain("$codrive-task");
+  });
+
   it("preserves configured effort across initial, report and scheduled resume turns", async () => {
     const gateway = new RecordingGateway();
     const dispatcher = createDispatcher(gateway);

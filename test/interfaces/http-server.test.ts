@@ -2308,7 +2308,8 @@ describe("HTTP API", () => {
     expect(page.body).not.toContain("State stays on this Mac");
     expect(page.body).not.toContain("Product workbench");
     expect(page.body).not.toContain("data-context");
-    expect(page.body).not.toContain("<textarea");
+    expect(page.body.match(/<textarea\b/g)).toHaveLength(1);
+    expect(page.body).toContain('id="decision-reply-message"');
   });
 
   it("shows an integrate candidate waiting for the repository lease", async () => {

@@ -6,6 +6,11 @@ export interface PlanningRequest {
   milestone?: Milestone;
 }
 export interface PlanningExecutor {
+  replyToDecision(
+    request: PlanningRequest,
+    threadId: string,
+    message: string,
+  ): Promise<string>;
   openThread(request: PlanningRequest): Promise<string>;
   startTurn(request: PlanningRequest, threadId: string): Promise<string>;
   requestReport(request: PlanningRequest, threadId: string): Promise<string>;

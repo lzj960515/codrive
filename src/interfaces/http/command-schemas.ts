@@ -145,6 +145,10 @@ const milestoneReportSchema = z.object({
 }).strict();
 
 export const commandSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("decision.reply"), payload: z.object({
+    scope: z.enum(["task", "project", "milestone"]), id: z.string().min(1),
+    reportOpportunityId: z.string().min(1), message: z.string().trim().min(1).max(20_000),
+  }).strict() }).strict(),
   z.object({ type: z.literal("milestone.create"), payload: milestoneInputSchema.extend({ projectId: z.string().min(1) }) }).strict(),
   z.object({ type: z.literal("milestone.update_definition"), payload: z.object({
     milestoneId: z.string().min(1), expectedDefinitionVersion: z.number().int().positive(),

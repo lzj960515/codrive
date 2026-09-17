@@ -97,6 +97,20 @@ export class CodexTaskDispatcher implements TaskDispatcher {
     );
   }
 
+  async replyToDecision(
+    request: DispatchRequest,
+    threadId: string,
+    message: string,
+  ): Promise<TurnDispatchResult> {
+    return this.startWhenConversationIsIdle(
+      threadId,
+      conversationDirectory(request),
+      `${await this.taskPrompt(request)}。用户对当前问题的回复：\n\n${message}`,
+      request.task.currentExecution!.modelRouting.model,
+      request.task.currentExecution!.modelRouting.reasoningEffort,
+    );
+  }
+
   async interrupt(request: DispatchRequest): Promise<void> {
     const execution = request.task.currentExecution;
     if (execution?.threadId && execution.turnId) {
