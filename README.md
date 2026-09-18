@@ -22,10 +22,10 @@ Codrive is a local task manager for **Codex App**. It organizes agreed goals int
 
 ## Why Codrive?
 
-- **Automatic execution:** Break down goals and schedule tasks, including independent work for small changes.
-- **Adaptive planning:** Add tasks and revise plans as new findings emerge. Decisions beyond the authorized scope come back to you.
-- **Independent review:** Review every work result independently and verify milestone completion against acceptance evidence.
-- **Visible progress:** Follow the board and revisit planning, execution, and review in project conversations. Join at any time.
+- **Automatic execution:** Turn goals into actionable tasks, order the work, and keep it moving.
+- **Adaptive planning:** Update tasks and plans as new information emerges. You decide when the work needs to expand beyond its original scope.
+- **Independent review:** Review each result separately and complete milestones only after they meet the acceptance criteria.
+- **Visible progress:** Track progress on the board, revisit planning, execution, and review, and step in whenever a decision is needed.
 
 ## Get started
 
