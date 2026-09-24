@@ -9,7 +9,7 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 node <skill-directory>/scripts/codrive-task.mjs milestone-context <milestone-id>
 ```
 
-读取产品契约、当前目标、任务状态、完整相关活动和直接证据。项目选择的 `taskDocuments` 指向任务 JSON；里程碑上下文的 `tasks` 直接包含任务记录。每轮读取相关任务，有 `taskDocumentPath` 时从 `repositoryPath` 指向的主项目目录读取原 Markdown 文件，以当前内容判断任务；没有路径的历史任务沿用 `description` 和 `acceptanceCriteria`。`PROJECT.md` 只承载当前长期产品事实；里程碑定义拥有阶段目标、范围与验收。每轮保存 context 返回的 `attemptId`、`reportOpportunityId` 与读取版本；报告原样使用这些身份。新证据可以推翻旧结论，历史活动保留来源，当前计划按最新证据判断。
+读取产品契约、当前目标、任务状态、完整相关活动和直接证据。项目选择的 `taskDocuments` 指向任务 JSON；里程碑上下文的 `tasks` 直接包含任务记录。每轮读取相关任务：登记了 `taskDocumentPath` 时，从 `repositoryPath` 指向的主项目目录读取原文档，以当前内容判断任务；没有登记该字段时，按旧任务读取 `description` 和 `acceptanceCriteria`。已登记路径的文件缺失或为空时报告阻塞。`PROJECT.md` 只承载当前长期产品事实；里程碑定义拥有阶段目标、范围与验收。每轮保存 context 返回的 `attemptId`、`reportOpportunityId` 与读取版本；报告原样使用这些身份。新证据可以推翻旧结论，历史活动保留来源，当前计划按最新证据判断。
 
 已有授权来自用户确认目标、产品契约、里程碑边界及已接受决定。目标内必要漏项、调查和实现方法直接处理；范围外能力或改变已有业务结果的选择才需要用户。报告依据说明具体事实与授权，理由本身不扩大授权。
 
@@ -57,7 +57,7 @@ node <skill-directory>/scripts/codrive-task.mjs milestone-report <milestone-id> 
 
 `plan` 只按需要包含：
 
-- `tasks`：新增普通任务，每项 `key` 在本报告内唯一，其他字段为 `title`、`taskDocumentPath`。提交报告前按[任务文档写法](../../codrive-work/references/task-document.md)在主项目仓库写好、读回每份文档。
+- `tasks`：新增普通任务，每项 `key` 在本报告内唯一，其他字段为 `title`、`taskDocumentPath`。提交报告前按[任务文档模板](../../codrive-work/references/task-document.md)在主项目仓库的 `docs/tasks/` 写好、读回每份文档。
 - `updates`：普通未开始任务登记信息的 `taskId`、`expectedUpdatedAt`、`changes`；已有路径文档的正文变化直接编辑原文件。
 - `cancellations`：已证实需要取消任务的 `taskId`、`expectedUpdatedAt`、`decisionBasis`、`reason`，沿用 `agent_decision | user_confirmed`。
 - `resolutions`：`sourceActivityIds`、`summary`，可附 `question`、`affectedTaskIds`、`waitForTaskIds`。任务引用使用现有 ID 或同一计划 `tasks[].key`，Codrive 在接受时统一转成新任务 ID。

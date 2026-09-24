@@ -44,7 +44,7 @@ Milestone goals and task plans are separate current facts, provided alongside th
 
 ## Task definition changes
 
-新登记的普通任务先在项目仓库写好非空文档，再登记标题和相对仓库根目录的 `taskDocumentPath`。每轮规划、工作、审查和恢复均从原路径读取当前内容；直接编辑文件即可调整后续回合使用的任务正文，不保存正文快照。没有该路径的历史任务继续使用 `description` 和 `acceptanceCriteria`。自动生成的业务地图维护任务由内部流程创建并继续使用其内部定义。
+新登记的普通任务先在项目仓库的 `docs/tasks/` 写好非空文档，再登记标题和相对仓库根目录的 `taskDocumentPath`。每轮规划、工作、审查和恢复均从原路径读取当前内容；直接编辑文件即可调整后续回合使用的任务正文，不保存正文快照。没有该路径的历史任务继续使用 `description` 和 `acceptanceCriteria`。自动生成的业务地图维护任务由内部流程创建并继续使用其内部定义。
 
 普通未开始任务处于 `backlog`、尚无请求动作和执行记录时，可以用 `task.update_definition` 调整标题、里程碑归属或文档路径；历史任务还可以修改原描述和验收条件，首次设置文档路径后转为文档模式。命令携带当前 `updatedAt` 和决定摘要。Codrive 拒绝过期版本、无变化更新、系统生成的任务、已归档或取消的项目，以及已开始的任务。已有路径的正文直接编辑原文件，不经过定义修改命令。
 

@@ -99,7 +99,7 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> resche
 }
 ```
 
-`changes` 可修改 `title`、`taskDocumentPath` 或 `milestoneId`；没有文档路径的历史任务还可修改 `description` 和 `acceptanceCriteria`。历史未开始任务首次设置文档路径时转为文档模式。`taskDocumentPath` 指向项目仓库内已写好并读回的 Markdown 文件，写法见[任务文档](../codrive-work/references/task-document.md)。归属只能指向同项目开放里程碑，解除归属使用 `null`。只发送需要改变的字段：
+`changes` 可修改 `title`、`taskDocumentPath` 或 `milestoneId`；没有文档路径的历史任务还可修改 `description` 和 `acceptanceCriteria`。历史未开始任务首次设置文档路径时转为文档模式。新写的任务文档放在项目仓库的 `docs/tasks/`，按[任务文档模板](../codrive-work/references/task-document.md)填写并读回，再登记 `taskDocumentPath`。归属只能指向同项目开放里程碑，解除归属使用 `null`。只发送需要改变的字段：
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs task-update <task-id> --json '<task-update-json>'
