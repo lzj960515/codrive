@@ -57,7 +57,7 @@ node <skill-directory>/scripts/codrive-task.mjs milestone-report <milestone-id> 
 
 `plan` 只按需要包含：
 
-- `tasks`：新增普通任务，每项 `key` 在本报告内唯一，其他字段为 `title`、`taskDocumentPath`。提交报告前按[任务文档模板](../../codrive-work/references/task-document.md)在主项目仓库的 `docs/tasks/` 写好、读回每份文档。
+- `tasks`：新增普通任务，每项 `key` 在本报告内唯一，其他字段为 `title`、`taskDocumentPath`。提交报告前按[任务文档模板](../../codrive-work/references/task-document.md)在主项目仓库的 `docs/tasks/` 写好、读回每份文档，核对本任务的背景、问题、做法理由和验收场景。
 - `updates`：普通未开始任务登记信息的 `taskId`、`expectedUpdatedAt`、`changes`；已有路径文档的正文变化直接编辑原文件。
 - `cancellations`：已证实需要取消任务的 `taskId`、`expectedUpdatedAt`、`decisionBasis`、`reason`，沿用 `agent_decision | user_confirmed`。
 - `resolutions`：`sourceActivityIds`、`summary`，可附 `question`、`affectedTaskIds`、`waitForTaskIds`。任务引用使用现有 ID 或同一计划 `tasks[].key`，Codrive 在接受时统一转成新任务 ID。

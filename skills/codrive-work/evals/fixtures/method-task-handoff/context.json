@@ -1,0 +1,30 @@
+{
+  "project": {
+    "id": "project_method_demo",
+    "name": "创作方法工作台",
+    "repositoryPath": ".",
+    "status": "active"
+  },
+  "task": {
+    "id": "task_method_runtime",
+    "projectId": "project_method_demo",
+    "milestoneId": "milestone_first_release",
+    "title": "建立 17 篇方法资源与阶段运行框架",
+    "taskDocumentPath": "docs/tasks/build-method-runtime.md",
+    "status": "backlog",
+    "requestedAction": null,
+    "executions": []
+  },
+  "relatedTasks": [
+    {
+      "id": "task_project_handoff",
+      "title": "建立项目和统一交接单",
+      "status": "done"
+    },
+    {
+      "id": "task_first_methods",
+      "title": "实现第 1–2 篇具体判断",
+      "status": "backlog"
+    }
+  ]
+}

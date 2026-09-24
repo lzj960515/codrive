@@ -24,7 +24,7 @@ node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-
 
 读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities`、关联里程碑的当前目标与未决活动，以及仓库 `AGENTS.md`。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务正文、当前状态和已有证据恢复连续上下文。
 
-每轮先读取 `taskDocument` 指向的任务 JSON：登记了 `taskDocumentPath` 时，按 `repositoryPath` 定位主项目目录中的原文档并读取当前内容，以文档中的交付结果和验收条件作为任务正文；任务 JSON 没有登记 `taskDocumentPath` 时，按旧任务读取 `description` 和 `acceptanceCriteria`。在进入任务工作树前完成这一步，审查、合入和恢复回合也重新读取。已登记路径指向的文件缺失或内容为空时，核对仓库与路径并报告明确阻塞。将任务正文、当前阶段、完整活动历史和仓库规则共同作为本轮任务语义。开始执行当前阶段前，对照当前可用 Skill 的 `description`，加载与当前阶段实际工作匹配的 Skill，并遵循对应工作流。没有其他匹配 Skill 的任务继续按照本 Skill 完成。
+每轮先读取 `taskDocument` 指向的任务 JSON：登记了 `taskDocumentPath` 时，按 `repositoryPath` 定位主项目目录中的原文档并读取当前内容，以整篇文档的背景、问题、目标、已确认做法及理由、验收和引用的决定性资料理解任务；任务 JSON 没有登记 `taskDocumentPath` 时，按旧任务读取 `description` 和 `acceptanceCriteria`。在进入任务工作树前完成这一步，审查、合入和恢复回合也重新读取。已登记路径指向的文件缺失或内容为空时，核对仓库与路径并报告明确阻塞。将任务正文、当前阶段、完整活动历史和仓库规则共同作为本轮任务语义。开始执行当前阶段前，对照当前可用 Skill 的 `description`，加载与当前阶段实际工作匹配的 Skill，并遵循对应工作流。没有其他匹配 Skill 的任务继续按照本 Skill 完成。
 
 `productFacts.status` 为 `modified` 时，磁盘文件尚未完成 Codrive 通知；负责这次修改的对话先用 `$codrive-control` 记录文档变更。项目选择在状态恢复为 `current` 前保持停止。
 
