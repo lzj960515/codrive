@@ -12,10 +12,9 @@ import type { ProjectStore } from "../infrastructure/project-store.js";
 import type { PlanningExecutor, PlanningRequest } from "./planning-executor.js";
 import {
   initialModelRouting,
-  isModelCapacityFailure,
   isRetryDue,
   markRetryStarted,
-  planModelCapacityRecovery,
+  planTurnFailureRecovery,
   prepareModelRoutingForTurn,
   resetCapacityFailuresAfterStableTurn,
   type CodexTurnFailure,
@@ -321,24 +320,19 @@ export class PlanningCoordinator {
       !inFlight.has(execution.status)
     )
       return owner;
-    if (!isModelCapacityFailure(failure))
-      return this.fail(owner, failure.message);
     const request = await this.request(owner);
     const now = new Date(this.options.now());
-    const routing = resetCapacityFailuresAfterStableTurn(
+    const recovery = planTurnFailureRecovery(
       execution.modelRouting,
-      execution.turnStartedAt,
-      now,
-      this.options.modelCapacityRetryResetAfterMs,
-    );
-    const recovery = planModelCapacityRecovery(
-      routing,
       failure,
       this.options.modelSettings(request.project),
       now,
       this.options.modelCapacityRetryDelaysMs,
+      this.options.modelCapacityRetryResetAfterMs,
       this.options.modelPrimaryProbeAfterMs,
+      execution.turnStartedAt,
     );
+    if (!recovery) return this.fail(owner, failure.message);
     if (recovery.outcome === "exhausted")
       return this.fail(
         {

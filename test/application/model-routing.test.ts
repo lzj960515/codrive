@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   initialModelRouting,
   planModelCapacityRecovery,
+  planTurnFailureRecovery,
   prepareModelRoutingForTurn,
 } from "../../src/application/model-routing.js";
 import type { ExecutionModelRouting, ModelRoutingSettings } from "../../src/domain/types.js";
@@ -17,6 +18,52 @@ const settings: ModelRoutingSettings = {
 const failure = { turnId: "turn_1", message: "Selected model is at capacity" };
 
 describe("reasoning effort model routing", () => {
+  it("keeps transport and capacity retry budgets separate", () => {
+    const primary = initialModelRouting(settings);
+    const capacity = planTurnFailureRecovery(
+      primary,
+      failure,
+      settings,
+      now,
+      [5_000, 10_000, 20_000],
+      300_000,
+      300_000,
+    )!;
+    const disconnected = planTurnFailureRecovery(
+      capacity.routing,
+      {
+        turnId: "turn_2",
+        message: "Response stream disconnected",
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+      },
+      settings,
+      now,
+      [5_000, 10_000, 20_000],
+      300_000,
+      300_000,
+    )!;
+    expect(disconnected.routing).toMatchObject({
+      model: settings.primary,
+      retryCount: 1,
+      lastError: { kind: "transport_error" },
+    });
+
+    const nextCapacity = planTurnFailureRecovery(
+      disconnected.routing,
+      failure,
+      settings,
+      now,
+      [5_000, 10_000, 20_000],
+      300_000,
+      300_000,
+    )!;
+    expect(nextCapacity.routing).toMatchObject({
+      model: settings.primary,
+      retryCount: 1,
+      lastError: { kind: "model_capacity" },
+    });
+  });
+
   it("starts with primary effort and switches to fallback effort on capacity exhaustion", () => {
     const primary = initialModelRouting(settings);
     expect(primary.reasoningEffort).toBe("high");

@@ -29,8 +29,8 @@ export interface ModelRoutingSettings {
 
 export type ModelRoute = "primary" | "fallback";
 
-export interface ModelCapacityError {
-  kind: "model_capacity";
+export interface ModelTurnError {
+  kind: "model_capacity" | "transport_error";
   message: string;
   failedAt: string;
 }
@@ -51,7 +51,7 @@ export interface ExecutionModelRouting {
   retryCount: number;
   circuitBreaker?: ModelCircuitBreaker;
   nextRetryAt?: string;
-  lastError?: ModelCapacityError;
+  lastError?: ModelTurnError;
 }
 
 export type PlanningChangeReason =

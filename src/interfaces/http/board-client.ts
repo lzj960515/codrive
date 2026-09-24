@@ -48,7 +48,7 @@ export function renderBoardClient(accessToken: string): string {
       interrupted: "已中断", approved: "审查通过", needs_review: "等待审查",
       needs_input: "等待决定", queued: "待安排",
       selected: "已完成本轮安排", waiting_for_task: "等待任务完成",
-      retry_scheduled: "等待模型重试", active_paused: "执行中 · 后续已暂停",
+      retry_scheduled: "等待重试", active_paused: "执行中 · 后续已暂停",
       primary: "默认", fallback: "备用", user_confirmed: "用户确认",
       closed: "正常", open: "已熔断", half_open: "主模型探测",
       agent_decision: "Codex 判断", codex: "Codex", user: "用户",
@@ -1237,7 +1237,7 @@ export function renderBoardClient(accessToken: string): string {
           (task.taskDocumentPath ? '' : '<section class="detail-section"><h3>验收标准 <span>'+acceptanceCriteria.length+'</span></h3>'+criteria+'</section>')+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+
           '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.displayStatus))+'</dd>'+
-            (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd>'+(task.modelRouting.circuitBreaker ? '<dt>主模型熔断</dt><dd>'+escapeHtml(label(task.modelRouting.circuitBreaker.state))+(task.modelRouting.circuitBreaker.primaryProbeAt ? ' · '+escapeHtml(formatTime(task.modelRouting.circuitBreaker.primaryProbeAt)) : '')+'</dd>' : '')+'<dt>容量重试</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+
+            (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd>'+(task.modelRouting.circuitBreaker ? '<dt>主模型熔断</dt><dd>'+escapeHtml(label(task.modelRouting.circuitBreaker.state))+(task.modelRouting.circuitBreaker.primaryProbeAt ? ' · '+escapeHtml(formatTime(task.modelRouting.circuitBreaker.primaryProbeAt)) : '')+'</dd>' : '')+'<dt>重试次数</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+
             '<dt>审查次数</dt><dd>'+task.reviewCount+'</dd><dt>创建时间</dt><dd>'+escapeHtml(formatTime(task.createdAt))+'</dd><dt>更新时间</dt><dd>'+escapeHtml(formatTime(task.updatedAt))+'</dd></dl></section>'+
         '</div>';
       if (shouldScrollTaskDetailToLatest) {

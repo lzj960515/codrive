@@ -94,10 +94,9 @@ import {
   defaultModelCapacityRetryResetAfterMs,
   defaultModelPrimaryProbeAfterMs,
   initialModelRouting,
-  isModelCapacityFailure,
   isRetryDue,
   markRetryStarted,
-  planModelCapacityRecovery,
+  planTurnFailureRecovery,
   prepareModelRoutingForTurn,
   resetCapacityFailuresAfterStableTurn,
 } from "./model-routing.js";
@@ -2526,22 +2525,18 @@ export class WorkflowEngine {
         return found.task;
       }
       let exhaustedModelRouting;
-      if (isModelCapacityFailure(failure)) {
-        const failureTime = new Date(this.now());
-        const currentRouting = resetCapacityFailuresAfterStableTurn(
-          execution.modelRouting,
-          execution.turnStartedAt,
-          failureTime,
-          this.modelCapacityRetryResetAfterMs,
-        );
-        const recovery = planModelCapacityRecovery(
-          currentRouting,
-          failure,
-          this.modelSettingsFor(found.project),
-          failureTime,
-          this.modelCapacityRetryDelaysMs,
-          this.modelPrimaryProbeAfterMs,
-        );
+      const failureTime = new Date(this.now());
+      const recovery = planTurnFailureRecovery(
+        execution.modelRouting,
+        failure,
+        this.modelSettingsFor(found.project),
+        failureTime,
+        this.modelCapacityRetryDelaysMs,
+        this.modelCapacityRetryResetAfterMs,
+        this.modelPrimaryProbeAfterMs,
+        execution.turnStartedAt,
+      );
+      if (recovery) {
         if (recovery.outcome === "retry_scheduled") {
           const scheduled: Task = {
             ...found.task,

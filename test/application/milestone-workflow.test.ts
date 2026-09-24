@@ -166,6 +166,38 @@ function assessmentCount(env: Awaited<ReturnType<typeof setup>>) {
 }
 
 describe("Milestone workflow", () => {
+  it("retries a disconnected assessment with the same attempt and model", async () => {
+    const env = await setup();
+    const first = (await env.store.findMilestone(env.milestoneId))!.milestone.currentExecution!;
+
+    await env.workflow.failMilestoneTurn(env.milestoneId, first.attemptId, {
+      turnId: first.turnId!,
+      message: "stream disconnected before completion: Transport error: network error: error decoding response body",
+    });
+
+    const waiting = (await env.store.findMilestone(env.milestoneId))!.milestone.currentExecution!;
+    expect(waiting).toMatchObject({
+      attemptId: first.attemptId,
+      threadId: first.threadId,
+      status: "retry_scheduled",
+      modelRouting: {
+        model: first.modelRouting.model,
+        route: first.modelRouting.route,
+        retryCount: 1,
+        lastError: { kind: "transport_error" },
+      },
+    });
+
+    await env.workflow.retryScheduledExecutions(new Date(waiting.modelRouting.nextRetryAt!));
+    expect((await env.store.findMilestone(env.milestoneId))!.milestone.currentExecution).toMatchObject({
+      attemptId: first.attemptId,
+      threadId: first.threadId,
+      status: "running",
+      modelRouting: { model: first.modelRouting.model, route: first.modelRouting.route },
+    });
+    expect(assessmentCount(env)).toBe(2);
+  });
+
   it("keeps ordinary review and rework inside the task until the milestone needs final acceptance", async () => {
     const env = await planTwoTasks();
     const initial = assessmentCount(env);

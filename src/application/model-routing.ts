@@ -10,13 +10,16 @@ export interface CodexTurnFailure {
   codexErrorInfo?: unknown;
 }
 
-export type ModelCapacityRecovery =
+export type TurnFailureRecovery =
   | { outcome: "retry_scheduled"; routing: ExecutionModelRouting }
   | { outcome: "exhausted"; routing: ExecutionModelRouting };
 
 export const defaultModelCapacityRetryDelaysMs = [5_000, 10_000, 20_000] as const;
 export const defaultModelCapacityRetryResetAfterMs = 5 * 60_000;
 export const defaultModelPrimaryProbeAfterMs = 5 * 60_000;
+
+const disconnectedResponseMessage =
+  "stream disconnected before completion: Transport error: network error: error decoding response body";
 
 export function resetCapacityFailuresAfterStableTurn(
   current: ExecutionModelRouting,
@@ -69,7 +72,7 @@ export function planModelCapacityRecovery(
   now: Date,
   retryDelaysMs: readonly number[],
   primaryProbeAfterMs: number,
-): ModelCapacityRecovery {
+): TurnFailureRecovery {
   const lastError = {
     kind: "model_capacity" as const,
     message: failure.message,
@@ -92,13 +95,14 @@ export function planModelCapacityRecovery(
     };
   }
 
-  const nextDelay = retryDelaysMs[current.retryCount];
+  const retryCount = current.lastError?.kind === "transport_error" ? 0 : current.retryCount;
+  const nextDelay = retryDelaysMs[retryCount];
   if (nextDelay !== undefined) {
     return {
       outcome: "retry_scheduled",
       routing: {
         ...current,
-        retryCount: current.retryCount + 1,
+        retryCount: retryCount + 1,
         nextRetryAt: new Date(now.getTime() + nextDelay).toISOString(),
         lastError,
       },
@@ -126,10 +130,71 @@ export function planModelCapacityRecovery(
   };
 }
 
+export function planTurnFailureRecovery(
+  current: ExecutionModelRouting,
+  failure: CodexTurnFailure,
+  settings: ModelRoutingSettings,
+  now: Date,
+  retryDelaysMs: readonly number[],
+  resetAfterMs: number,
+  primaryProbeAfterMs: number,
+  turnStartedAt?: string,
+): TurnFailureRecovery | undefined {
+  const modelCapacity = isModelCapacityFailure(failure);
+  const disconnectedResponse = isDisconnectedResponseFailure(failure);
+  if (!modelCapacity && !disconnectedResponse) return undefined;
+
+  const routing = resetCapacityFailuresAfterStableTurn(
+    current,
+    turnStartedAt,
+    now,
+    resetAfterMs,
+  );
+  return modelCapacity
+    ? planModelCapacityRecovery(routing, failure, settings, now, retryDelaysMs, primaryProbeAfterMs)
+    : planDisconnectedResponseRecovery(routing, failure, now, retryDelaysMs);
+}
+
+function planDisconnectedResponseRecovery(
+  current: ExecutionModelRouting,
+  failure: CodexTurnFailure,
+  now: Date,
+  retryDelaysMs: readonly number[],
+): TurnFailureRecovery {
+  const retryCount = current.lastError?.kind === "transport_error" ? current.retryCount : 0;
+  const lastError = {
+    kind: "transport_error" as const,
+    message: failure.message,
+    failedAt: now.toISOString(),
+  };
+  const nextDelay = retryDelaysMs[retryCount];
+  if (nextDelay === undefined) {
+    return { outcome: "exhausted", routing: { ...current, retryCount, lastError } };
+  }
+  return {
+    outcome: "retry_scheduled",
+    routing: {
+      ...current,
+      retryCount: retryCount + 1,
+      nextRetryAt: new Date(now.getTime() + nextDelay).toISOString(),
+      lastError,
+    },
+  };
+}
+
 export function isModelCapacityFailure(failure: CodexTurnFailure): boolean {
   return (
     failure.codexErrorInfo === "serverOverloaded" ||
     failure.message.includes("Selected model is at capacity")
+  );
+}
+
+function isDisconnectedResponseFailure(failure: CodexTurnFailure): boolean {
+  return (
+    failure.message.includes(disconnectedResponseMessage) ||
+    (typeof failure.codexErrorInfo === "object" &&
+      failure.codexErrorInfo !== null &&
+      "responseStreamDisconnected" in failure.codexErrorInfo)
   );
 }
 

@@ -243,6 +243,14 @@ function capacityFailure(turnId: string) {
   };
 }
 
+function transportFailure(turnId: string) {
+  return {
+    turnId,
+    message: "stream disconnected before completion: Transport error: network error: error decoding response body",
+    codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+  };
+}
+
 function primaryProbeAt(task: Task): string {
   const circuit = task.currentExecution!.modelRouting.circuitBreaker;
   expect(circuit?.state).toBe("open");
@@ -3232,6 +3240,38 @@ describe("WorkflowEngine", () => {
     expect(projectExecutor.started).toHaveLength(2);
   });
 
+  it("retries a disconnected project selection with the same attempt and model", async () => {
+    const created = await registerProject(1);
+    const first = created.project.currentExecution!;
+    await workflow.failProjectTurn(created.project.id, first.attemptId, transportFailure(first.turnId!));
+
+    const waiting = (await store.getProject(created.project.id))!.project;
+    expect(waiting).toMatchObject({
+      status: "active",
+      currentExecution: {
+        attemptId: first.attemptId,
+        threadId: first.threadId,
+        status: "retry_scheduled",
+        modelRouting: {
+          model: models.primary,
+          route: "primary",
+          retryCount: 1,
+          lastError: { kind: "transport_error" },
+        },
+      },
+    });
+    expect(waiting.currentExecution!.modelRouting.circuitBreaker).toBeUndefined();
+
+    await workflow.retryScheduledExecutions(new Date(waiting.currentExecution!.modelRouting.nextRetryAt!));
+    expect((await store.getProject(created.project.id))!.project.currentExecution).toMatchObject({
+      attemptId: first.attemptId,
+      threadId: first.threadId,
+      status: "running",
+      modelRouting: { model: models.primary, route: "primary" },
+    });
+    expect(projectExecutor.started).toHaveLength(2);
+  });
+
   it("starts a new project capacity failure window after a stable turn", async () => {
     const created = await registerProject(1);
     let execution = created.project.currentExecution!;
@@ -3485,6 +3525,63 @@ describe("WorkflowEngine", () => {
     });
     expect(taskDispatcher.started).toHaveLength(5);
     expect(taskDispatcher.started.at(-1)?.model).toBe(models.fallback);
+  });
+
+  it("retries a disconnected task three times before blocking without switching models", async () => {
+    const created = await registerProject(1);
+    await finishProjectExecution({
+      projectId: created.project.id,
+      outcome: "selected",
+      summary: "Start the task",
+      taskIds: [created.tasks[0]!.id],
+    });
+    const taskId = created.tasks[0]!.id;
+    const first = (await store.findTask(taskId))!.task.currentExecution!;
+
+    for (const [index, delay] of [5_000, 10_000, 20_000].entries()) {
+      const running = (await store.findTask(taskId))!.task.currentExecution!;
+      await workflow.failTurn(taskId, running.attemptId, transportFailure(running.turnId!));
+
+      const waiting = (await store.findTask(taskId))!.task;
+      expect(waiting).toMatchObject({
+        status: "working",
+        currentExecution: {
+          attemptId: first.attemptId,
+          reportOpportunityId: first.reportOpportunityId,
+          threadId: first.threadId,
+          status: "retry_scheduled",
+          modelRouting: {
+            model: models.primary,
+            route: "primary",
+            retryCount: index + 1,
+            lastError: { kind: "transport_error" },
+          },
+        },
+      });
+      expect(waiting.currentExecution!.modelRouting.circuitBreaker).toBeUndefined();
+      expect(Date.parse(waiting.currentExecution!.modelRouting.nextRetryAt!)).toBe(now.getTime() + delay);
+
+      now = new Date(now.getTime() + delay);
+      await workflow.retryScheduledExecutions(now);
+      expect((await store.findTask(taskId))!.task.currentExecution).toMatchObject({
+        attemptId: first.attemptId,
+        threadId: first.threadId,
+        status: "running",
+        modelRouting: { model: models.primary, route: "primary" },
+      });
+    }
+
+    const running = (await store.findTask(taskId))!.task.currentExecution!;
+    await workflow.failTurn(taskId, running.attemptId, transportFailure(running.turnId!));
+    expect((await store.findTask(taskId))!.task).toMatchObject({
+      status: "blocked",
+      currentExecution: {
+        attemptId: first.attemptId,
+        status: "failed",
+        modelRouting: { model: models.primary, route: "primary", retryCount: 3 },
+      },
+    });
+    expect(taskDispatcher.started).toHaveLength(4);
   });
 
   it("keeps counting capacity failures when the latest turn is shorter than the stable window", async () => {
