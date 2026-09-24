@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,7 @@ import type {
   TaskReport,
 } from "../../src/domain/types.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
+import { readTaskDocument } from "../../src/infrastructure/task-document.js";
 import {
   RecordingProjectExecutor,
   RecordingTaskDispatcher,
@@ -1851,6 +1852,69 @@ describe("WorkflowEngine", () => {
     );
   });
 
+  it("converts an unstarted legacy task to a live task document", async () => {
+    const repositoryPath = join(store.stateDirectory, "repository");
+    const taskDocumentPath = "docs/tasks/playable-loop.md";
+    await mkdir(join(repositoryPath, "docs/tasks"), { recursive: true });
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath,
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [{ title: "Playable loop", description: "Old text", acceptanceCriteria: [] }],
+    });
+    const task = created.tasks[0]!;
+
+    await expect(workflow.updateTaskDefinition({
+      taskId: task.id,
+      expectedUpdatedAt: task.updatedAt,
+      decisionSummary: "改用任务文档",
+      changes: { taskDocumentPath },
+    })).rejects.toThrow(/document/i);
+    expect((await store.findTask(task.id))!.task).toEqual(task);
+
+    await writeFile(join(repositoryPath, taskDocumentPath), "# 可玩的主流程\n\n完成一局游戏。\n");
+    const updated = await workflow.updateTaskDefinition({
+      taskId: task.id,
+      expectedUpdatedAt: task.updatedAt,
+      decisionSummary: "改用任务文档",
+      changes: { taskDocumentPath },
+    });
+    expect(updated.tasks[0]).toMatchObject({ id: task.id, taskDocumentPath });
+    expect(updated.tasks[0]).not.toHaveProperty("description");
+    expect(updated.tasks[0]).not.toHaveProperty("acceptanceCriteria");
+    await expect(readTaskDocument(repositoryPath, taskDocumentPath)).resolves.toContain("完成一局游戏");
+  });
+
+  it("rejects missing task documents before accepting a linked product change", async () => {
+    const repositoryPath = join(store.stateDirectory, "repository");
+    await mkdir(repositoryPath, { recursive: true });
+    const created = await store.createProject({
+      name: "Tiny Game",
+      repositoryPath,
+      defaultBranch: "main",
+      productDocument: "# Tiny Game\n",
+      tasks: [],
+    });
+    const updatedDocument = "# Tiny Game\n\n新目标。\n";
+    await writeFile(store.productDocumentPath(created.project.id), updatedDocument);
+
+    await expect(workflow.addProjectWork(
+      created.project.id,
+      [{ title: "缺少说明", taskDocumentPath: "docs/tasks/missing.md" }],
+      "新增任务和产品目标",
+      {
+        expectedRevision: created.project.productFacts.revision,
+        expectedDigest: created.project.productFacts.digest,
+        documentDigest: digest(updatedDocument),
+      },
+    )).rejects.toThrow(/document/i);
+
+    const snapshot = (await store.getProject(created.project.id))!;
+    expect(snapshot.tasks).toEqual([]);
+    expect(snapshot.project.productFacts).toEqual(created.project.productFacts);
+  });
+
   it("accepts a product document change with a task definition update", async () => {
     const created = await registerProject(1);
     const originalTask = created.tasks[0]!;
@@ -1941,7 +2005,7 @@ describe("WorkflowEngine", () => {
         taskId: backlog!.id,
         expectedUpdatedAt: backlog!.updatedAt,
         decisionSummary: "Repeat the same definition.",
-        changes: { description: backlog!.description },
+        changes: { description: backlog!.description! },
       }),
     ).rejects.toThrow(/does not change/i);
     await expect(

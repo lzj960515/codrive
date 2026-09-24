@@ -13,9 +13,9 @@ compatibility: Requires Node.js 24+ and a running local Codrive service.
 1. 通过项目 ID 读取项目，或先用 `$codrive-control` 查明当前仓库对应项目；读取 `PROJECT.md`、产品事实同步状态、里程碑及现有任务与活动。
 2. 区分长期产品事实、阶段目标和具体交付。产品契约只因用途、能力或长期业务约束改变而修改；阶段目标进入里程碑，具体交付进入任务。
 3. 从当前对话、产品契约、里程碑和已有决定确认结果与授权。已确认目标内的调查、必要漏项和实现选择直接推进；新增产品能力、改变既有结果或扩大阶段范围时，带着事实、影响、选项与推荐向用户请求决定。
-4. 判断归属与生命周期。完成某个开放里程碑所必需的任务归入它；独立工作保持独立。普通未开始任务能完整承载结果时修改它；已开始任务保持定义和归属，不改变结果的反馈继续原会话。证据证明任务失效时按既有取消与替代流程处理；仍需调查时保留现场，让里程碑负责人记录受影响任务与调查去向。无关增强保留候选。
+4. 判断归属与生命周期。完成某个开放里程碑所必需的任务归入它；独立工作保持独立。普通未开始任务能完整承载结果时修改它；已有文档路径的任务直接在原文档调整已授权内容，已开始任务保持登记信息和归属，反馈继续原会话。证据证明任务失效时按既有取消与替代流程处理；仍需调查时保留现场，让里程碑负责人记录受影响任务与调查去向。无关增强保留候选。
 5. 需要拆分任务或安排迁移时，读取[任务拆分方法](references/task-slicing.md)。展示本次目标或任务变化及依据；已有授权覆盖的必要分解直接提交，不逐项重复确认。只是查询当前事实时完成查询后继续原工作流。
-6. 新增普通任务使用 `add`；创建阶段目标使用 `milestone-create`，目标可以先没有任务。修改未开始任务或已确认里程碑定义使用 `$codrive-control`。只有真实产品事实改变时才先编辑 `PROJECT.md`，并在新增工作或任务修改中携带产品变更元数据。
+6. 新增普通任务先按[任务文档写法](references/task-document.md)在主项目仓库写好并读回 Markdown 文件，再使用 `add` 登记相对路径；创建阶段目标使用 `milestone-create`，目标可以先没有任务。修改未开始任务的登记信息或已确认里程碑定义使用 `$codrive-control`；修改已有任务文档正文直接编辑原文件。只有真实产品事实改变时才先编辑 `PROJECT.md`，并在新增工作或任务修改中携带产品变更元数据。
 7. 读取服务端回执，报告实际接受的目标或任务及推进状态，完成交接。
 
 ## 查询项目
@@ -34,15 +34,14 @@ node <skill-directory>/scripts/codrive-work.mjs show <project-id>
   "tasks": [
     {
       "title": "迁移遗漏的消费者",
-      "description": "保持原有结果，改为读取新模型",
-      "acceptanceCriteria": ["消费者结果符合既有契约"],
+      "taskDocumentPath": "docs/tasks/迁移遗漏的消费者.md",
       "milestoneId": "已存在的开放里程碑 ID"
     }
   ]
 }
 ```
 
-独立任务省略 `milestoneId`。同时改变长期产品事实时，先保存修改前的 `productFacts.revision` 与 `acceptedDigest`，编辑 `PROJECT.md`，再增加 `productDocumentChange: { expectedRevision, expectedDigest }`。脚本只在提供该对象时读取文件、计算 `documentDigest`；Codrive 在同一次计划变化中验证文档并追加任务。纯工作追加仍要求磁盘产品文档与已接受摘要一致。
+独立任务省略 `milestoneId`。`taskDocumentPath` 相对项目仓库根目录，指向登记前已经写好的任务文档。同时改变长期产品事实时，先保存修改前的 `productFacts.revision` 与 `acceptedDigest`，编辑 `PROJECT.md`，再增加 `productDocumentChange: { expectedRevision, expectedDigest }`。脚本只在提供该对象时读取文件、计算 `documentDigest`；Codrive 在同一次计划变化中验证产品文档并追加任务。纯工作追加仍要求磁盘产品文档与已接受摘要一致。
 
 ```text
 node <skill-directory>/scripts/codrive-work.mjs add <project-id> --json '<work-json>'
@@ -60,9 +59,9 @@ node <skill-directory>/scripts/codrive-work.mjs milestone-create <project-id> --
 
 ## 调整未开始任务
 
-普通 backlog 任务的名称、结果边界或验收标准需要调整时，读取 `$codrive-control` 并使用其 `task-update` 命令。纯任务澄清和已有目标内的任务补充只发送任务变化；长期产品事实变化同时携带 `productDocumentChange`，让 Codrive 用一个规划修订接受两项事实。命令成功后重新读取任务，确认返回的定义、任务状态和新规划均来自服务端持久化结果。
+普通未开始任务的名称、里程碑归属或文档路径需要调整时，读取 `$codrive-control` 并使用其 `task-update` 命令。已有文档路径的任务需要调整正文时，在主项目目录编辑该路径指向的文件；下一轮规划、执行和审查会读取当前内容。没有文档路径的历史任务修改结果边界或验收标准时，沿用 `description` 和 `acceptanceCriteria` 的定义修改，也可为未开始任务写好文档后设置路径，转为文档模式。登记信息与长期产品事实同时变化时，在命令中携带 `productDocumentChange`，让 Codrive 用一个规划修订接受两项事实。命令成功后重新读取任务，确认返回的登记信息、任务状态和新规划均来自服务端持久化结果。
 
-已经开始或进入审查的任务保留它启动时的定义。实现与审查反馈没有改变已确认结果时，在任务详情提供的原开发或审查对话中继续；原目标被新证据推翻时，先查清影响；需要新的业务取舍才请求用户决定。已获授权且事实足以判断的取消或替代直接处理，原因引用事实和已有授权。
+已经开始或进入审查的任务保留登记路径与归属，已授权的内容调整写入原任务文档。实现与审查反馈没有改变已确认结果时，在任务详情提供的原开发或审查对话中继续；原目标被新证据推翻时，先查清影响；需要新的业务取舍才请求用户决定。已获授权且事实足以判断的取消或替代直接处理，原因引用事实和已有授权。
 
 ## 结果交接
 

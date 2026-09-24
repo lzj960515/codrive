@@ -1,5 +1,11 @@
 # Documentation log
 
+## 2026-09-24
+
+- 新普通任务以仓库内的文档路径登记，每轮从原文件读取当前正文；历史任务继续使用原描述和验收条件，里程碑定义保持原字段。
+- 更新四个内置 Skill 的任务写法与读取流程，并修正文档中关于任务定义、规划和自动生成维护任务的说明。
+- 将随包 Codex 服务依赖升级至 `0.156.1`，使实时模型目录包含 `gpt-6-sol`。
+
 ## 2026-09-17
 
 - Added a current-decision reply dialog for task, project, and milestone owners,

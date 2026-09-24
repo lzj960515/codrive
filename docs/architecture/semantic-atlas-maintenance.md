@@ -76,12 +76,7 @@ open maintenance task for that repository or creates one backlog task. Open
 maintenance for another child repository does not suppress it. Codrive neither
 receives nor persists a candidate list or business-domain identity.
 
-The task remains a normal Codrive task. Its description explicitly activates
-`$semantic-atlas-maintenance`; Work selects one business domain and prepares a
-YAML candidate or evidence-only classification, Review remains independent, and
-Integration records the Semantic Atlas maintenance observation. No-change
-results still pass through Review and Integration. Existing statuses, retry,
-recovery, capacity, and Git integration leases remain authoritative.
+这类任务沿用普通任务的执行、审查和合入生命周期，但由内部流程生成，正文继续保存在任务原字段中。正文明确要求加载 `$semantic-atlas-maintenance`。工作阶段选择一个业务域并准备地图改动或仅有证据的结论；独立审查后，合入阶段记录维护结果。没有代码变化的结果仍经过审查与合入判断。原有状态、重试、恢复、容量和 Git 合入资格规则继续适用。
 
 A maintenance task's own Integration completion is intentionally consumed. If
 Semantic Atlas reports no remaining actionable candidate, the event ends. If

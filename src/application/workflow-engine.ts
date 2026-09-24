@@ -71,6 +71,7 @@ import {
   validateTaskReport,
 } from "../domain/workflow.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
+import { readTaskDocument } from "../infrastructure/task-document.js";
 import {
   LifecycleRecorder,
   projectLifecycleState,
@@ -451,6 +452,10 @@ export class WorkflowEngine {
       const { project } = await this.requireSnapshot(input.projectId);
       if (project.status === "cancelled" || isProjectArchived(project))
         throw new WorkflowConflictError("Project cannot accept a milestone");
+      await this.validateTaskDocuments(
+        project.repositoryPath,
+        input.tasks ?? [],
+      );
       const now = this.now();
       const milestone: Milestone = {
         id: this.createId("milestone"),
@@ -654,6 +659,21 @@ export class WorkflowEngine {
       milestone.id,
     );
     validateMilestonePlan(snapshot, milestone, activities, report);
+    await this.validateTaskDocuments(project.repositoryPath, [
+      ...(report.plan?.tasks ?? []),
+      ...(report.plan?.updates ?? []).map(({ changes }) => changes),
+    ]);
+  }
+
+  private async validateTaskDocuments(
+    repositoryPath: string,
+    definitions: readonly { taskDocumentPath?: string }[],
+  ): Promise<void> {
+    for (const { taskDocumentPath } of definitions) {
+      if (taskDocumentPath !== undefined) {
+        await readTaskDocument(repositoryPath, taskDocumentPath);
+      }
+    }
   }
 
   private async applyMilestoneAssessment(
@@ -1383,6 +1403,7 @@ export class WorkflowEngine {
       }
       if (!decisionSummary.trim())
         throw new WorkflowConflictError("Work requires a decision summary");
+      await this.validateTaskDocuments(snapshot.project.repositoryPath, tasks);
       const acceptedDocument = productDocumentChange
         ? await this.acceptProductDocumentChange(snapshot.project, {
             ...productDocumentChange,
@@ -1600,6 +1621,7 @@ export class WorkflowEngine {
         task,
         input,
       );
+      await this.validateTaskDocuments(project.repositoryPath, [input.changes]);
       const acceptedDocument = await this.acceptTaskDefinitionProductFacts(
         project,
         input,

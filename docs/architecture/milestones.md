@@ -4,7 +4,7 @@ This page defines stage goals, evidence-driven planning, persistent conversation
 
 ## Ownership
 
-`PROJECT.md` owns current product capabilities and long-term rules. A `Milestone` owns a stage goal through `title`, `description`, and `acceptanceCriteria`; its description carries scope and accepted decision boundaries. Tasks own concrete deliveries and optionally reference one milestone in the same project. Independent tasks remain supported.
+`PROJECT.md` 维护当前产品能力和长期规则。里程碑以 `title`、`description` 和 `acceptanceCriteria` 定义阶段目标、范围与验收。普通任务负责具体交付；新任务以 `taskDocumentPath` 指向仓库内的当前文档，历史任务继续读取原描述和验收条件。任务可以归属同项目的一个里程碑，也可以独立存在。
 
 A milestone has `active | done` business status, a separate definition version, planning revisions, a persistent conversation, and its current planning execution. Waiting for a decision, waiting for tasks, and evaluating are execution or activity facts, not extra milestone status values. Current interpretation is reconstructed from typed activities in the existing event log. Discovery, assessment, resolution, and plans do not have separate entity stores.
 
@@ -40,7 +40,7 @@ Waiting for the user ends that evaluation turn, not the owner's responsibility. 
 
 Persist the affecting activity before interrupting an in-flight task. Dispatch, retry, recovery, and integration check unresolved restrictions. Confirmed interruption preserves the original task, attempt, conversation, candidate, and checkpoint while releasing task capacity and integration ownership. An unconfirmed interruption retains its actual occupancy and exposes the failure; neither interruption nor cancellation reverses completed external operations.
 
-After the required evidence resolves the activity, requeue the original task through normal capacity and integration checks. A still-valid task keeps its definition and resumes with the current decision. An invalidated delivery uses the existing cancellation path and, if needed, an ordinary replacement task. Tasks that have already started retain their original definition and milestone membership.
+证据解决相关活动后，原任务按容量和合入资格重新排队。仍有效的任务保留登记信息并结合当前决定继续；有文档路径时，恢复回合读取原文件的最新内容。失效的交付按现有取消流程处理，必要时创建替代任务。已开始任务的登记路径与里程碑归属保持稳定。
 
 ## Replying to a current decision
 

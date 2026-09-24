@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import { WorkflowConflictError } from "../domain/errors.js";
 import type { Milestone, MilestoneActivity } from "../domain/milestone.js";
 import type {
   CodriveEvent,
@@ -26,6 +27,7 @@ import {
   productDocumentDigest,
 } from "../domain/product-facts.js";
 import { initializeStateDirectory } from "./state-schema.js";
+import { readTaskDocument } from "./task-document.js";
 import {
   assertCurrentMilestone,
   isMilestoneActivity,
@@ -85,13 +87,20 @@ export class ProjectStore {
         taskInputs.push({ ...task, milestoneId: milestones[index]!.id });
       }
     }
+    for (const task of taskInputs) {
+      await validateTaskInput(input.repositoryPath, task);
+    }
     const generatedTaskIds = taskInputs.map(() => `task_${randomUUID()}`);
     const tasks = taskInputs.map<Task>((task, index) => ({
       id: generatedTaskIds[index]!,
       projectId,
       title: task.title,
-      description: task.description,
-      acceptanceCriteria: task.acceptanceCriteria,
+      ...(task.taskDocumentPath === undefined
+        ? {
+            description: task.description!,
+            acceptanceCriteria: task.acceptanceCriteria!,
+          }
+        : { taskDocumentPath: task.taskDocumentPath }),
       ...(task.milestoneId ? { milestoneId: task.milestoneId } : {}),
       ...(task.origin ? { origin: task.origin } : {}),
       order: task.order ?? index + 1,
@@ -249,6 +258,9 @@ export class ProjectStore {
     if (!snapshot) {
       throw new Error(`Project ${projectId} was not found`);
     }
+    for (const input of inputs) {
+      await validateTaskInput(snapshot.project.repositoryPath, input);
+    }
     const now = new Date().toISOString();
     const firstOrder = Math.max(0, ...snapshot.tasks.map(({ order }) => order)) + 1;
     const generatedTaskIds = inputs.map(() => `task_${randomUUID()}`);
@@ -256,8 +268,12 @@ export class ProjectStore {
       id: generatedTaskIds[index]!,
       projectId,
       title: input.title,
-      description: input.description,
-      acceptanceCriteria: input.acceptanceCriteria,
+      ...(input.taskDocumentPath === undefined
+        ? {
+            description: input.description!,
+            acceptanceCriteria: input.acceptanceCriteria!,
+          }
+        : { taskDocumentPath: input.taskDocumentPath }),
       ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}),
       ...(input.origin ? { origin: input.origin } : {}),
       order: input.order ?? firstOrder + index,
@@ -629,4 +645,25 @@ function pathContains(root: string, candidate: string): boolean {
 
 function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+async function validateTaskInput(
+  repositoryPath: string,
+  input: CreateTaskInput,
+): Promise<void> {
+  if (input.taskDocumentPath !== undefined) {
+    if (input.description !== undefined || input.acceptanceCriteria !== undefined) {
+      throw new WorkflowConflictError(
+        "A task document replaces the task description and acceptance criteria",
+      );
+    }
+    await readTaskDocument(repositoryPath, input.taskDocumentPath);
+    return;
+  }
+  if (
+    typeof input.description !== "string" ||
+    !Array.isArray(input.acceptanceCriteria)
+  ) {
+    throw new WorkflowConflictError("Task document path is required");
+  }
 }

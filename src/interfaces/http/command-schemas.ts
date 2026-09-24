@@ -5,10 +5,9 @@ import { hasProductFacts } from "../../domain/product-facts.js";
 const taskInputSchema = z.object({
   milestoneId: z.string().min(1).optional(),
   title: z.string().min(1),
-  description: z.string(),
-  acceptanceCriteria: z.array(z.string()),
+  taskDocumentPath: z.string().trim().min(1),
   order: z.number().int().positive().optional(),
-});
+}).strict();
 
 const milestoneDefinitionSchema = z.object({
   title: z.string().trim().min(1),
@@ -90,13 +89,15 @@ const taskDefinitionChangesSchema = z
   .object({
     milestoneId: z.string().min(1).nullable().optional(),
     title: z.string().min(1).optional(),
+    taskDocumentPath: z.string().trim().min(1).optional(),
     description: z.string().optional(),
     acceptanceCriteria: z.array(z.string()).optional(),
   })
   .refine(
-    ({ title, description, acceptanceCriteria, milestoneId }) =>
+    ({ title, taskDocumentPath, description, acceptanceCriteria, milestoneId }) =>
       milestoneId !== undefined ||
       title !== undefined ||
+      taskDocumentPath !== undefined ||
       description !== undefined ||
       acceptanceCriteria !== undefined,
     "Task definition changes must include at least one field",

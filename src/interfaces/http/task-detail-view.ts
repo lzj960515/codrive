@@ -58,6 +58,7 @@ export async function createTaskDetailView(
       milestoneTitle: milestoneOwner?.milestone.title ?? null,
       milestoneWait: milestoneOwner ? milestoneTaskWait(milestoneOwner.milestone, milestoneActivities, task.id, project) : null,
       title: task.title,
+      taskDocumentPath: task.taskDocumentPath ?? null,
       description: task.description,
       acceptanceCriteria: task.acceptanceCriteria,
       order: task.order,

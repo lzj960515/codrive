@@ -44,11 +44,13 @@ Milestone goals and task plans are separate current facts, provided alongside th
 
 ## Task definition changes
 
-An ordinary task remains editable while it is an unstarted `backlog` task with no requested action or execution. The update command carries the task's current `updatedAt`, one decision summary, and a partial replacement of `title`, `description`, `acceptanceCriteria`, or optional `milestoneId`. Codrive rejects stale versions, no-op changes, system-generated tasks, archived or cancelled projects, and tasks whose lifecycle has already started.
+新登记的普通任务先在项目仓库写好非空文档，再登记标题和相对仓库根目录的 `taskDocumentPath`。每轮规划、工作、审查和恢复均从原路径读取当前内容；直接编辑文件即可调整后续回合使用的任务正文，不保存正文快照。没有该路径的历史任务继续使用 `description` 和 `acceptanceCriteria`。自动生成的业务地图维护任务由内部流程创建并继续使用其内部定义。
+
+普通未开始任务处于 `backlog`、尚无请求动作和执行记录时，可以用 `task.update_definition` 调整标题、里程碑归属或文档路径；历史任务还可以修改原描述和验收条件，首次设置文档路径后转为文档模式。命令携带当前 `updatedAt` 和决定摘要。Codrive 拒绝过期版本、无变化更新、系统生成的任务、已归档或取消的项目，以及已开始的任务。已有路径的正文直接编辑原文件，不经过定义修改命令。
 
 A task-only clarification requires the accepted `PROJECT.md` digest to remain current. When a task revision also changes product facts, the Agent edits `PROJECT.md` first and includes the prior product revision and digest in the same task update. The bundled CLI computes the new document digest. `WorkflowEngine` then accepts both changes in one serialized operation, records `task.definition_updated` and the product decision, supersedes active task selection, advances planning once with `task_definition_updated`, and reconciles scheduling.
 
-Task snapshot JSON combines the current definition with lifecycle and execution state, so it remains an internal persistence format. Agents use `task.update_definition` instead of writing that file. Started work keeps the definition evaluated by its current execution; later scope changes use that lifecycle or a follow-up task, preserving completed and cancelled task history.
+任务 JSON 保存登记信息与运行状态，是内部持久化格式；Agent 使用定义修改命令调整未开始任务的登记信息。已开始任务的路径和归属保持稳定，任务文档仍可按已确认目标编辑，后续回合读取当前内容。需要改变业务结果时，按任务生命周期判断是继续当前对话还是安排后续任务，保留已完成与已取消任务的历史。
 
 ## Registration and recovery
 

@@ -21,6 +21,7 @@ import { isProjectArchived } from "../../domain/project.js";
 import type { CodriveCommand, Project, Task } from "../../domain/types.js";
 import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
+import { readTaskDocument } from "../../infrastructure/task-document.js";
 import { renderBoardPage } from "./board.js";
 import { commandSchema } from "./command-schemas.js";
 import { createBoardView } from "./board-view.js";
@@ -232,12 +233,30 @@ export function createHttpServer(
     async (request, reply) => {
       const found = await dependencies.store.findTask(request.params.taskId);
       if (!found) return reply.code(404).send({ error: "Task not found" });
-      return createTaskDetailView(
+      const detail = await createTaskDetailView(
         dependencies.store,
         found.project,
         found.task,
         await dependencies.store.listProjects(),
       );
+      if (!found.task.taskDocumentPath) return detail;
+      try {
+        return {
+          ...detail,
+          taskDocumentContent: await readTaskDocument(
+            found.project.repositoryPath,
+            found.task.taskDocumentPath,
+          ),
+          taskDocumentError: null,
+        };
+      } catch (error) {
+        if (!(error instanceof WorkflowConflictError)) throw error;
+        return {
+          ...detail,
+          taskDocumentContent: null,
+          taskDocumentError: "无法读取任务文档，请检查文件是否存在且包含内容。",
+        };
+      }
     },
   );
 
@@ -420,6 +439,7 @@ async function taskContext(
     projectDirectory: store.projectDirectory(project.id),
     projectDocument: store.productDocumentPath(project.id),
     taskDocument: store.taskPath(project.id, task.id),
+    taskDocumentPath: task.taskDocumentPath ?? null,
     repositoryPath: project.repositoryPath,
     productFacts: await productFactsContext(store, project),
     workspacePath: delivery.workspacePath ?? null,

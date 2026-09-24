@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -102,6 +102,14 @@ describe("bundled Skill scripts", () => {
     await server.close();
   });
 
+  async function writeTaskDocument(repositoryPath: string, name: string, content: string): Promise<string> {
+    const taskDocumentPath = `docs/tasks/${name}.md`;
+    const filePath = join(repositoryPath, taskDocumentPath);
+    await mkdir(join(repositoryPath, "docs/tasks"), { recursive: true });
+    await writeFile(filePath, content, "utf8");
+    return taskDocumentPath;
+  }
+
   it("archives, lists, and restores a project through codrive-control", async () => {
     const created = await store.createProject({
       name: "Quiet project",
@@ -142,13 +150,15 @@ describe("bundled Skill scripts", () => {
   });
 
   it("uses the context and command APIs across all four Skills", async () => {
+    const repositoryPath = join(stateDirectory, "game-repository");
+    const loopPath = await writeTaskDocument(repositoryPath, "loop", "# 可玩的主流程\n");
     const created = commandResult<ProjectSnapshot>(
       await runSkill("codrive-forge", ["register"], {
         name: "Game",
-        repositoryPath: "/workspace/game",
+        repositoryPath,
         defaultBranch: "main",
         productDocument: "# Game\n",
-        tasks: [{ title: "Loop", description: "Build loop", acceptanceCriteria: [] }],
+        tasks: [{ title: "Loop", taskDocumentPath: loopPath }],
       }),
     );
 
@@ -192,6 +202,7 @@ describe("bundled Skill scripts", () => {
       projectContext.projectDocument,
       "# Game\n\n## Audio\n\nAdd an audio milestone.\n",
     );
+    const audioPath = await writeTaskDocument(repositoryPath, "audio", "# 加入声音反馈\n");
     const added = commandResult<ProjectSnapshot>(
       await runSkill("codrive-work", ["add", created.project.id], {
         decisionSummary: "Add the audio milestone.",
@@ -199,9 +210,7 @@ describe("bundled Skill scripts", () => {
           expectedRevision: projectContext.productFacts.revision,
           expectedDigest: projectContext.productFacts.acceptedDigest,
         },
-        tasks: [
-          { title: "Audio", description: "Add audio", acceptanceCriteria: [] },
-        ],
+        tasks: [{ title: "Audio", taskDocumentPath: audioPath }],
       }),
     );
     expect(added.tasks).toHaveLength(2);
@@ -228,6 +237,7 @@ describe("bundled Skill scripts", () => {
       "# Game\n\n## Controls\n\nUse keyboard controls.\n\n## Audio\n\nAdd audible gameplay feedback.\n",
     );
 
+    await writeFile(join(repositoryPath, audioPath), "# 加入声音反馈\n\n游戏过程能听到反馈。\n");
     const updated = commandResult<ProjectSnapshot>(
       await runSkill(
         "codrive-control",
@@ -235,10 +245,7 @@ describe("bundled Skill scripts", () => {
         {
           expectedUpdatedAt: added.tasks[1]!.updatedAt,
           decisionSummary: "Clarify the audio task contract.",
-          changes: {
-            description: "Add one complete audio milestone.",
-            acceptanceCriteria: ["Gameplay has audible feedback."],
-          },
+          changes: { title: "完整的声音反馈" },
           productDocumentChange: {
             expectedRevision: controlled.productFacts.revision,
             expectedDigest: controlled.productFacts.digest,
@@ -250,8 +257,8 @@ describe("bundled Skill scripts", () => {
       controlled.productFacts.revision + 1,
     );
     expect(updated.tasks.find(({ id }) => id === added.tasks[1]!.id)).toMatchObject({
-      description: "Add one complete audio milestone.",
-      acceptanceCriteria: ["Gameplay has audible feedback."],
+      title: "完整的声音反馈",
+      taskDocumentPath: audioPath,
       status: "backlog",
     });
 
@@ -357,17 +364,19 @@ describe("bundled Skill scripts", () => {
   });
 
   it("adds ordinary work without editing or advancing product facts", async () => {
+    const repositoryPath = join(stateDirectory, "migration-repository");
     const created = await store.createProject({
       name: "Migration",
-      repositoryPath: "/workspace/migration",
+      repositoryPath,
       defaultBranch: "main",
       productDocument: "# Stable product contract\n",
       tasks: [{ title: "Original", description: "Existing work", acceptanceCriteria: [] }],
     });
+    const taskDocumentPath = await writeTaskDocument(repositoryPath, "consumer", "# 迁移消费者\n");
     const added = commandResult<ProjectSnapshot>(await runSkill(
       "codrive-work", ["add", created.project.id], {
         decisionSummary: "Cover an omitted consumer within the accepted scope",
-        tasks: [{ title: "Consumer", description: "Keep existing results", acceptanceCriteria: [] }],
+        tasks: [{ title: "Consumer", taskDocumentPath }],
       },
     ));
     expect(added.tasks).toHaveLength(2);
@@ -377,9 +386,10 @@ describe("bundled Skill scripts", () => {
   });
 
   it("registers a goal without tasks and reports an evidence-backed plan", async () => {
+    const repositoryPath = join(stateDirectory, "social-rehearsal-repository");
     const created = commandResult<ProjectSnapshot>(await runSkill("codrive-forge", ["register"], {
       name: "Social rehearsal",
-      repositoryPath: "/workspace/social-rehearsal",
+      repositoryPath,
       defaultBranch: "main",
       productDocument: "# Fictional core collection and display\n",
       tasks: [],
@@ -394,6 +404,7 @@ describe("bundled Skill scripts", () => {
     const milestone = created.milestones[0]!;
     const context = JSON.parse(await runSkill("codrive-task", ["milestone-context", milestone.id]));
     expect(context.requestedAction).toBe("assess_milestone");
+    const taskDocumentPath = await writeTaskDocument(repositoryPath, "consumers", "# 排查消费者\n");
     const report = {
       attemptId: context.attemptId,
       reportOpportunityId: context.reportOpportunityId,
@@ -401,7 +412,7 @@ describe("bundled Skill scripts", () => {
       planningRevision: context.planningRevision,
       outcome: "progress",
       summary: "Investigate consumers before migration",
-      plan: { tasks: [{ key: "consumers", title: "Inspect consumers", description: "Trace actual usage", acceptanceCriteria: ["Record each supported entry"] }] },
+      plan: { tasks: [{ key: "consumers", title: "Inspect consumers", taskDocumentPath }] },
     };
     const accepted = JSON.parse(await runSkill("codrive-task", ["milestone-report", milestone.id], report));
     expect(accepted).toMatchObject({ ok: true, reportOpportunityId: context.reportOpportunityId });
@@ -432,13 +443,15 @@ describe("bundled Skill scripts", () => {
   });
 
   it("records a non-terminal discovery without occupying the task report opportunity", async () => {
+    const repositoryPath = join(stateDirectory, "discovery-repository");
     const created = await store.createProject({
-      name: "Discovery", repositoryPath: "/workspace/discovery", defaultBranch: "main",
+      name: "Discovery", repositoryPath, defaultBranch: "main",
       productDocument: "# Product\n", tasks: [],
     });
+    const taskDocumentPath = await writeTaskDocument(repositoryPath, "inspect", "# 排查消费者\n");
     const milestone = commandResult<Milestone>(await runSkill("codrive-work", ["milestone-create", created.project.id], {
       title: "Migration", description: "Keep results", acceptanceCriteria: ["Consumers covered"],
-      tasks: [{ title: "Inspect", description: "Find consumers", acceptanceCriteria: [] }],
+      tasks: [{ title: "Inspect", taskDocumentPath }],
     }));
     const snapshot = (await store.getProject(created.project.id))!;
     const task = snapshot.tasks[0]!;

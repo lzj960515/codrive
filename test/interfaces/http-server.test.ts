@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -55,9 +55,11 @@ describe("HTTP API", () => {
   let publishSystemUpdate: (event: VersionStatusChangedEvent) => void;
   let systemUpdateListeners: Set<(event: VersionStatusChangedEvent) => void>;
   let sockets: Socket[];
+  let testRepositoryPath: string;
 
   beforeEach(async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-http-"));
+    testRepositoryPath = await mkdtemp(join(tmpdir(), "codrive-http-repository-"));
     const configStore = new ConfigStore(stateDirectory);
     await configStore.loadOrCreate();
     store = new ProjectStore(stateDirectory);
@@ -256,24 +258,32 @@ describe("HTTP API", () => {
   }
 
   async function registerProject(name = "Game") {
+    const taskDocumentPath = await writeTaskDocument("loop", "# Build loop\n");
     const response = await command({
       type: "project.register",
       payload: {
         name,
-        repositoryPath: "/workspace/game",
+        repositoryPath: testRepositoryPath,
         defaultBranch: "main",
         productDocument: `# ${name}\n`,
         tasks: [
           {
             title: "Loop",
-            description: "Build loop",
-            acceptanceCriteria: ["Playable"],
+            taskDocumentPath,
           },
         ],
       },
     });
     expect(response.statusCode).toBe(200);
     return response.json() as ProjectSnapshot;
+  }
+
+  async function writeTaskDocument(name: string, content: string): Promise<string> {
+    const taskDocumentPath = `docs/tasks/${name}.md`;
+    const path = join(testRepositoryPath, taskDocumentPath);
+    await mkdir(join(testRepositoryPath, "docs/tasks"), { recursive: true });
+    await writeFile(path, content, "utf8");
+    return taskDocumentPath;
   }
 
   it("exposes cancellation for idle work and rejects a stale request after execution starts", async () => {
@@ -355,13 +365,14 @@ describe("HTTP API", () => {
 
   it("adds work without changing the accepted product contract", async () => {
     const created = await registerProject();
+    const taskDocumentPath = await writeTaskDocument("consumer", "# Migrate consumer\n");
     const before = await store.readProductDocument(created.project.id);
     const response = await command({
       type: "project.add_work",
       payload: {
         projectId: created.project.id,
         decisionSummary: "Cover the remaining existing consumer",
-        tasks: [{ title: "Migrate consumer", description: "Preserve existing results", acceptanceCriteria: ["Consumer uses the current source"] }],
+        tasks: [{ title: "Migrate consumer", taskDocumentPath }],
       },
     });
     expect(response.statusCode).toBe(200);
@@ -386,8 +397,10 @@ describe("HTTP API", () => {
   });
 
   it("shows milestone decisions and only the affected task's wait in HTTP views", async () => {
+    const removalDocumentPath = await writeTaskDocument("remove", "# Remove old source\n");
+    const inspectionDocumentPath = await writeTaskDocument("inspect", "# Inspect consumer\n");
     const response = await command({ type: "project.register", payload: {
-      name: "Social", repositoryPath: "/workspace/social", defaultBranch: "main",
+      name: "Social", repositoryPath: testRepositoryPath, defaultBranch: "main",
       productDocument: "# Social", tasks: [],
       milestones: [{ title: "Social migration", description: "Preserve current consumers", acceptanceCriteria: ["Old consumers migrated"] }],
     } });
@@ -401,8 +414,8 @@ describe("HTTP API", () => {
       outcome: "needs_input", summary: "Investigate consumers while the removal decision waits",
       plan: {
         tasks: [
-          { key: "remove", title: "Remove old source", description: "Remove after consumers are resolved", acceptanceCriteria: [] },
-          { key: "inspect", title: "Inspect consumer", description: "Trace the current reader", acceptanceCriteria: [] },
+          { key: "remove", title: "Remove old source", taskDocumentPath: removalDocumentPath },
+          { key: "inspect", title: "Inspect consumer", taskDocumentPath: inspectionDocumentPath },
         ],
         resolutions: [{ sourceActivityIds: [], summary: "Keep source until scope is decided", question: "Should the old report remain available?", affectedTaskIds: ["remove"] }],
       },
@@ -421,18 +434,18 @@ describe("HTTP API", () => {
   });
 
   it("rejects a blank product document before registering a project", async () => {
+    const taskDocumentPath = await writeTaskDocument("first", "# First task\n");
     const response = await command({
       type: "project.register",
       payload: {
         name: "Blank facts",
-        repositoryPath: "/workspace/blank-facts",
+        repositoryPath: testRepositoryPath,
         defaultBranch: "main",
         productDocument: " \n\t",
         tasks: [
           {
             title: "First task",
-            description: "Must not be registered without product facts",
-            acceptanceCriteria: [],
+            taskDocumentPath,
           },
         ],
       },
@@ -477,7 +490,7 @@ describe("HTTP API", () => {
       requestedAction: null,
       cancellation: null,
       projectCancellation: null,
-      repositoryPath: "/workspace/game",
+      repositoryPath: testRepositoryPath,
     });
     expect(taskContext.json().projectDocument).toContain("PROJECT.md");
     expect(taskContext.json().taskDocument).toContain(`${taskId}.json`);
@@ -492,6 +505,55 @@ describe("HTTP API", () => {
     });
     expect(oldProjectRoute.statusCode).toBe(404);
     expect(oldAnswerRoute.statusCode).toBe(404);
+  });
+
+  it("reads a task document from its repository on every detail request", async () => {
+    const repositoryPath = await mkdtemp(join(tmpdir(), "codrive-task-source-"));
+    const taskDocumentPath = "docs/tasks/greeting.md";
+    const documentPath = join(repositoryPath, taskDocumentPath);
+    await mkdir(join(repositoryPath, "docs/tasks"), { recursive: true });
+    await writeFile(documentPath, "# 首次内容\n", "utf8");
+    const response = await command({
+      type: "project.register",
+      payload: {
+        name: "问候项目",
+        repositoryPath,
+        defaultBranch: "main",
+        productDocument: "# 问候项目\n",
+        tasks: [{ title: "实现问候", taskDocumentPath }],
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const created = response.json() as ProjectSnapshot;
+    const taskId = created.tasks[0]!.id;
+    const headers = { "x-codrive-token": "secret" };
+
+    const board = await server.inject({ url: "/api/board", headers });
+    expect(board.json()[0].tasks[0]).toMatchObject({ taskDocumentPath });
+    const context = await server.inject({ url: `/api/contexts/tasks/${taskId}`, headers });
+    expect(context.json()).toMatchObject({ repositoryPath, taskDocumentPath });
+    expect(context.json().taskDocument).toContain(`${taskId}.json`);
+
+    const firstDetail = await server.inject({ url: `/api/tasks/${taskId}`, headers });
+    expect(firstDetail.statusCode).toBe(200);
+    expect(firstDetail.json()).toMatchObject({
+      task: { taskDocumentPath },
+      taskDocumentContent: "# 首次内容\n",
+      taskDocumentError: null,
+    });
+
+    await writeFile(documentPath, "# 修改后内容\n", "utf8");
+    const updatedDetail = await server.inject({ url: `/api/tasks/${taskId}`, headers });
+    expect(updatedDetail.json().taskDocumentContent).toBe("# 修改后内容\n");
+
+    await unlink(documentPath);
+    const missingDetail = await server.inject({ url: `/api/tasks/${taskId}`, headers });
+    expect(missingDetail.statusCode).toBe(200);
+    expect(missingDetail.json()).toMatchObject({
+      task: { taskDocumentPath },
+      taskDocumentContent: null,
+    });
+    expect(missingDetail.json().taskDocumentError).toBe("无法读取任务文档，请检查文件是否存在且包含内容。");
   });
 
   it("requires the local access token outside health and the board page", async () => {
@@ -1135,7 +1197,7 @@ describe("HTTP API", () => {
 
     const response = await server.inject({
       method: "GET",
-      url: "/api/contexts/resolve?cwd=%2Fworkspace%2Fgame%2Fsrc",
+      url: `/api/contexts/resolve?cwd=${encodeURIComponent(join(testRepositoryPath, "src"))}`,
       headers: { "x-codrive-token": "secret" },
     });
 
@@ -1153,7 +1215,7 @@ describe("HTTP API", () => {
 
     const response = await server.inject({
       method: "GET",
-      url: "/api/contexts/resolve?cwd=%2Fworkspace%2Fgame%2Fsrc",
+      url: `/api/contexts/resolve?cwd=${encodeURIComponent(join(testRepositoryPath, "src"))}`,
       headers: { "x-codrive-token": "secret" },
     });
 
@@ -2106,7 +2168,7 @@ describe("HTTP API", () => {
       project: {
         id: created.project.id,
         name: "Semantic Atlas",
-        repositoryPath: "/workspace/game",
+        repositoryPath: testRepositoryPath,
         defaultBranch: "main",
         productFacts: { status: "current", revision: 1 },
       },

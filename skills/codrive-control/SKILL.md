@@ -18,7 +18,7 @@ node <skill-directory>/scripts/codrive-control.mjs task <task-id>
 node <skill-directory>/scripts/codrive-control.mjs milestone <milestone-id>
 ```
 
-`board` 返回默认看板中的未归档项目；`archived` 返回已归档项目及其数量。`project` 返回注册信息、完整 `PROJECT.md`、产品事实同步状态、最小规划状态、归档时间、任务与当前执行信息。`task` 返回任务定义、归属、当前状态、完整进展记录和推导后的 Codex 对话链接；`milestone` 返回目标、验收、当前结论、未决活动和负责人对话入口。当前任务数量不能代替里程碑完成判断。
+`board` 返回默认看板中的未归档项目；`archived` 返回已归档项目及其数量。`project` 返回注册信息、完整 `PROJECT.md`、产品事实同步状态、最小规划状态、归档时间、任务与当前执行信息。`task` 返回任务登记信息、归属、当前状态、完整进展记录和推导后的 Codex 对话链接；有 `taskDocumentPath` 时按项目仓库根目录读取原 Markdown 文件获得当前任务正文，没有路径的历史任务读取 `description` 和 `acceptanceCriteria`。`milestone` 返回目标、验收、当前结论、未决活动和负责人对话入口。当前任务数量不能代替里程碑完成判断。
 
 项目的 `attention` 只表达需要处理的异常状态：`decision_requested` 表示需要在对应 Codex App 对话中作出决定，`blocked` 表示项目存在确定阻塞。没有 `attention` 时，项目按当前任务和规划状态正常推进。
 
@@ -84,9 +84,9 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> resche
 
 用户提出新的任务需求或要求改变任务定义时，先读取 `$codrive-work` 完成范围与已有授权判断；新的业务取舍需确认，已授权的必要变化直接执行。本节负责执行已经确认的修改。
 
-执行前读取任务与项目详情，保存任务当前的 `updatedAt`。任务仍是普通 `backlog`、`requestedAction=null`、没有执行，并且项目仍未取消和未归档时，使用定义修改命令。系统生成任务由其所有者维护；已经开始、完成或取消的任务返回 `$codrive-work` 选择当前生命周期、取消替换或后续任务。
+执行前读取任务与项目详情，保存任务当前的 `updatedAt`。任务仍是普通 `backlog`、`requestedAction=null`、没有执行，并且项目仍未取消和未归档时，使用定义修改命令调整标题、归属或文档路径。系统生成任务由其所有者维护；已经开始、完成或取消的任务返回 `$codrive-work` 选择当前生命周期、取消替换或后续任务。已有文档路径的任务正文在主项目目录直接编辑原文件，后续规划与任务回合重新读取。
 
-纯任务澄清直接提交任务字段：
+纯登记信息变化直接提交相应字段：
 
 ```json
 {
@@ -94,13 +94,12 @@ node <skill-directory>/scripts/codrive-control.mjs task-control <task-id> resche
   "decisionSummary": "本次任务定义为什么变化",
   "changes": {
     "title": "可选的新名称",
-    "description": "新的结果和责任边界",
-    "acceptanceCriteria": ["新的可观察标准"]
+    "taskDocumentPath": "docs/tasks/新的任务文档.md"
   }
 }
 ```
 
-`changes` 可修改 `title`、`description`、`acceptanceCriteria` 或 `milestoneId`；归属只能指向同项目开放里程碑，解除归属使用 `null`。只发送需要改变的字段：
+`changes` 可修改 `title`、`taskDocumentPath` 或 `milestoneId`；没有文档路径的历史任务还可修改 `description` 和 `acceptanceCriteria`。历史未开始任务首次设置文档路径时转为文档模式。`taskDocumentPath` 指向项目仓库内已写好并读回的 Markdown 文件，写法见[任务文档](../codrive-work/references/task-document.md)。归属只能指向同项目开放里程碑，解除归属使用 `null`。只发送需要改变的字段：
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs task-update <task-id> --json '<task-update-json>'
@@ -117,7 +116,7 @@ node <skill-directory>/scripts/codrive-control.mjs task-update <task-id> --json 
 }
 ```
 
-脚本读取磁盘上的 `PROJECT.md` 并计算新哈希；Codrive 在一个序列化命令中接受产品事实和任务定义，记录决定摘要，替换失效的任务选择并推进一个规划版本。任务版本、产品文档版本或生命周期已经变化时，重新读取当前状态并根据最新事实整理修改。任务 JSON 保存 Codrive 的运行状态，所有任务定义变化都通过本命令进入工作流。
+脚本读取磁盘上的 `PROJECT.md` 并计算新哈希；Codrive 在一个序列化命令中接受产品事实和任务登记信息，记录决定摘要，替换失效的任务选择并推进一个规划版本。任务版本、产品文档版本或生命周期已经变化时，重新读取当前状态并根据最新事实整理修改。任务 JSON 保存登记信息与运行状态；已有路径文档的正文变化以原文件当前内容为准。
 
 ## 修改已确认的里程碑目标
 

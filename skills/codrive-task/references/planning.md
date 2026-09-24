@@ -9,7 +9,7 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 node <skill-directory>/scripts/codrive-task.mjs milestone-context <milestone-id>
 ```
 
-读取产品契约、当前目标、任务定义与状态、完整相关活动和直接证据。`PROJECT.md` 只承载当前长期产品事实；里程碑定义拥有阶段目标、范围与验收。每轮保存 context 返回的 `attemptId`、`reportOpportunityId` 与读取版本；报告原样使用这些身份。新证据可以推翻旧结论，历史活动保留来源，当前计划按最新证据判断。
+读取产品契约、当前目标、任务状态、完整相关活动和直接证据。项目选择的 `taskDocuments` 指向任务 JSON；里程碑上下文的 `tasks` 直接包含任务记录。每轮读取相关任务，有 `taskDocumentPath` 时从 `repositoryPath` 指向的主项目目录读取原 Markdown 文件，以当前内容判断任务；没有路径的历史任务沿用 `description` 和 `acceptanceCriteria`。`PROJECT.md` 只承载当前长期产品事实；里程碑定义拥有阶段目标、范围与验收。每轮保存 context 返回的 `attemptId`、`reportOpportunityId` 与读取版本；报告原样使用这些身份。新证据可以推翻旧结论，历史活动保留来源，当前计划按最新证据判断。
 
 已有授权来自用户确认目标、产品契约、里程碑边界及已接受决定。目标内必要漏项、调查和实现方法直接处理；范围外能力或改变已有业务结果的选择才需要用户。报告依据说明具体事实与授权，理由本身不扩大授权。
 
@@ -29,7 +29,7 @@ node <skill-directory>/scripts/codrive-task.mjs milestone-context <milestone-id>
 1. **核实目标。** 阅读定义版本、验收、授权、当前事实版本与上次评估之后的活动。没有任务也要评估：目标已成立就逐项提供证据，否则形成足以开始的工作。
 2. **检查新事实。** 从发现与有效阶段报告检查遗漏的消费者、依赖、验证及失效前提。短小只读核实可当轮完成；需要较长调查、代码修改、运行验证时创建普通任务，继续经过独立 Review。
 3. **组织处置。** 原任务内细节继续原任务；独立漏项追加任务；证据不足安排调查；重复来源关联到同一项任务或问题；无关增强保留候选并说明不影响本目标。处置引用 `sourceActivityIds`，对新结论保留反证和取代依据。
-4. **保护受影响工作。** 需要暂缓时，在处置中列出确实受影响的 `affectedTaskIds`。调查和无关任务继续。已开始任务保持定义、归属和候选；Codrive 持久化活动后中断在途 turn，恢复前检查未决影响。确认交付失效才使用有版本及理由的取消并生成替代任务。
+4. **保护受影响工作。** 需要暂缓时，在处置中列出确实受影响的 `affectedTaskIds`。调查和无关任务继续。已开始任务保持登记信息、归属和候选；其任务文档按当前内容读取。Codrive 持久化活动后中断在途 turn，恢复前检查未决影响。确认交付失效才使用有版本及理由的取消并生成替代任务。
 5. **形成下一步或验收。** 需要某项调查、验证或前置交付结束后继续判断时，在处置的 `waitForTaskIds` 中记录对应任务。任务完成或取消后，Codrive 会重新启动评估。成员任务全部结束后逐项核对当前验收、待处理来源、取消/替代缺口及所需运行证据；缺证据创建普通验证任务。只有所有必要结果和证据成立才报告完成。
 
 ### 等待用户期间继续推进
@@ -57,8 +57,8 @@ node <skill-directory>/scripts/codrive-task.mjs milestone-report <milestone-id> 
 
 `plan` 只按需要包含：
 
-- `tasks`：新增普通任务，每项 `key` 在本报告内唯一，其他字段为 `title`、`description`、`acceptanceCriteria`。
-- `updates`：普通未开始任务的 `taskId`、`expectedUpdatedAt`、`changes`。
+- `tasks`：新增普通任务，每项 `key` 在本报告内唯一，其他字段为 `title`、`taskDocumentPath`。提交报告前按[任务文档写法](../../codrive-work/references/task-document.md)在主项目仓库写好、读回每份文档。
+- `updates`：普通未开始任务登记信息的 `taskId`、`expectedUpdatedAt`、`changes`；已有路径文档的正文变化直接编辑原文件。
 - `cancellations`：已证实需要取消任务的 `taskId`、`expectedUpdatedAt`、`decisionBasis`、`reason`，沿用 `agent_decision | user_confirmed`。
 - `resolutions`：`sourceActivityIds`、`summary`，可附 `question`、`affectedTaskIds`、`waitForTaskIds`。任务引用使用现有 ID 或同一计划 `tasks[].key`，Codrive 在接受时统一转成新任务 ID。
 

@@ -78,7 +78,9 @@ describe("non-execution Skill handoff", () => {
   it("selects stage-specific Skills after reading authoritative task context", async () => {
     const task = await readFile(resolve("skills/codrive-task/SKILL.md"), "utf8");
 
-    expect(task).toContain("任务定义、验收标准、当前阶段和完整活动历史");
+    expect(task).toContain("有 `taskDocumentPath` 时");
+    expect(task).toContain("没有该路径的历史任务");
+    expect(task).toContain("任务正文、当前阶段、完整活动历史和仓库规则");
     expect(task).toContain("开始执行当前阶段前");
     expect(task).toContain("当前可用 Skill");
     expect(task).toContain("与当前阶段实际工作匹配的 Skill");

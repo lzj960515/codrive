@@ -322,8 +322,9 @@ export interface Task {
   projectId: string;
   milestoneId?: string;
   title: string;
-  description: string;
-  acceptanceCriteria: string[];
+  taskDocumentPath?: string;
+  description?: string;
+  acceptanceCriteria?: string[];
   origin?: TaskOrigin;
   order: number;
   status: TaskStatus;
@@ -384,8 +385,9 @@ export interface ProjectSnapshot {
 export interface CreateTaskInput {
   milestoneId?: string;
   title: string;
-  description: string;
-  acceptanceCriteria: string[];
+  taskDocumentPath?: string;
+  description?: string;
+  acceptanceCriteria?: string[];
   order?: number;
   origin?: TaskOrigin;
 }
@@ -393,6 +395,7 @@ export interface CreateTaskInput {
 export interface TaskDefinitionChanges {
   milestoneId?: string | null;
   title?: string;
+  taskDocumentPath?: string;
   description?: string;
   acceptanceCriteria?: string[];
 }

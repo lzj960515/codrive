@@ -12,10 +12,10 @@ compatibility: Requires Node.js 24+ and a running local Codrive service.
 
 1. 把当前 Codex 工作目录作为默认目标项目目录，读取其中的 `AGENTS.md`、README、源码入口和 Git 状态。空目录也代表用户已经创建并打开的新项目位置。
 2. 从当前对话和已有资料提取已确认的产品目标、目标用户、核心场景、范围、非目标和完成标准；只澄清仍会改变结果的缺口。
-3. 对需要持续发现工作和最终验收的阶段，先形成里程碑目标、范围、自主授权和验收；首批任务可以为空。已经明确的独立交付直接形成任务。拟定任务粒度、前置结果或迁移批次时，读取[任务拆分方法](../codrive-work/references/task-slicing.md)。任务使用业务名称，验收标准描述可观察行为。最终体验或端到端确认属于里程碑验收时写入其标准，由负责人按证据安排普通验证任务；只有明确可定义的实际验证工作才提前形成任务。
+3. 对需要持续发现工作和最终验收的阶段，先形成里程碑目标、范围、自主授权和验收；首批任务可以为空。已经明确的独立交付直接形成任务。拟定任务粒度、前置结果或迁移批次时，读取[任务拆分方法](../codrive-work/references/task-slicing.md)。最终体验或端到端确认属于里程碑验收时写入其标准，由负责人按证据安排普通验证任务；只有明确可定义的实际验证工作才提前形成任务。
 4. 向用户展示产品契约、阶段目标或独立任务及授权边界；已有确认覆盖目标及必要分解时直接注册，只有尚未确认的业务结果需要确认。
-5. 用户确认后，确保当前目录具备可供 Codrive 创建工作树的本地 Git 基线；需要时在当前目录初始化仓库、默认分支和初始提交。
-6. 使用当前项目根目录生成注册 JSON，并通过脚本写入 Codrive。
+5. 用户确认后，按[任务文档写法](../codrive-work/references/task-document.md)为每项新任务在项目仓库内写好 Markdown 文件，读回正文并核实路径。确保当前目录具备可供 Codrive 创建工作树的本地 Git 基线；需要时在当前目录初始化仓库、默认分支和初始提交。
+6. 使用当前项目根目录和任务文档的相对路径生成注册 JSON，并通过脚本写入 Codrive。
 7. 根据脚本返回结果向用户完成交接，然后结束当前回合。
 
 ## 注册格式
@@ -29,8 +29,7 @@ compatibility: Requires Node.js 24+ and a running local Codrive service.
   "tasks": [
     {
       "title": "任务名称",
-      "description": "任务结果和边界",
-      "acceptanceCriteria": ["可观察验收标准"]
+      "taskDocumentPath": "docs/tasks/任务名称.md"
     }
   ]
 }
@@ -38,7 +37,7 @@ compatibility: Requires Node.js 24+ and a running local Codrive service.
 
 注册时默认把 `repositoryPath` 设为当前项目根目录的绝对路径。新项目尚无磁盘文档，因此注册请求携带初始 `productDocument`，Codrive 创建 `PROJECT.md`；注册完成后所有修改都使用本地文件工具和轻量变更通知。产品文档保存用途、用户、能力、场景和长期约束；阶段范围和完成标准保存到里程碑，任务分解随证据变化。注册至少提供普通任务或里程碑之一；里程碑无任务时也会进行初始评估。Codrive 会在每次需要开始工作时让 AI 根据最新项目、任务和仓库状态重新判断任务关系并选择工作。
 
-初始里程碑通过 `milestones` 数组传入，每项使用 `title`、`description`、`acceptanceCriteria`，可附 `tasks`。只有阶段目标时传入 `tasks: []` 与非空 `milestones`；初始独立任务继续使用顶层 `tasks`。
+初始里程碑通过 `milestones` 数组传入，每项使用 `title`、`description`、`acceptanceCriteria`，可附使用相同文档路径格式的 `tasks`。只有阶段目标时传入 `tasks: []` 与非空 `milestones`；初始独立任务继续使用顶层 `tasks`。
 
 ## 执行
 

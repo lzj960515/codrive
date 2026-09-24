@@ -78,6 +78,21 @@ export function assertCurrentProject(project: Project): Project {
 }
 
 export function assertCurrentTask(task: Task): Task {
+  if (task.taskDocumentPath !== undefined) {
+    if (
+      typeof task.taskDocumentPath !== "string" ||
+      !task.taskDocumentPath.trim() ||
+      task.description !== undefined ||
+      task.acceptanceCriteria !== undefined
+    ) {
+      throw new Error(`Task ${task.id} has an invalid document definition`);
+    }
+  } else if (
+    typeof task.description !== "string" ||
+    !Array.isArray(task.acceptanceCriteria)
+  ) {
+    throw new Error(`Task ${task.id} has no valid definition`);
+  }
   if (!taskStatuses.has(task.status)) {
     throw new Error(
       `Unsupported task lifecycle status ${String(task.status)} in schema v5`,

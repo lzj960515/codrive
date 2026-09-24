@@ -974,7 +974,7 @@ export function renderBoardClient(accessToken: string): string {
     }
 
     function taskCard(task) {
-      const copy = task.status === "cancelled" ? task.cancellation.reason : task.milestoneWait?.summary || task.integrationWait?.message || task.description;
+      const copy = task.status === "cancelled" ? task.cancellation.reason : task.milestoneWait?.summary || task.integrationWait?.message || (task.taskDocumentPath ? "任务文档："+task.taskDocumentPath : task.description);
       const alert = ["waiting_for_input", "blocked", "waiting_for_integration"].includes(task.displayStatus) ? "task-alert" : "";
       const visibleStatus = ["retry_scheduled", "waiting_for_resume"].includes(task.executionStatus) ? task.executionStatus : task.displayStatus;
       return '<button class="task-card '+(task.id === selectedTaskId ? 'active' : '')+'" type="button" data-task="'+escapeHtml(task.id)+'" data-status="'+escapeHtml(task.displayStatus)+'">'+
@@ -1189,13 +1189,19 @@ export function renderBoardClient(accessToken: string): string {
         host.innerHTML = "";
         return;
       }
-      const { task, activities, currentDecisionRequest } = taskDetail;
+      const { task, activities, currentDecisionRequest, taskDocumentContent, taskDocumentError } = taskDetail;
       document.body.classList.add("detail-open");
       detail.setAttribute("aria-hidden", "false");
       detail.setAttribute("aria-label", "任务详情");
-      const criteria = task.acceptanceCriteria.length
-        ? '<ul class="criteria-list '+(task.status === "done" ? "complete" : "")+'">'+task.acceptanceCriteria.map(item => '<li><i>'+(task.status === "done" ? "✓" : "")+'</i><span>'+escapeHtml(item)+'</span></li>').join("")+'</ul>'
+      const acceptanceCriteria = task.acceptanceCriteria || [];
+      const criteria = acceptanceCriteria.length
+        ? '<ul class="criteria-list '+(task.status === "done" ? "complete" : "")+'">'+acceptanceCriteria.map(item => '<li><i>'+(task.status === "done" ? "✓" : "")+'</i><span>'+escapeHtml(item)+'</span></li>').join("")+'</ul>'
         : '<div class="criteria-empty">未设置验收标准。</div>';
+      const taskDefinition = task.taskDocumentPath
+        ? '<section class="detail-section"><h3>任务文档</h3><p class="detail-description"><code>'+escapeHtml(task.taskDocumentPath)+'</code></p>'+
+            (taskDocumentError ? '<p class="detail-description" role="alert">'+escapeHtml(taskDocumentError)+'</p>' : '<article class="markdown-body">'+renderMarkdown(taskDocumentContent)+'</article>')+
+          '</section>'
+        : '<p class="detail-description">'+escapeHtml(task.description)+'</p>';
       const cancellation = task.status === "cancelled" && task.cancellation
         ? '<div class="cancellation-card"><b>取消理由</b><p>'+escapeHtml(task.cancellation.reason)+'</p><small>'+escapeHtml(label(task.cancellation.decisionBasis))+' · '+escapeHtml(label(task.cancellation.cancelledBy))+' · '+escapeHtml(formatTime(task.cancellation.cancelledAt))+'</small></div>'
         : task.status === "cancelled"
@@ -1225,10 +1231,10 @@ export function renderBoardClient(accessToken: string): string {
           '<div class="task-status-row"><div class="detail-status"><span></span>'+escapeHtml(label(task.displayStatus))+'</div>'+(controls ? '<div class="task-status-actions">'+controls+'</div>' : '')+'</div>'+
           (controls ? '<p class="task-action-status" role="status" aria-live="polite"></p>' : '')+
           '<div class="task-id-row"><code title="'+escapeHtml(task.id)+'">'+escapeHtml(task.id)+'</code><button class="copy-id-button" type="button" data-copy-task-id aria-label="复制任务 ID" aria-live="polite">复制 ID</button></div>'+
-          '<h2>'+escapeHtml(task.title)+'</h2><p class="detail-description">'+escapeHtml(task.description)+'</p>'+
+          '<h2>'+escapeHtml(task.title)+'</h2>'+taskDefinition+
           (task.milestoneWait ? '<section class="milestone-task-wait"><b>等待前置结果</b><p>'+escapeHtml(task.milestoneWait.summary)+'</p>'+decisionActions(task.milestoneWait.decisionReply, task.milestoneWait.summary, task.milestoneWait.threadId, "打开里程碑对话")+'</section>' : '')+
           cancellation+scheduledResume+integrationWait+currentConversation+
-          '<section class="detail-section"><h3>验收标准 <span>'+task.acceptanceCriteria.length+'</span></h3>'+criteria+'</section>'+
+          (task.taskDocumentPath ? '' : '<section class="detail-section"><h3>验收标准 <span>'+acceptanceCriteria.length+'</span></h3>'+criteria+'</section>')+
           '<section class="detail-section activity-section"><h3>进展记录 <span>'+activities.length+'</span></h3>'+activityTimeline+'</section>'+
           '<section class="detail-section"><h3>执行信息</h3><dl class="detail-meta"><dt>当前阶段</dt><dd>'+escapeHtml(label(task.executionStatus === "retry_scheduled" ? task.executionStatus : task.displayStatus))+'</dd>'+
             (task.modelRouting ? '<dt>当前模型</dt><dd>'+escapeHtml(task.modelRouting.model)+' · '+escapeHtml(label(task.modelRouting.route))+'</dd>'+(task.modelRouting.circuitBreaker ? '<dt>主模型熔断</dt><dd>'+escapeHtml(label(task.modelRouting.circuitBreaker.state))+(task.modelRouting.circuitBreaker.primaryProbeAt ? ' · '+escapeHtml(formatTime(task.modelRouting.circuitBreaker.primaryProbeAt)) : '')+'</dd>' : '')+'<dt>容量重试</dt><dd>'+task.modelRouting.retryCount+(task.modelRouting.nextRetryAt ? ' · '+escapeHtml(formatTime(task.modelRouting.nextRetryAt)) : '')+'</dd>' : '')+

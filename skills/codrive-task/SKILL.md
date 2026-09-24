@@ -22,9 +22,9 @@ node <skill-directory>/scripts/codrive-task.mjs context <task-id>
 node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-directory>
 ```
 
-读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities`、关联里程碑的当前目标与未决活动，以及仓库 `AGENTS.md`。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务定义、当前状态和已有证据恢复连续上下文。
+读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities`、关联里程碑的当前目标与未决活动，以及仓库 `AGENTS.md`。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务正文、当前状态和已有证据恢复连续上下文。
 
-读取任务定义、验收标准、当前阶段和完整活动历史后，把这些内容与仓库规则共同作为本轮任务语义。开始执行当前阶段前，对照当前可用 Skill 的 `description`，加载与当前阶段实际工作匹配的 Skill，并遵循对应工作流。没有其他匹配 Skill 的任务继续按照本 Skill 完成。
+每轮先读取 `taskDocument` 指向的任务 JSON：有 `taskDocumentPath` 时，按 `repositoryPath` 定位主项目目录中的原 Markdown 文件并读取当前内容，以文档中的交付结果和验收条件作为任务正文；没有该路径的历史任务读取 JSON 中的 `description` 和 `acceptanceCriteria`。在进入任务工作树前完成这一步，审查、合入和恢复回合也重新读取。路径指向的文件缺失或内容为空时，核对仓库与路径并报告明确阻塞。将任务正文、当前阶段、完整活动历史和仓库规则共同作为本轮任务语义。开始执行当前阶段前，对照当前可用 Skill 的 `description`，加载与当前阶段实际工作匹配的 Skill，并遵循对应工作流。没有其他匹配 Skill 的任务继续按照本 Skill 完成。
 
 `productFacts.status` 为 `modified` 时，磁盘文件尚未完成 Codrive 通知；负责这次修改的对话先用 `$codrive-control` 记录文档变更。项目选择在状态恢复为 `current` 前保持停止。
 
@@ -44,7 +44,7 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 - `context` 返回 `workspacePath` 时，先进入该工作树，再执行当前阶段。提交与审查基线使用 `context.delivery`，并用实际 Git 状态确认。
 - 当前 `work` 需要改代码且尚未记录 `workspacePath` 时，先检查规范路径 `<repository>/.worktrees/codrive/<project-id>/<task-id>`；已有工作树就继续使用，没有时再创建。
-- 进入工作树后检查 `git status`、提交历史和差异，把已有改动作为当前任务的连续执行现场。结合任务目标、验收标准和版本历史，自主决定保留、修改、整合或清理，然后继续当前阶段。
+- 进入工作树后检查 `git status`、提交历史和差异，把已有改动作为当前任务的连续执行现场。结合任务正文和版本历史，自主决定保留、修改、整合或清理，然后继续当前阶段。
 - 主仓库中的用户改动保持原样；开发工作放在任务工作树，合入时基于最新主分支安全整合。
 
 把 `needs_input` 用于真正需要用户决定的产品语义、外部凭据或权限。工作树恢复、现有改动归属、Git 冲突和代码取舍由当前 Codex 根据可见事实完成。
@@ -65,7 +65,7 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 ## 审查 `review`
 
-从任务契约、验收标准、完整活动历史、当前绑定的 work 活动和实际交付物状态还原真实交付场景。work 活动有 `context.delivery.candidateCommit` 时独立审查该候选；没有候选时审查发布、迁移或验证证据，不要求 Git 提交。根据交付物性质检查目标是否完成、证据是否可信，以及明显回归、安全和数据风险。只有能通过受支持的使用方式触发并真实影响当前交付的问题才成为阻塞；纯理论可能性保留为非阻塞观察，不进入 `findings`。
+从当前任务正文、完整活动历史、当前绑定的 work 活动和实际交付物状态还原真实交付场景。work 活动有 `context.delivery.candidateCommit` 时独立审查该候选；没有候选时审查发布、迁移或验证证据，不要求 Git 提交。根据交付物性质检查目标是否完成、证据是否可信，以及明显回归、安全和数据风险。只有能通过受支持的使用方式触发并真实影响当前交付的问题才成为阻塞；纯理论可能性保留为非阻塞观察，不进入 `findings`。
 
 - 满足交付标准时汇报 `approved`。当前 work 有候选时把审查时的主分支提交写入 `reviewedMainCommit`；无候选时只提供测试或业务验证证据。
 - 存在阻塞问题时汇报 `changes_requested`，`findings` 只列可操作问题。

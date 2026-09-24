@@ -90,6 +90,46 @@ function client(search: string, snapshot = archived, pathname = "/") {
 }
 
 describe("workspace navigation", () => {
+  it("shows the current task document without legacy description or acceptance fields", () => {
+    const page = client("?project=archived&task=task");
+    const documentedTask = {
+      ...task,
+      taskDocumentPath: "docs/tasks/greeting.md",
+      description: undefined,
+      acceptanceCriteria: undefined,
+    };
+    page.run(`taskDetail = ${JSON.stringify({
+      task: documentedTask,
+      taskDocumentContent: "# 实现问候\n- 页面显示问候 <script>alert(1)</script>",
+      taskDocumentError: null,
+      activities: [],
+      currentDecisionRequest: null,
+    })}; renderTaskDetail();`);
+
+    const content = page.element("task-detail-content").innerHTML;
+    expect(content).toContain("docs/tasks/greeting.md");
+    expect(content).toContain("<h1>实现问候</h1>");
+    expect(content).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(content).not.toContain("验收标准");
+    expect(page.run(`taskCard(${JSON.stringify(documentedTask)})`)).toContain("任务文档：docs/tasks/greeting.md");
+  });
+
+  it("keeps a documented task visible when its source file cannot be read", () => {
+    const page = client("?project=archived&task=task");
+    page.run(`taskDetail = ${JSON.stringify({
+      task: { ...task, taskDocumentPath: "docs/tasks/missing.md", description: undefined, acceptanceCriteria: undefined },
+      taskDocumentContent: null,
+      taskDocumentError: "任务文档不存在",
+      activities: [],
+      currentDecisionRequest: null,
+    })}; renderTaskDetail();`);
+
+    const content = page.element("task-detail-content").innerHTML;
+    expect(content).toContain("docs/tasks/missing.md");
+    expect(content).toContain("任务文档不存在");
+    expect(content).toContain("进展记录");
+  });
+
   it.each([
     { status: "backlog", canCancel: true, currentExecution: null, buttons: ["data-cancel-task"] },
     { status: "blocked", canCancel: true, currentExecution: null, buttons: ["data-retry", "data-cancel-task"] },
@@ -100,6 +140,8 @@ describe("workspace navigation", () => {
     const page = client("?project=archived&task=task");
     page.run(`taskDetail = ${JSON.stringify({ task: { ...task, status, displayStatus: status, canCancel, currentExecution }, activities: [], currentDecisionRequest: null })}; renderTaskDetail();`);
     const content = page.element("task-detail-content").innerHTML;
+    expect(content).toContain("显示 Hello World");
+    expect(content).toContain("验收标准");
     const statusRow = content.slice(content.indexOf('class="task-status-row"'), content.indexOf('class="task-id-row"'));
     for (const selector of ["data-retry", "data-cancel-task"]) {
       if (buttons.some(button => button === selector)) expect(statusRow).toContain(selector);

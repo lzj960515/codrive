@@ -13,7 +13,7 @@ function changedTaskDefinitionFields(
   changes: TaskDefinitionChanges,
 ): Array<keyof TaskDefinitionChanges> {
   return (
-    ["title", "description", "acceptanceCriteria", "milestoneId"] as const
+    ["title", "taskDocumentPath", "description", "acceptanceCriteria", "milestoneId"] as const
   ).filter(
     (field) =>
       changes[field] !== undefined &&
@@ -68,6 +68,15 @@ export function validateTaskDefinitionUpdate(
   if (input.changes.title !== undefined && input.changes.title.length === 0) {
     throw new WorkflowConflictError("Task definition title must not be empty");
   }
+  if (
+    (task.taskDocumentPath !== undefined || input.changes.taskDocumentPath !== undefined) &&
+    (input.changes.description !== undefined ||
+      input.changes.acceptanceCriteria !== undefined)
+  ) {
+    throw new WorkflowConflictError(
+      "Task documents replace inline descriptions and acceptance criteria",
+    );
+  }
   const changedFields = changedTaskDefinitionFields(task, input.changes);
   if (changedFields.length === 0) {
     throw new WorkflowConflictError(
@@ -86,6 +95,9 @@ export function applyTaskDefinitionChanges(
     ...task,
     ...(changes.milestoneId ? { milestoneId: changes.milestoneId } : {}),
     ...(changes.title === undefined ? {} : { title: changes.title }),
+    ...(changes.taskDocumentPath === undefined
+      ? {}
+      : { taskDocumentPath: changes.taskDocumentPath }),
     ...(changes.description === undefined
       ? {}
       : { description: changes.description }),
@@ -95,5 +107,9 @@ export function applyTaskDefinitionChanges(
     updatedAt,
   };
   if (changes.milestoneId === null) delete result.milestoneId;
+  if (changes.taskDocumentPath !== undefined) {
+    delete result.description;
+    delete result.acceptanceCriteria;
+  }
   return result;
 }

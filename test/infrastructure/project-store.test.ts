@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
+import { readTaskDocument } from "../../src/infrastructure/task-document.js";
 
 async function createStore() {
   const stateDirectory = await mkdtemp(join(tmpdir(), "codrive-store-"));
@@ -26,6 +27,63 @@ const projectInput = {
 };
 
 describe("ProjectStore", () => {
+  it("registers a task by document path and reads later edits from the source file", async () => {
+    const { stateDirectory, store } = await createStore();
+    const repositoryPath = join(stateDirectory, "repository");
+    const taskDocumentPath = "docs/tasks/playable-loop.md";
+    const documentFile = join(repositoryPath, taskDocumentPath);
+    await mkdir(join(repositoryPath, "docs/tasks"), { recursive: true });
+    await writeFile(documentFile, "# 可玩的主流程\n\n完成一局游戏。\n");
+
+    const created = await store.createProject({
+      ...projectInput,
+      repositoryPath,
+      tasks: [{ title: "完成可玩的主流程", taskDocumentPath }],
+    });
+    const task = created.tasks[0]!;
+
+    expect(task).toMatchObject({ title: "完成可玩的主流程", taskDocumentPath });
+    expect(task).not.toHaveProperty("description");
+    expect(task).not.toHaveProperty("acceptanceCriteria");
+    await expect(readTaskDocument(repositoryPath, taskDocumentPath)).resolves.toContain("完成一局游戏");
+
+    await writeFile(documentFile, "# 可玩的主流程\n\n完成两局游戏。\n");
+    await expect(readTaskDocument(repositoryPath, taskDocumentPath)).resolves.toContain("完成两局游戏");
+  });
+
+  it("rejects a new task whose document is absent or empty", async () => {
+    const { stateDirectory, store } = await createStore();
+    const repositoryPath = join(stateDirectory, "repository");
+    await mkdir(repositoryPath, { recursive: true });
+
+    await expect(store.createProject({
+      ...projectInput,
+      repositoryPath,
+      tasks: [{ title: "缺少说明", taskDocumentPath: "docs/tasks/missing.md" }],
+    })).rejects.toThrow(/document/i);
+
+    await mkdir(join(repositoryPath, "docs/tasks"), { recursive: true });
+    await writeFile(join(repositoryPath, "docs/tasks/empty.md"), " \n");
+    await expect(store.createProject({
+      ...projectInput,
+      repositoryPath,
+      tasks: [{ title: "空说明", taskDocumentPath: "docs/tasks/empty.md" }],
+    })).rejects.toThrow(/document/i);
+
+    const outsideDocument = join(stateDirectory, "outside.md");
+    await writeFile(outsideDocument, "# 仓库外的说明\n");
+    await expect(store.createProject({
+      ...projectInput,
+      repositoryPath,
+      tasks: [{ title: "越界路径", taskDocumentPath: "../outside.md" }],
+    })).rejects.toThrow(/inside the project repository/i);
+    await expect(store.createProject({
+      ...projectInput,
+      repositoryPath,
+      tasks: [{ title: "绝对路径", taskDocumentPath: outsideDocument }],
+    })).rejects.toThrow(/inside the project repository/i);
+  });
+
   it("persists milestone membership and restores milestone snapshots from activity events", async () => {
     const { stateDirectory, store } = await createStore();
     const created = await store.createProject({ ...projectInput, tasks: [], milestones: [{

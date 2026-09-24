@@ -44,6 +44,7 @@ export function createBoardView(
         ...taskMilestoneView(task, milestonesById, milestoneActivities, project),
         id: task.id,
         title: task.title,
+        taskDocumentPath: task.taskDocumentPath ?? null,
         description: task.description,
         acceptanceCriteria: task.acceptanceCriteria,
         order: task.order,
