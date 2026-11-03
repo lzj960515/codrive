@@ -154,7 +154,10 @@ async function resolveNpmLatestVersion(): Promise<string> {
     ["view", "codrive", "dist-tags.latest", "--json"],
     { encoding: "utf8", timeout: 5_000, maxBuffer: 64 * 1_024 },
   );
-  const value = JSON.parse(stdout) as unknown;
+  const response = JSON.parse(stdout) as unknown;
+  const value = Array.isArray(response) && response.length === 1
+    ? response[0]
+    : response;
   if (typeof value !== "string") throw new InvalidRegistryResponseError();
   return value;
 }

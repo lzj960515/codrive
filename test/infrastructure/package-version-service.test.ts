@@ -2,11 +2,52 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PackageVersionService } from "../../src/infrastructure/package-version-service.js";
 
+const executeNpm = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  const { promisify } = await import("node:util");
+  return {
+    ...original,
+    execFile: Object.assign(vi.fn(), { [promisify.custom]: executeNpm }),
+  };
+});
+
 describe("PackageVersionService", () => {
+  it.each(['"0.7.0"', '["0.7.0"]'])("checks npm latest from response %s", async (stdout) => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-npm-version-"));
+    executeNpm.mockResolvedValueOnce({ stdout });
+    const service = new PackageVersionService({
+      currentVersion: "0.6.0",
+      stateDirectory: directory,
+    });
+
+    await expect(service.refresh({ force: true })).resolves.toMatchObject({
+      latestVersion: "0.7.0",
+      updateAvailable: true,
+      checkError: null,
+    });
+  });
+
+  it("rejects an ambiguous npm latest result", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-npm-version-"));
+    executeNpm.mockResolvedValueOnce({ stdout: '["0.7.0", "0.8.0"]' });
+    const service = new PackageVersionService({
+      currentVersion: "0.6.0",
+      stateDirectory: directory,
+    });
+
+    await expect(service.refresh({ force: true })).resolves.toMatchObject({
+      latestVersion: null,
+      updateAvailable: false,
+      checkError: { code: "invalid_registry_response" },
+    });
+  });
+
   it("caches a successful npm latest result without blocking later reads", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-version-"));
     let calls = 0;
