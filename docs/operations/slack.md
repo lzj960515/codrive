@@ -72,6 +72,8 @@ oauth_config:
       - groups:history
       - channels:read
       - groups:read
+      - channels:manage
+      - groups:write
       - commands
       - files:read
       - files:write
@@ -91,9 +93,11 @@ settings:
 1. 开启 Socket Mode，在 Basic Information 的 App-level tokens 中生成带 `connections:write` 的 app token，形如 `xapp-…`。
 2. 将应用安装到工作区，取得 Bot User OAuth Token，形如 `xoxb-…`。事件和权限变化后重新安装或授权，使新权限生效。
 3. 保持 App Home 的 Messages 页开启且允许用户输入，使你能直接给机器人发私信。
-4. 将机器人邀请到准备绑定的项目频道。公开和私有频道分别使用对应的普通消息事件，频道成员关系决定机器人能看到哪些消息。
+4. 已有项目频道中邀请机器人；也可以私信机器人创建频道，它会通过 API 创建、邀请本人并完成绑定。公开和私有频道分别使用对应的普通消息事件，频道成员关系决定机器人能看到哪些消息。
 
 Socket Mode 由 Mac 主动建立出站连接，不需要为本机暴露公网回调地址。`app_mention` 不是免艾特接收的前提，本配置用 `message.*` 处理普通消息。
+
+通过 API 创建并邀请成员到公开频道需要 `channels:manage`，私有频道需要 `groups:write`。已有应用补上权限后重新安装授权，原 Token 是否继续有效以 Slack 的实际返回为准；需要更换时在本机设置页更新。权限不足时按具体错误补授权，创建频道本身不需要屏幕录制、辅助功能权限或解锁 Mac。
 
 ## 配置本地连接
 
@@ -136,17 +140,27 @@ node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" slack-st
 
 已有 Codrive 项目可以直接绑定。仅准备查询数据或接收报告的新项目，可以先用 `codrive-forge` 登记产品事实、仓库目录和默认分支，传入 `tasks: []` 并省略 `milestones`；它不会因此生成开发目标。需要工程工作时再用 `codrive-work` 追加任务。
 
+私信是全局会话，执行目录为本机 Codrive 状态目录；它不会自动继承桌面当前打开的工作空间。`/state` 显示真实工作目录和作用范围。定位具体项目时，机器人读取 Codex 已保存的工作空间名称与根目录，并核实目标目录中的 README、AGENTS，再对照 Codrive 产品登记。同目录里的不同产品分别保留身份，例如工作空间 `pietra-ai-workspace` 与产品 `Pietra Social / Pulse`。只有对应工作空间尚未登记时，才为它登记空任务项目。
+
 可以直接私信机器人：
 
 > 把 `#my-project` 绑定到本机的“我的项目”。
 
+需要新建频道时，可以说：
+
+> 为本机工作空间 `pietra-ai-workspace` 创建同名私有频道，并把我邀请进去、绑定到这个工作空间。
+
 机器人会用现有项目和可访问频道核对目标，有歧义时请你选择。也可以通过脚本取得实际 ID 后绑定：
 
 ```bash
+node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" local-projects
 node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" board
 node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" slack-channels
 node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" slack-bind project_id --json '{"channelId":"C_CHANNEL_ID"}'
+node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" slack-create-channel project_id --json '{"name":"my-project","isPrivate":true}'
 ```
+
+创建命令先核实 Codrive 项目，再创建频道、邀请已配置的授权用户，最后保存绑定。回执返回实际频道和绑定；重复执行已成功的同名绑定会复用原频道。重名时先核实可访问频道，避免误绑其他项目。若频道已创建但后续邀请或绑定失败，保留错误回执中的 `channelId`，在同一命令 JSON 中附上它继续办理。
 
 绑定后，在项目频道直接发一条文字消息。机器人在这条消息下面的讨论串回复；在串内追问会继续同一会话，频道内另一条新的根消息建立另一个会话。私信保持全局交流，你可以在其中查询整体情况、管理绑定或明确指定项目办事。
 

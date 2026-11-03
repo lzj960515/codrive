@@ -7,7 +7,9 @@ import { join } from "node:path";
 const [command, ...args] = process.argv.slice(2);
 let result;
 let isWrite = false;
-if (command === "slack-status" && args.length === 0) {
+if (command === "local-projects" && args.length === 0) {
+  result = await localProjects();
+} else if (command === "slack-status" && args.length === 0) {
   result = await request("/api/slack");
 } else if (command === "slack-channels" && args.length === 0) {
   result = await request("/api/slack/channels");
@@ -19,6 +21,11 @@ if (command === "slack-status" && args.length === 0) {
   const [projectId, ...inputArgs] = args;
   const payload = parseJsonArgument(inputArgs, "slack-bind");
   result = await sendCommand("slack.bind", { ...payload, projectId });
+  isWrite = true;
+} else if (command === "slack-create-channel" && args[0]) {
+  const [projectId, ...inputArgs] = args;
+  const payload = parseJsonArgument(inputArgs, "slack-create-channel");
+  result = await sendCommand("slack.create_project_channel", { ...payload, projectId });
   isWrite = true;
 } else if (command === "slack-report" && args[0]) {
   const [projectId, ...inputArgs] = args;
@@ -99,10 +106,31 @@ if (command === "slack-status" && args.length === 0) {
   isWrite = true;
 } else {
   fail(
-    "Usage: codrive-control <board|archived|project|task|milestone|milestone-update|settings|update-settings|project-control|task-control|task-update|product-document-changed|slack-status|slack-channels|slack-configure|slack-bind|slack-report|slack-send-file|reply-decision> ...",
+    "Usage: codrive-control <local-projects|board|archived|project|task|milestone|milestone-update|settings|update-settings|project-control|task-control|task-update|product-document-changed|slack-status|slack-channels|slack-configure|slack-bind|slack-create-channel|slack-report|slack-send-file|reply-decision> ...",
   );
 }
 print(isWrite ? { ok: true, result } : result);
+
+async function localProjects() {
+  const codexDirectory = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  let contents;
+  try {
+    contents = await readFile(join(codexDirectory, ".codex-global-state.json"), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return { available: false, projects: [], reason: "当前机器没有 Codex 桌面端保存的项目记录，请核实用户给定的目录。" };
+    }
+    throw error;
+  }
+  const saved = JSON.parse(contents)["local-projects"];
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) {
+    return { available: false, projects: [], reason: "当前 Codex 桌面项目格式不可用，请核实用户给定的目录。" };
+  }
+  const projects = Object.values(saved)
+    .filter((project) => project && typeof project.name === "string" && Array.isArray(project.rootPaths))
+    .map((project) => ({ name: project.name, rootPaths: project.rootPaths.filter((path) => typeof path === "string") }));
+  return { available: true, projects };
+}
 
 function sendCommand(type, payload) {
   return request("/api/commands", {

@@ -3,6 +3,7 @@ import type { DecisionReplyTarget } from "../domain/decision-reply.js";
 import type { SlackIncomingMessage, SlackReplyStream, SlackTransport } from "../domain/slack.js";
 import type { SlackConversation, SlackInputReceipt, SlackDeliveryRecord } from "../domain/slack-state.js";
 import type { SlackReplyTarget } from "../domain/work-source.js";
+import type { Project } from "../domain/types.js";
 import { SlackDeliveryError } from "../domain/slack.js";
 import { WorkflowConflictError } from "../domain/errors.js";
 import type { ConfigStore } from "../infrastructure/config-store.js";
@@ -169,7 +170,7 @@ export class SlackAssistant {
       receipt = { ...receipt, status: "running", updatedAt: new Date().toISOString() };
       await this.options.state.saveInput(receipt);
       const models = snapshot?.project.modelConfig ?? config.models;
-      const prompt = await this.messagePrompt(receipt, cwd);
+      const prompt = await this.messagePrompt(receipt, cwd, snapshot?.project);
       const turnId = await this.options.codex.startTurn(
         threadId, cwd, prompt, models.primary, models.primaryReasoningEffort,
       );
@@ -240,16 +241,19 @@ export class SlackAssistant {
     return conversation;
   }
 
-  private async messagePrompt(receipt: SlackInputReceipt, repositoryPath: string): Promise<string> {
+  private async messagePrompt(receipt: SlackInputReceipt, workingDirectory: string, project: Project | undefined): Promise<string> {
     const context = {
       projectId: receipt.projectId ?? null,
-      repositoryPath,
+      projectName: project?.name ?? null,
+      repositoryPath: project?.repositoryPath ?? null,
+      workingDirectory,
       source: { kind: "slack", requestId: receipt.id },
       replyTarget: receipt.target,
       pendingDecisions: await this.options.pendingDecisions(receipt.target),
     };
     return `${receipt.message.text}\n\n本条 Slack 输入的运行上下文：\n${JSON.stringify(context)}\n\n` +
-      "按用户请求正常办理。需要登记工程工作时使用现有 $codrive-work，把这里的 source 和 replyTarget 原样附到本次任务。" +
+      "按用户请求正常办理。workingDirectory 是本轮执行目录；projectId 为空时属于全局私信，具体项目以用户指定的本机工作空间或目录为准。" +
+      "配置项目频道时使用 $codrive-control 核实目标身份并通过 Slack API 办理。需要登记工程工作时使用现有 $codrive-work，把这里的 source 和 replyTarget 原样附到本次任务。" +
       "用户明确回答当前待决定问题时，使用 $codrive-control 的 reply-decision 提交对应身份；其他输入继续普通交流。";
   }
 

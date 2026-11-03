@@ -50,6 +50,38 @@ export interface SlackChannel {
   isPrivate: boolean;
 }
 
+export interface SlackCreateProjectChannelInput {
+  projectId: string;
+  name: string;
+  isPrivate?: boolean;
+  channelId?: string;
+}
+
+export interface SlackProjectChannelResult {
+  channel: SlackChannel;
+  binding: SlackProjectBinding;
+  created: boolean;
+  invitedUserId: string;
+}
+
+export interface SlackProjectChannelFailure {
+  stage: "create" | "invite" | "bind";
+  created: boolean;
+  channel?: SlackChannel;
+  slackError?: string;
+  requiredScope?: string;
+  candidates?: SlackChannel[];
+}
+
+/** 保留远端已创建频道的回执，使后续重试能明确续办。 */
+export class SlackProjectChannelError extends Error {
+  override readonly name = "SlackProjectChannelError";
+
+  constructor(message: string, readonly details: SlackProjectChannelFailure) {
+    super(message);
+  }
+}
+
 export interface SlackModelContext {
   teamId: string;
   userId: string;
@@ -114,6 +146,8 @@ export interface SlackTransport {
   sendMessage(target: SlackReplyTarget, markdown: string, resume?: SlackSendProgress): Promise<{ messageTs: string }>;
   getChannel(id: string): Promise<SlackChannel>;
   listChannels(): Promise<SlackChannel[]>;
+  createChannel(input: { name: string; isPrivate: boolean }): Promise<SlackChannel>;
+  inviteToChannel(channelId: string, userId: string): Promise<void>;
   startReply(target: SlackReplyTarget, recipientUserId: string): Promise<SlackReplyStream>;
   downloadFiles(teamId: string, files: SlackIncomingFile[]): Promise<SlackLocalFile[]>;
   sendFile(target: SlackReplyTarget, input: { filePath: string; title?: string; comment?: string }): Promise<{ id: string; name: string; permalink?: string }>;

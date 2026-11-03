@@ -60,6 +60,8 @@ Open **Runtime settings → Slack** on the local board to enter the workspace ID
 
 Use `/models` to discover models, `/model` to switch, and `/state` to inspect a conversation. Images and other files can be received and generated files sent back to the originating thread.
 
+Starting with **0.16.0**, ask the bot to create a project channel, invite you, and bind it through the Slack API. The manifest includes `channels:manage` for public channels and `groups:write` for private channels; reinstall existing apps after adding these scopes. Project discovery checks saved local workspace names and real directories, while `/state` shows the current working directory.
+
 ## Everyday commands
 
 | Command | Purpose |

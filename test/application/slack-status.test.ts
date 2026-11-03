@@ -60,6 +60,8 @@ describe("Slack 会话状态", () => {
     const result = await status.read(owner);
     expect(requested).toEqual(["native-dm"]);
     expect(result.conversations).toEqual([]);
+    expect(result.text).toContain("作用范围：全局私信");
+    expect(result.text).toContain(`工作目录：${runtime.cwd}`);
     expect(result.text).toContain("实际模型：actual-model");
     expect(result.text).toContain("实际推理强度：high");
     expect(result.text).toContain("完全访问（dangerFullAccess）");

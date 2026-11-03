@@ -54,6 +54,8 @@ class TestSlack implements SlackTransport {
   async stop(): Promise<void> {}
   async getChannel(id: string) { return { id, name: id, isMember: true, isPrivate: false }; }
   async listChannels() { return []; }
+  async createChannel(): Promise<never> { throw new Error("本测试不创建频道"); }
+  async inviteToChannel(): Promise<never> { throw new Error("本测试不邀请成员"); }
   async downloadFiles(teamId: string, files: import("../../src/domain/slack.js").SlackIncomingFile[]) {
     this.downloads.push({ teamId, ids: files.map(({ id }) => id) });
     return files.map(({ id, name, mimetype }) => ({ id, name: name ?? id, ...(mimetype ? { mimetype } : {}), path: `/local/slack-files/${id}/${name ?? id}` }));
@@ -149,6 +151,8 @@ describe("Slack 普通会话", () => {
       expect(f.codex.turns[2]?.threadId).not.toBe(f.codex.turns[0]?.threadId);
       expect(f.transport.sent.map(({ target }) => target.threadTs)).toEqual(["1.000", "1.000", "3.000"]);
       expect(f.codex.turns.every(({ cwd }) => cwd === f.project.repositoryPath)).toBe(true);
+      expect(f.codex.turns[0]?.prompt).toContain(`"projectName":"${f.project.name}"`);
+      expect(f.codex.turns[0]?.prompt).toContain(`"repositoryPath":"${f.project.repositoryPath}"`);
       expect((await f.projects.getProject(f.project.id))?.tasks).toEqual([]);
       expect(f.errors).toEqual([]);
     } finally { await f.assistant.stop(); }
@@ -168,6 +172,9 @@ describe("Slack 普通会话", () => {
       await expect.poll(() => f.transport.sent.length).toBe(2);
       expect(f.codex.threads).toHaveLength(1);
       expect(f.codex.turns.every(({ cwd }) => cwd === f.directory)).toBe(true);
+      expect(f.codex.turns[0]?.prompt).toContain(`"workingDirectory":"${f.directory}"`);
+      expect(f.codex.turns[0]?.prompt).toContain('"repositoryPath":null');
+      expect(f.codex.turns[0]?.prompt).toContain('"projectName":null');
       expect(f.transport.sent.every(({ target }) => target.channelId === "D1" && target.threadTs === undefined)).toBe(true);
       expect(f.errors).toEqual([]);
     } finally { await f.assistant.stop(); }

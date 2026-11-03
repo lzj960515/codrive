@@ -1,7 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { WorkflowConflictError } from "../domain/errors.js";
-import type { SlackConfig, SlackConfigureInput, SlackIncomingMessage, SlackProjectBinding, SlackTransport } from "../domain/slack.js";
+import {
+  SlackProjectChannelError,
+  type SlackChannel,
+  type SlackConfig,
+  type SlackConfigureInput,
+  type SlackCreateProjectChannelInput,
+  type SlackIncomingMessage,
+  type SlackProjectBinding,
+  type SlackProjectChannelFailure,
+  type SlackProjectChannelResult,
+  type SlackTransport,
+} from "../domain/slack.js";
 import type { SlackDeliveryRecord } from "../domain/slack-state.js";
 import { isSlackReplyTarget, isWorkSource, type SlackReplyTarget, type WorkSource } from "../domain/work-source.js";
 import type { ConfigStore } from "../infrastructure/config-store.js";
@@ -101,12 +112,41 @@ export class SlackIntegration {
       }
       const runtime = this.requireConnection();
       const channel = await runtime.transport.getChannel(channelId);
-      if (channel.id.startsWith("D") || !channel.isMember) {
-        throw new WorkflowConflictError("项目只能绑定机器人已经加入的公开或私有频道。");
+      return this.bindProjectChannel(projectId, channel);
+    });
+  }
+
+  createProjectChannel(input: SlackCreateProjectChannelInput): Promise<SlackProjectChannelResult> {
+    return this.changeLifecycle(async () => {
+      const projectId = input.projectId.trim();
+      if (!await this.options.projects.getProject(projectId)) {
+        throw new WorkflowConflictError("项目不存在，请先登记项目。");
       }
-      const binding = { projectId, channelId: channel.id };
-      await this.options.settings.bindSlackProject(binding);
-      return binding;
+      const name = input.name.trim();
+      if (!/^(?=.*[a-z0-9])[a-z0-9_-]{1,80}$/.test(name)) {
+        throw new WorkflowConflictError("频道名需要包含小写字母或数字，只使用小写字母、数字、连字符和下划线，长度不超过 80。");
+      }
+      const runtime = this.requireConnection();
+      const isPrivate = input.isPrivate ?? false;
+      const { channel, created } = await this.resolveProjectChannel(projectId, name, isPrivate, input.channelId, runtime);
+      try {
+        await runtime.transport.inviteToChannel(channel.id, runtime.config.authorizedUserId);
+      } catch (error) {
+        if (slackErrorCode(error) !== "already_in_channel") {
+          throw this.projectChannelFailure(error, runtime, {
+            stage: "invite", created, channel,
+          }, isPrivate);
+        }
+      }
+      let binding: SlackProjectBinding;
+      try {
+        binding = await this.bindProjectChannel(projectId, channel);
+      } catch (error) {
+        throw this.projectChannelFailure(error, runtime, {
+          stage: "bind", created, channel,
+        }, isPrivate);
+      }
+      return { channel, binding, created, invitedUserId: runtime.config.authorizedUserId };
     });
   }
 
@@ -159,6 +199,91 @@ export class SlackIntegration {
     } finally {
       this.incoming.delete(operation);
     }
+  }
+
+  private async resolveProjectChannel(
+    projectId: string,
+    name: string,
+    isPrivate: boolean,
+    requestedChannelId: string | undefined,
+    runtime: SlackRuntime,
+  ): Promise<{ channel: SlackChannel; created: boolean }> {
+    const { slack } = await this.options.configStore.read();
+    const bindings = slack?.projectBindings ?? [];
+    const existing = bindings.find((binding) => binding.projectId === projectId);
+    const channelId = requestedChannelId?.trim() || existing?.channelId;
+    if (existing && channelId !== existing.channelId) {
+      throw new WorkflowConflictError(`项目已绑定频道 ${existing.channelId}；需要改绑时请使用已有绑定命令。`);
+    }
+    if (channelId) {
+      if (bindings.some((binding) => binding.channelId === channelId && binding.projectId !== projectId)) {
+        throw new WorkflowConflictError("该频道已绑定其他项目，请核实频道归属后再操作。");
+      }
+      const channel = await runtime.transport.getChannel(channelId);
+      if (channel.name !== name || channel.isPrivate !== isPrivate) {
+        const context = existing ? "项目已绑定的频道" : "续办频道";
+        throw new WorkflowConflictError(`${context} ${channel.id} 的名称或公开范围与请求不一致，请核实实际频道。`);
+      }
+      this.assertProjectChannel(channel);
+      return { channel, created: false };
+    }
+    try {
+      const channel = await runtime.transport.createChannel({ name, isPrivate });
+      return { channel, created: true };
+    } catch (error) {
+      let candidates: SlackChannel[] | undefined;
+      if (slackErrorCode(error) === "name_taken") {
+        try {
+          candidates = (await runtime.transport.listChannels()).filter(
+            (channel) => channel.name === name && channel.isPrivate === isPrivate,
+          );
+        } catch {
+          // 名称冲突仍是本次失败原因；候选查询失败不覆盖创建失败。
+        }
+      }
+      throw this.projectChannelFailure(error, runtime, {
+        stage: "create", created: false,
+        ...(candidates ? { candidates } : {}),
+      }, isPrivate);
+    }
+  }
+
+  private async bindProjectChannel(projectId: string, channel: SlackChannel): Promise<SlackProjectBinding> {
+    this.assertProjectChannel(channel);
+    const binding = { projectId, channelId: channel.id };
+    await this.options.settings.bindSlackProject(binding);
+    return binding;
+  }
+
+  private assertProjectChannel(channel: SlackChannel): void {
+    if (channel.id.startsWith("D") || !channel.isMember) {
+      throw new WorkflowConflictError("项目只能绑定机器人已经加入的公开或私有频道。");
+    }
+  }
+
+  private projectChannelFailure(
+    error: unknown,
+    runtime: SlackRuntime,
+    details: SlackProjectChannelFailure,
+    isPrivate: boolean,
+  ): SlackProjectChannelError {
+    const slackError = slackErrorCode(error);
+    const requiredScope = slackError === "missing_scope" ? (isPrivate ? "groups:write" : "channels:manage") : undefined;
+    const safe = this.recordError(error, runtime.config);
+    const step = { create: "创建频道", invite: "邀请用户", bind: "保存项目绑定" }[details.stage];
+    const explanation = requiredScope
+      ? `需要 Bot 权限 ${requiredScope}；请更新应用权限并重新授权后，通过 API 重试。`
+      : slackError === "name_taken"
+        ? "频道名已被使用；请核实可见候选，明确选择实际频道后使用 channelId 续办。"
+        : safe.message;
+    const receipt = details.channel
+      ? ` 频道 ${details.channel.id} 已存在，请保留该 ID 续办，当前项目绑定尚未更新。`
+      : "";
+    return new SlackProjectChannelError(`${step}未完成：${explanation}${receipt}`, {
+      ...details,
+      ...(slackError ? { slackError } : {}),
+      ...(requiredScope ? { requiredScope } : {}),
+    });
   }
 
   private changeLifecycle<T>(operation: () => Promise<T>): Promise<T> {
@@ -329,4 +454,11 @@ export class SlackIntegration {
     this.options.onError(safe);
     return safe;
   }
+}
+
+function slackErrorCode(error: unknown): string | null {
+  if (error === null || typeof error !== "object" || !("data" in error)) return null;
+  const data = error.data;
+  if (data === null || typeof data !== "object" || !("error" in data)) return null;
+  return typeof data.error === "string" ? data.error : null;
 }

@@ -49,6 +49,8 @@
         "groups:history",
         "channels:read",
         "groups:read",
+        "channels:manage",
+        "groups:write",
         "commands",
         "files:read",
         "files:write"

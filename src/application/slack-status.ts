@@ -80,6 +80,8 @@ export class SlackStatus implements SlackStatusControls {
     return [
       "Codrive 会话状态",
       `会话：${conversation.codexThreadId}`,
+      `作用范围：${conversation.projectId ? "项目频道" : "全局私信"}`,
+      `工作目录：${runtime.cwd}`,
       `运行状态：${runtime.status}`,
       `实际模型：${runtime.model ?? "暂无数据"}`,
       `实际推理强度：${runtime.reasoningEffort ?? "暂无数据"}`,

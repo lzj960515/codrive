@@ -1,6 +1,6 @@
 ---
 name: codrive-control
-description: 查询和控制本地 Codrive 项目、里程碑、任务与运行设置，包括产品详情、产品文档事实、已确认的未开始任务定义修改、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、执行已确认的 backlog 修改、更新产品事实、恢复模型容量或干预自动流程，以及配置 Slack、绑定频道、发送报告或本机文件、答复待决定问题时使用；新的任务需求和修改判断由 codrive-work 负责。
+description: 查询和控制本地 Codrive 项目、里程碑、任务与运行设置，包括产品详情、产品文档事实、已确认的未开始任务定义修改、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、执行已确认的 backlog 修改、更新产品事实、恢复模型容量或干预自动流程，以及定位本机项目、配置 Slack、创建或绑定频道、发送报告或本机文件、答复待决定问题时使用；新的任务需求和修改判断由 codrive-work 负责。
 compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
@@ -11,6 +11,7 @@ compatibility: Requires Node.js 24+ and a running local Codrive service.
 ## 查询
 
 ```text
+node <skill-directory>/scripts/codrive-control.mjs local-projects
 node <skill-directory>/scripts/codrive-control.mjs board
 node <skill-directory>/scripts/codrive-control.mjs archived
 node <skill-directory>/scripts/codrive-control.mjs project <project-id>
@@ -22,6 +23,8 @@ node <skill-directory>/scripts/codrive-control.mjs milestone <milestone-id>
 
 项目的 `attention` 只表达需要处理的异常状态：`decision_requested` 表示需要在对应 Codex App 对话中作出决定，`blocked` 表示项目存在确定阻塞。没有 `attention` 时，项目按当前任务和规划状态正常推进。
 
+`local-projects` 只读当前机器 Codex 桌面端保存的工作空间名称和根目录，使用 `CODEX_HOME` 或默认 Codex 目录。它与 `board` 中的产品登记分别核实：一个工作空间可以包含多个产品，同一个目录也可以对应不同的 Codrive 产品。记录不可用时返回 `available: false`，继续核实用户给定的真实目录；桌面保存数据只提供定位线索，目标目录中的 README、AGENTS 和用户意图决定实际身份。
+
 ## Slack 接入与报告
 
 机器人私信承担全局交流，已绑定频道使用对应项目；频道里的新根消息建立独立会话，机器人回复在原讨论串。普通查询直接使用适用工具办事，需要查询或控制 Codrive、发送报告或登记工程工作时再调用对应能力。
@@ -31,9 +34,17 @@ node <skill-directory>/scripts/codrive-control.mjs slack-status
 node <skill-directory>/scripts/codrive-control.mjs slack-channels
 node <skill-directory>/scripts/codrive-control.mjs slack-configure --json-file <private-settings-file>
 node <skill-directory>/scripts/codrive-control.mjs slack-bind <project-id> --json '{"channelId":"<channel-id>"}'
+node <skill-directory>/scripts/codrive-control.mjs slack-create-channel <project-id> --json '{"name":"<channel-name>","isPrivate":true}'
 ```
 
-先用 `slack-status` 查看脱敏连接状态和已有绑定，用 `slack-channels` 取得机器人可访问的频道。绑定前核对项目与频道身份；有歧义时请用户选择。机器人需要加入项目频道，并取得普通消息事件的权限，才能免 `@` 接收文字。连接设置从本机私有 JSON 文件读取，包含 `enabled`、`teamId`、`authorizedUserId`、`botToken`、`appToken`；用文件传入凭据，结果只展示服务端脱敏设置。
+创建或绑定项目频道时，按以下顺序办理：
+
+1. 根据用户本次给出的名称或目录定位目标。私信运行目录只承担全局会话；使用 `local-projects` 查本机工作空间，再读取匹配目录的 README、AGENTS 核实用途。用户纠正过项目时，用这些当前事实重新核实目标。
+2. 对照 `board` 和候选 `project` 的名称、目录、产品事实。用户指向工作空间，而已有产品仅与它共享目录时，使用 `$codrive-forge` 为准确的工作空间名称登记空任务项目，保留原产品记录。目标仍有歧义时列出可辨认的候选，请用户选择。
+3. 用 `slack-status`、`slack-channels` 核对已有绑定与可访问频道。已有频道使用 `slack-bind`；用户要求新建时使用 `slack-create-channel`，按 Slack 规则把目标名转为频道名，例如 `pietra-ai-workspace`。该命令通过 API 创建频道、邀请配置的授权用户，再绑定目标项目，工作不依赖屏幕解锁。
+4. 以真实返回的频道、绑定和受邀用户完成交接。权限缺失时报告所需 OAuth scope 和尚未完成的步骤；完成 API 授权后继续同一路径。创建已成功、后续失败时保留返回的 `channelId`，在同一创建命令中显式附上它续办；重名时核实实际频道归属后再选择，保持原项目和其他频道的绑定。
+
+公开频道创建和邀请需要 `channels:manage`，私有频道需要 `groups:write`。机器人需要加入项目频道，并取得普通消息事件的权限，才能免 `@` 接收文字。连接设置从本机私有 JSON 文件读取，包含 `enabled`、`teamId`、`authorizedUserId`、`botToken`、`appToken`；用文件传入凭据，结果只展示服务端脱敏设置。
 
 原生 Codex 定时报告或巡检结果使用同一发送入口：
 
@@ -73,7 +84,7 @@ node <skill-directory>/scripts/codrive-control.mjs slack-send-file --json '<file
 
 直接私信的 `replyTarget` 可以没有 `threadTs`。以成功回执中的实际文件 `id` 和可用的 `permalink` 为交付依据。文件上传失败时报告失败，重试前核实已有回执，保持开发结果独立；该命令没有报告发送的持久自动补送语义。
 
-Slack 内置 `/models` 列出当前可切换的主模型及当前、备用模型；`/model` 提供当前作用范围的模型选择，私信修改全局默认、绑定频道修改项目，下一回合生效。`/state` 查看实际模型、推理强度、权限和用量；频道内选择明确会话，或从消息菜单执行「查看 Codrive 状态」。缺少实际用量时显示暂无，窗口余量有数据时注明估算。
+Slack 内置 `/models` 列出当前可切换的主模型及当前、备用模型；`/model` 提供当前作用范围的模型选择，私信修改全局默认、绑定频道修改项目，下一回合生效。`/state` 查看作用范围、实际工作目录、模型、推理强度、权限和用量；频道内选择明确会话，或从消息菜单执行「查看 Codrive 状态」。缺少实际用量时显示暂无，窗口余量有数据时注明估算。
 
 当前任务或项目确实存在待决定问题时，原样使用服务返回的 `scope`、对象 `id` 和 `reportOpportunityId`：
 

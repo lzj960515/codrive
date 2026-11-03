@@ -19,6 +19,7 @@ import {
 import { hasProductFacts } from "../../domain/product-facts.js";
 import { isProjectArchived } from "../../domain/project.js";
 import type { CodriveCommand, Project, Task } from "../../domain/types.js";
+import { SlackProjectChannelError } from "../../domain/slack.js";
 import type { SystemStatusEventSource } from "../../domain/system-update.js";
 import type { ProjectStore } from "../../infrastructure/project-store.js";
 import { readTaskDocument } from "../../infrastructure/task-document.js";
@@ -53,7 +54,7 @@ export interface HttpServerDependencies {
     | SystemStatusEventSource
     | readonly SystemStatusEventSource[];
   // Slack 为可选集成，原本地看板和工作流可以独立装配。
-  slack?: Pick<SlackIntegration, "readStatus" | "listChannels" | "configure" | "bind" | "report" | "sendFile">;
+  slack?: Pick<SlackIntegration, "readStatus" | "listChannels" | "configure" | "bind" | "createProjectChannel" | "report" | "sendFile">;
   currentVersion?: string;
   accessToken: string;
   isReady?: () => boolean;
@@ -113,7 +114,7 @@ export function createHttpServer(
     const statusCode =
       error instanceof z.ZodError
         ? 400
-        : error instanceof WorkflowConflictError
+        : error instanceof WorkflowConflictError || error instanceof SlackProjectChannelError
           ? 409
           : error instanceof SystemUpdateConflictError
             ? 409
@@ -125,7 +126,10 @@ export function createHttpServer(
     const message = error instanceof Error ? error.message : String(error);
     const path = new URL(request.url, "http://localhost").pathname;
     dependencies.onError?.(`${request.method} ${path} ${statusCode}: ${message}`);
-    void reply.code(statusCode).send({ error: message });
+    void reply.code(statusCode).send({
+      error: message,
+      ...(error instanceof SlackProjectChannelError ? { details: error.details } : {}),
+    });
   });
 
   server.get("/api/health", async () => ({
@@ -371,6 +375,7 @@ export function createHttpServer(
       const slack = requireSlack();
       if (command.type === "slack.configure") return slack.configure(command.payload);
       if (command.type === "slack.bind") return slack.bind(command.payload);
+      if (command.type === "slack.create_project_channel") return slack.createProjectChannel(command.payload);
       if (command.type === "slack.send_file") return slack.sendFile(command.payload);
       return slack.report(command.payload);
     }

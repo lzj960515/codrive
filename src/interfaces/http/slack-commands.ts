@@ -19,6 +19,18 @@ export const slackCommandSchema = z.discriminatedUnion("type", [
     }).strict(),
   }).strict(),
   z.object({
+    type: z.literal("slack.create_project_channel"),
+    payload: z.object({
+      projectId: z.string().trim().min(1),
+      name: z.string().trim().min(1),
+      isPrivate: z.boolean().default(false),
+      channelId: z.string().trim().min(1).optional(),
+    }).strict().transform(({ projectId, name, isPrivate, channelId }) => ({
+      projectId, name, isPrivate,
+      ...(channelId ? { channelId } : {}),
+    })),
+  }).strict(),
+  z.object({
     type: z.literal("slack.report"),
     payload: z.object({
       projectId: z.string().trim().min(1),

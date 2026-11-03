@@ -189,6 +189,18 @@ export class BoltSlackTransport implements SlackTransport {
     return channels;
   }
 
+  async createChannel(input: { name: string; isPrivate: boolean }): Promise<SlackChannel> {
+    const result = await this.client.conversations.create({ name: input.name, is_private: input.isPrivate });
+    if (!result.ok || !result.channel) throw new Error(result.error ?? "Slack did not return the created channel");
+    const channel = projectChannel(result.channel);
+    if (!channel) throw new Error("Slack did not return a project channel");
+    return channel;
+  }
+
+  async inviteToChannel(channelId: string, userId: string): Promise<void> {
+    await this.client.conversations.invite({ channel: channelId, users: userId });
+  }
+
   async startReply(target: SlackReplyTarget, recipientUserId: string): Promise<SlackReplyStream> {
     const reply = await SlackReply.start({
       client: this.client,
