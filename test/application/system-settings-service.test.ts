@@ -92,6 +92,138 @@ describe("SystemSettingsService", () => {
     });
   });
 
+  it("keeps Slack credentials private and preserves bindings when reconnecting", async () => {
+    await expect(service.readSlack()).resolves.toEqual({
+      enabled: false,
+      configured: false,
+      teamId: null,
+      authorizedUserId: null,
+      projectBindings: [],
+    });
+    const settings = {
+      enabled: true,
+      teamId: "T_owner",
+      authorizedUserId: "U_owner",
+      botToken: "xoxb-private-owner",
+      appToken: "xapp-private-owner",
+    };
+    await service.configureSlack(settings);
+    await service.bindSlackProject({ projectId: "project_one", channelId: "C_one" });
+    await service.configureSlack({ ...settings, botToken: "xoxb-private-refreshed" });
+
+    const visible = await service.readSlack();
+    expect(visible).toEqual({
+      enabled: true,
+      configured: true,
+      teamId: "T_owner",
+      authorizedUserId: "U_owner",
+      projectBindings: [{ projectId: "project_one", channelId: "C_one" }],
+    });
+    expect(JSON.stringify(visible)).not.toContain("xoxb-private");
+    expect(JSON.stringify(visible)).not.toContain("xapp-private");
+    expect((await configStore.read()).slack?.botToken).toBe("xoxb-private-refreshed");
+    await service.configureSlack({ ...settings, enabled: false });
+    expect(await service.readSlack()).toMatchObject({
+      enabled: false,
+      configured: true,
+      projectBindings: [{ projectId: "project_one", channelId: "C_one" }],
+    });
+  });
+
+  it("keeps saved tokens when same-workspace settings are submitted without passwords", async () => {
+    const settings = {
+      enabled: true, teamId: "T_owner", authorizedUserId: "U_owner",
+      botToken: "xoxb-saved", appToken: "xapp-saved",
+    };
+    await service.configureSlack(settings);
+    await service.bindSlackProject({ projectId: "project_one", channelId: "C_one" });
+    await service.configureSlack({ ...settings, enabled: false, botToken: " ", appToken: "" });
+    expect((await configStore.read()).slack).toMatchObject({
+      enabled: false, botToken: settings.botToken, appToken: settings.appToken,
+      projectBindings: [{ projectId: "project_one", channelId: "C_one" }],
+    });
+    await service.configureSlack({ ...settings, authorizedUserId: "U_updated", botToken: "", appToken: "" });
+    expect((await configStore.read()).slack).toMatchObject({
+      enabled: true, authorizedUserId: "U_updated", botToken: settings.botToken, appToken: settings.appToken,
+    });
+    await service.configureSlack({ ...settings, botToken: "xoxb-replaced", appToken: "" });
+    expect((await configStore.read()).slack).toMatchObject({ botToken: "xoxb-replaced", appToken: settings.appToken });
+    const visible = JSON.stringify(await service.readSlack());
+    expect(visible).not.toContain("xoxb");
+    expect(visible).not.toContain("xapp");
+  });
+
+  it("requires new credentials when changing workspace and preserves settings after rejection", async () => {
+    const settings = {
+      enabled: true, teamId: "T_owner", authorizedUserId: "U_owner",
+      botToken: "xoxb-saved", appToken: "xapp-saved",
+    };
+    await service.configureSlack(settings);
+    const before = await configStore.read();
+    for (const input of [
+      { ...settings, teamId: "T_new", botToken: "", appToken: "" },
+      { ...settings, enabled: false, teamId: "T_new", botToken: "", appToken: "xapp-new" },
+    ]) {
+      await expect(service.configureSlack(input)).rejects.toThrow(/切换.*工作区/);
+      expect(await configStore.read()).toEqual(before);
+    }
+    await service.configureSlack({ ...settings, teamId: "T_new", botToken: "xoxb-new", appToken: "xapp-new" });
+    expect((await configStore.read()).slack).toMatchObject({ teamId: "T_new", botToken: "xoxb-new", appToken: "xapp-new" });
+  });
+
+  it("rebinds each project and channel without leaving conflicting destinations", async () => {
+    await service.configureSlack({
+      enabled: true, teamId: "T_owner", authorizedUserId: "U_owner",
+      botToken: "xoxb-private", appToken: "xapp-private",
+    });
+    await service.bindSlackProject({ projectId: "project_one", channelId: "C_one" });
+    await service.bindSlackProject({ projectId: "project_two", channelId: "C_two" });
+    await service.bindSlackProject({ projectId: "project_one", channelId: "C_two" });
+    expect((await service.readSlack()).projectBindings).toEqual([
+      { projectId: "project_one", channelId: "C_two" },
+    ]);
+  });
+
+  it("preserves model settings and channel bindings during simultaneous configuration changes", async () => {
+    const settings = {
+      enabled: true, teamId: "T_owner", authorizedUserId: "U_owner",
+      botToken: "xoxb-private", appToken: "xapp-private",
+    };
+    await service.configureSlack(settings);
+    const models = { primary: "gpt-5.6-terra", fallback: "gpt-5.6-nano" };
+    await Promise.all([
+      service.update({ maxConcurrentTasks: 2, models }),
+      service.bindSlackProject({ projectId: "project_one", channelId: "C_one" }),
+      service.configureSlack({ ...settings, botToken: "xoxb-refreshed" }),
+    ]);
+    expect(await configStore.read()).toMatchObject({
+      maxConcurrentTasks: 2,
+      models,
+      slack: {
+        botToken: "xoxb-refreshed",
+        projectBindings: [{ projectId: "project_one", channelId: "C_one" }],
+      },
+    });
+  });
+
+  it("allows Slack to be disabled and rejects invalid enabled settings without echoing credentials", async () => {
+    await expect(service.bindSlackProject({ projectId: "project_one", channelId: "C_one" }))
+      .rejects.toThrow("Configure Slack before binding a project");
+    await service.configureSlack({
+      enabled: false, teamId: "", authorizedUserId: "", botToken: "", appToken: "",
+    });
+    expect((await service.readSlack()).enabled).toBe(false);
+    const invalid = service.configureSlack({
+      enabled: true, teamId: "", authorizedUserId: "U_owner",
+      botToken: "xoxb-do-not-display", appToken: "xapp-do-not-display",
+    });
+    await expect(invalid).rejects.toThrow("Slack connection settings are incomplete");
+    await expect(invalid).rejects.not.toThrow("do-not-display");
+    expect((await configStore.read()).slack?.enabled).toBe(false);
+    await expect(service.bindSlackProject({ projectId: "", channelId: "C_one" }))
+      .rejects.toThrow("Project and Slack channel are required");
+  });
+
   it("persists the Semantic Atlas automation toggle and wakes maintenance", async () => {
     await service.update({
       maxConcurrentTasks: 4,

@@ -1,3 +1,4 @@
+import { assertWorkCommunication } from "../domain/work-source.js";
 import {
   taskDecisionReply,
   projectDecisionReply,
@@ -1158,10 +1159,12 @@ export class WorkflowEngine {
     if (task.currentExecution!.action === "integrate") {
       const snapshots = await this.store.listProjects();
       if (
-        activeIntegrationRepositories(
+        findCompetingIntegrationLease(
           snapshots,
+          project,
+          task.id,
           await this.allRestrictedTaskIds(snapshots),
-        ).has(resolve(project.repositoryPath))
+        )
       )
         throw new WorkflowConflictError(
           "仓库当前正在合入其他任务，请等它结束后再回复。",
@@ -1395,6 +1398,8 @@ export class WorkflowEngine {
   ): Promise<ProjectSnapshot> {
     return this.enqueue(async () => {
       const snapshot = await this.requireSnapshot(projectId);
+      const pendingTasks = this.unregisteredProjectWork(snapshot.tasks, tasks);
+      if (pendingTasks.length === 0) return snapshot;
       if (snapshot.project.status === "cancelled") {
         throw new WorkflowConflictError(
           `Cancelled project ${projectId} cannot accept work`,
@@ -1402,7 +1407,7 @@ export class WorkflowEngine {
       }
       if (!decisionSummary.trim())
         throw new WorkflowConflictError("Work requires a decision summary");
-      await this.validateTaskDocuments(snapshot.project.repositoryPath, tasks);
+      await this.validateTaskDocuments(snapshot.project.repositoryPath, pendingTasks);
       const acceptedDocument = productDocumentChange
         ? await this.acceptProductDocumentChange(snapshot.project, {
             ...productDocumentChange,
@@ -1414,9 +1419,9 @@ export class WorkflowEngine {
         !(await this.productDocumentIsCurrent(snapshot.project))
       )
         throw new WorkflowConflictError("PROJECT.md has unrecorded changes");
-      for (const task of tasks)
+      for (const task of pendingTasks)
         await this.validateTaskMilestone(snapshot.project, task.milestoneId);
-      await this.store.addTasks(projectId, tasks);
+      await this.store.addTasks(projectId, pendingTasks);
       const currentProject = hasActiveProjectExecution(snapshot.project)
         ? await this.requirePlanningCoordinator().cancel(snapshot.project)
         : snapshot.project;
@@ -1459,17 +1464,51 @@ export class WorkflowEngine {
         projectId,
         before: projectLifecycleState(snapshot.project),
         after: projectLifecycleState(project),
-        data: { taskCount: tasks.length, decisionSummary },
+        data: { taskCount: pendingTasks.length, decisionSummary },
       });
       await this.recordPlanningRevision(
         project,
         snapshot.project.planning.revision,
       );
-      for (const id of new Set(tasks.map((task) => task.milestoneId)))
+      for (const id of new Set(pendingTasks.map((task) => task.milestoneId)))
         if (id) await this.advanceMilestone(id);
       await this.reconcileInternal();
       return (await this.store.getProject(projectId))!;
     });
+  }
+
+  private unregisteredProjectWork(existing: Task[], inputs: CreateTaskInput[]): CreateTaskInput[] {
+    for (const input of inputs) assertWorkCommunication(input);
+    const requestGroups = new Map<string, CreateTaskInput[]>();
+    for (const input of inputs) {
+      if (!input.source) continue;
+      const key = `${input.source.kind}:${input.source.requestId}`;
+      const group = requestGroups.get(key) ?? [];
+      group.push(input);
+      requestGroups.set(key, group);
+    }
+    const registeredRequests = new Set<string>();
+    for (const [key, group] of requestGroups) {
+      const source = group[0]!.source!;
+      if (group.some((input) => !isDeepStrictEqual(input.replyTarget, group[0]!.replyTarget))) {
+        throw new WorkflowConflictError(
+          `Source request ${source.requestId} has conflicting reply destinations`,
+        );
+      }
+      const registered = existing.filter((task) => task.source?.kind === source.kind &&
+        task.source.requestId === source.requestId);
+      if (registered.length === 0) continue;
+      if (registered.length !== group.length || group.some((input) =>
+        registered.some((task) => !isDeepStrictEqual(task.replyTarget, input.replyTarget)))) {
+        throw new WorkflowConflictError(
+          `Source request ${source.requestId} was already registered with different work or reply destination`,
+        );
+      }
+      // 以已保存的工作为准，重投不会撤销选择、改变回传位置或重启开发。
+      registeredRequests.add(key);
+    }
+    return inputs.filter((input) => !input.source ||
+      !registeredRequests.has(`${input.source.kind}:${input.source.requestId}`));
   }
 
   ensureSemanticAtlasMaintenanceTask(

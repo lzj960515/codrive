@@ -7,6 +7,50 @@ import { describe, expect, it } from "vitest";
 import { CodexAppServerClient } from "../../src/infrastructure/codex-app-server-client.js";
 
 describe("CodexAppServerClient", () => {
+  it("reports actual thread settings and usage, while a restarted client leaves unknown metrics empty", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-status-client-"));
+    const executable = join(directory, "fake-status-codex.mjs");
+    await writeFile(executable, `#!/usr/bin/env node
+import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+lines.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (!('id' in request)) return;
+  if (request.method === 'thread/start') {
+    send({id:request.id,result:{thread:{id:'status-thread'},approvalPolicy:'on-request',sandbox:{type:'readOnly',networkAccess:false}}});
+    return;
+  }
+  if (request.method === 'thread/name/set') {
+    send({method:'thread/tokenUsage/updated',params:{threadId:'status-thread',turnId:'turn-status',tokenUsage:{
+      total:{totalTokens:500000,inputTokens:450000,cachedInputTokens:300000,cacheWriteInputTokens:0,outputTokens:50000,reasoningOutputTokens:10000},
+      last:{totalTokens:12300,inputTokens:12000,cachedInputTokens:11000,cacheWriteInputTokens:0,outputTokens:300,reasoningOutputTokens:100},modelContextWindow:200000}}});
+    send({id:request.id,result:{}});
+    return;
+  }
+  if (request.method === 'thread/read') {
+    send({id:request.id,result:{thread:{id:'status-thread',model:'reported-model',reasoningEffort:'medium',cwd:'/workspace/status',status:{type:'idle'}}}});
+    return;
+  }
+  send({id:request.id,result:{}});
+});
+`, "utf8");
+    await chmod(executable, 0o755);
+    const client = new CodexAppServerClient({ executable });
+    try {
+      await client.startThread("/workspace/status", "Status");
+      expect(await client.readThreadRuntime("status-thread")).toMatchObject({
+        model: "reported-model", reasoningEffort: "medium", cwd: "/workspace/status", status: "idle",
+        approvalPolicy: "on-request", sandboxPolicy: "readOnly",
+        tokenUsage: { total: { totalTokens: 500000 }, last: { totalTokens: 12300 }, modelContextWindow: 200000 },
+      });
+      await client.stop();
+      expect(await client.readThreadRuntime("status-thread")).toMatchObject({
+        model: "reported-model", reasoningEffort: "medium", tokenUsage: null, approvalPolicy: null, sandboxPolicy: null,
+      });
+    } finally { await client.stop(); }
+  });
+
   it("names persistent task threads for Codex App visibility", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-app-server-"));
     const tracePath = join(directory, "requests.ndjson");

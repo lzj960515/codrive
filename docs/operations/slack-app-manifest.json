@@ -1,0 +1,73 @@
+{
+  "display_information": {
+    "name": "Codrive",
+    "description": "本机 Codex 助理与工程工作交付"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Codrive",
+      "always_online": false
+    },
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "slash_commands": [
+      {
+        "command": "/model",
+        "description": "查看或切换当前项目使用的模型",
+        "usage_hint": "[model-id]",
+        "should_escape": false
+      },
+      {
+        "command": "/models",
+        "description": "列出当前可切换模型及当前、备用模型",
+        "should_escape": false
+      },
+      {
+        "command": "/state",
+        "description": "查看当前会话模型、权限和上下文用量",
+        "should_escape": false
+      }
+    ],
+    "shortcuts": [
+      {
+        "name": "查看 Codrive 状态",
+        "type": "message",
+        "callback_id": "codrive-status",
+        "description": "查看这条消息所属会话的模型与上下文状态"
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "im:history",
+        "channels:history",
+        "groups:history",
+        "channels:read",
+        "groups:read",
+        "commands",
+        "files:read",
+        "files:write"
+      ]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": true,
+    "interactivity": {
+      "is_enabled": true
+    },
+    "event_subscriptions": {
+      "bot_events": [
+        "message.im",
+        "message.channels",
+        "message.groups"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

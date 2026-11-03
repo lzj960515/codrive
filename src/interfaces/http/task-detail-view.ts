@@ -54,6 +54,8 @@ export async function createTaskDetailView(
     task: {
       id: task.id,
       projectId: task.projectId,
+      source: task.source ?? null,
+      replyTarget: task.replyTarget ?? null,
       milestoneId: task.milestoneId ?? null,
       milestoneTitle: milestoneOwner?.milestone.title ?? null,
       milestoneWait: milestoneOwner ? milestoneTaskWait(milestoneOwner.milestone, milestoneActivities, task.id, project) : null,

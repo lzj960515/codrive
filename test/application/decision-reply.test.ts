@@ -12,7 +12,7 @@ import {
   testModels,
 } from "../support/recording-executors.js";
 
-async function setup(scope: "task" | "project" | "milestone") {
+async function setup(scope: "task" | "project" | "milestone", taskAction: "work" | "integrate" = "work") {
   const store = new ProjectStore(
     await mkdtemp(join(tmpdir(), "codrive-decision-")),
   );
@@ -106,6 +106,18 @@ async function setup(scope: "task" | "project" | "milestone") {
       execution: (await store.getProject(snapshot.project.id))!.project
         .currentExecution!,
     };
+  if (taskAction === "integrate") {
+    for (const outcome of ["completed", "approved"] as const) {
+      const working = (await store.findTask(snapshot.tasks[0]!.id))!.task;
+      const execution = working.currentExecution!;
+      await workflow.submitReport({
+        taskId: working.id, attemptId: execution.attemptId,
+        reportOpportunityId: execution.reportOpportunityId, outcome,
+        summary: "Prepared and reviewed the result before integration.",
+      });
+      await workflow.completeTurn(working.id, execution.attemptId, execution.turnId!);
+    }
+  }
   const task = (await store.findTask(snapshot.tasks[0]!.id))!.task;
   const taskExecution = task.currentExecution!;
   await workflow.submitReport({
@@ -143,6 +155,34 @@ async function current(
 }
 
 describe("replying to the current decision", () => {
+  it("continues integration after confirmation while retaining its own repository lease", async () => {
+    const env = await setup("task", "integrate");
+    const before = (await env.store.findTask(env.id))!.task;
+    expect(before.currentExecution!.action).toBe("integrate");
+    await env.workflow.replyToDecision({
+      scope: "task", id: env.id, reportOpportunityId: env.execution.reportOpportunityId,
+      message: "预览已确认，合入并发布。",
+    });
+    const after = (await env.store.findTask(env.id))!.task;
+    expect(after).toMatchObject({ status: "integrating", currentExecution: {
+      action: "integrate", status: "running", threadId: before.currentExecution!.threadId,
+    } });
+    expect(after.currentExecution!.reportOpportunityId).not.toBe(env.execution.reportOpportunityId);
+  });
+
+  it("preserves an integration question when another task holds the same repository lease", async () => {
+    const env = await setup("task", "integrate");
+    const before = (await env.store.findTask(env.id))!.task;
+    await env.store.saveTask(env.projectId, { ...before, id: "competing_integration", status: "integrating", currentExecution: {
+      ...before.currentExecution!, status: "running", attemptId: "competing_attempt", threadId: "competing_thread",
+    } });
+    await expect(env.workflow.replyToDecision({
+      scope: "task", id: env.id, reportOpportunityId: env.execution.reportOpportunityId,
+      message: "预览已确认，合入并发布。",
+    })).rejects.toThrow("仓库当前正在合入其他任务");
+    expect((await env.store.findTask(env.id))!.task).toEqual(before);
+  });
+
   it.each(["task", "project", "milestone"] as const)(
     "starts one bound %s turn and rejects stale duplicate replies",
     async (scope) => {

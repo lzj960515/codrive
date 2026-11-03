@@ -10,6 +10,7 @@ import {
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { WorkflowConflictError } from "../domain/errors.js";
+import { assertWorkCommunication } from "../domain/work-source.js";
 import type { Milestone, MilestoneActivity } from "../domain/milestone.js";
 import type {
   CodriveEvent,
@@ -103,6 +104,7 @@ export class ProjectStore {
         : { taskDocumentPath: task.taskDocumentPath }),
       ...(task.milestoneId ? { milestoneId: task.milestoneId } : {}),
       ...(task.origin ? { origin: task.origin } : {}),
+      ...(task.source ? { source: task.source, replyTarget: task.replyTarget! } : {}),
       order: task.order ?? index + 1,
       status: "backlog",
       requestedAction: null,
@@ -276,6 +278,7 @@ export class ProjectStore {
         : { taskDocumentPath: input.taskDocumentPath }),
       ...(input.milestoneId ? { milestoneId: input.milestoneId } : {}),
       ...(input.origin ? { origin: input.origin } : {}),
+      ...(input.source ? { source: input.source, replyTarget: input.replyTarget! } : {}),
       order: input.order ?? firstOrder + index,
       status: "backlog",
       requestedAction: null,
@@ -651,6 +654,7 @@ async function validateTaskInput(
   repositoryPath: string,
   input: CreateTaskInput,
 ): Promise<void> {
+  assertWorkCommunication(input);
   if (input.taskDocumentPath !== undefined) {
     if (input.description !== undefined || input.acceptanceCriteria !== undefined) {
       throw new WorkflowConflictError(

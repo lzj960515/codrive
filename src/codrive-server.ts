@@ -14,6 +14,8 @@ import { SemanticAtlasMaintenanceCoordinator } from "./application/semantic-atla
 import { SystemUpdateService } from "./application/system-update-service.js";
 import { UpgradeCoordinator } from "./application/upgrade-coordinator.js";
 import { WorkflowEngine } from "./application/workflow-engine.js";
+import { SlackIntegration } from "./application/slack-integration.js";
+import type { SlackConfig } from "./domain/slack.js";
 import { CodexAppServerClient } from "./infrastructure/codex-app-server-client.js";
 import { CodriveLog } from "./infrastructure/codrive-log.js";
 import { ConfigStore, type CodriveConfig } from "./infrastructure/config-store.js";
@@ -31,6 +33,8 @@ import { ProjectStore } from "./infrastructure/project-store.js";
 import { SemanticAtlasCli } from "./infrastructure/semantic-atlas-cli.js";
 import { SemanticAtlasMaintenanceStore } from "./infrastructure/semantic-atlas-maintenance-store.js";
 import { UpgradeStateStore } from "./infrastructure/upgrade-state-store.js";
+import { SlackStateStore } from "./infrastructure/slack-state-store.js";
+import { BoltSlackTransport } from "./infrastructure/slack/slack-transport.js";
 import { createHttpServer } from "./interfaces/http/server.js";
 
 export class CodriveServer {
@@ -45,6 +49,7 @@ export class CodriveServer {
   private updateRecoveryTimer: NodeJS.Timeout | null = null;
   private versionChecks: PackageVersionCheckScheduler | null = null;
   private semanticAtlasMaintenance: SemanticAtlasMaintenanceCoordinator | null = null;
+  private slack: SlackIntegration | null = null;
   private ready = false;
 
   constructor(stateDirectory?: string) {
@@ -138,6 +143,20 @@ export class CodriveServer {
         semanticAtlas,
         this.semanticAtlasMaintenance,
       );
+      this.slack = new SlackIntegration({
+        configStore: this.configStore,
+        settings: settingsService,
+        projects: store,
+        state: new SlackStateStore(this.config.stateDirectory),
+        codex: this.codex,
+        createTransport: (config) => new BoltSlackTransport({
+          stateDirectory: this.configStore.stateDirectory,
+          botToken: config.botToken,
+          appToken: config.appToken,
+          onError: (error) => this.logSlackError(error, config),
+        }),
+        onError: (error) => this.logSlackError(error),
+      });
       const versions = new PackageVersionService({
         currentVersion: version,
         stateDirectory: this.config.stateDirectory,
@@ -185,6 +204,7 @@ export class CodriveServer {
         workflow,
         activityBridge: this.activityBridge,
         settingsService,
+        slack: this.slack,
         systemUpdateService,
         systemUpdateEvents: [this.versionChecks, upgradeStore],
         currentVersion: version,
@@ -206,6 +226,8 @@ export class CodriveServer {
       await this.semanticAtlasMaintenance.start();
       await this.versionChecks.start();
       this.ready = true;
+      // 接入外部消息前，本机命令入口必须已可供会话中的 Skills 调用。
+      await this.slack.start();
       const url = `http://${this.config.host}:${this.config.port}`;
       this.log.info(`Codrive is running at ${url}`);
       return {
@@ -225,6 +247,8 @@ export class CodriveServer {
 
   async stop(): Promise<void> {
     this.ready = false;
+    await this.slack?.stop();
+    this.slack = null;
     if (this.updateRecoveryTimer) clearInterval(this.updateRecoveryTimer);
     this.updateRecoveryTimer = null;
     this.versionChecks?.stop();
@@ -260,5 +284,13 @@ export class CodriveServer {
       );
       return false;
     }
+  }
+
+  private logSlackError(error: unknown, config?: SlackConfig): void {
+    let message = error instanceof Error ? error.message : String(error);
+    for (const token of [config?.botToken, config?.appToken]) {
+      if (token) message = message.replaceAll(token, "[已隐藏]");
+    }
+    this.log?.error("slack", message);
   }
 }

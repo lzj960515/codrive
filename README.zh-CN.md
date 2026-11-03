@@ -46,7 +46,19 @@ codrive
 
 后续也可以直接通过对话追加任务、调整计划、查询进度或暂停调度。
 
+**在 Mac mini 上安装：** 将[Mac mini 安装与验收说明](./docs/operations/mac-mini-install.md)交给那台机器上的 AI，即可按步骤安装、检查 Codex、启动服务和配置 Slack。Slack 功能需要 Codrive **0.15.0+**。如果 `setup` 提示 Hook 待审阅，先在 Codex 完成 `/hooks` 审阅，再运行 `codrive doctor` 核实。
+
 需要你决定时，可以点击看板上的 **在此回复**，填写意见并发送到原对话。发送成功后弹窗关闭，任务继续执行；也可以使用旁边的对话入口查看完整上下文。
+
+## Slack
+
+直接私信机器人进行全局交流，或把项目绑定到频道后直接发普通消息，无需艾特。频道里每条新消息建立一个会话，机器人在它下面的讨论串回复。普通请求直接完成，工程工作沿现有开发、独立审查与交付流程推进。
+
+[Slack 接入与 Mac 运行](./docs/operations/slack.md)说明应用配置、私有凭据、频道绑定和 Codex 原生定时报告。巡检先发送客观事实消息，再携带回复位置登记后续工作，原因调查交给开发阶段。
+
+在看板打开 **运行设置 → Slack**，填写工作区 ID、授权成员 ID、机器人 `xoxb-…` Token 和 Socket Mode `xapp-…` Token，启用后保存并连接。Token 只保存在本机 `~/.codrive/config.json`（权限 `0600`），页面不回显，代码中没有真实 Token；同工作区留空会保留已保存的值。也可以让 AI 按安装文档通过私有文件配置。
+
+Slack 命令：`/models` 查看模型列表，`/model` 切换模型，`/state` 查看会话状态。机器人支持接收图片、文档等附件，并将生成的文件发回原讨论串。
 
 ## 常用命令
 
@@ -77,6 +89,6 @@ pnpm build
 pnpm dev
 ```
 
-进一步了解：[里程碑与规划](./docs/architecture/milestones.md) · [产品事实](./docs/architecture/product-facts.md) · [看板同步](./docs/architecture/realtime-sync.md) · [Semantic Atlas 集成](./docs/architecture/semantic-atlas-maintenance.md)。
+进一步了解：[文档入口](./docs/README.md)，包含安装说明、架构、方案与实际验收记录。
 
 [MIT 许可证](./LICENSE)

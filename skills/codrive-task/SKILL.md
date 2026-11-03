@@ -22,7 +22,7 @@ node <skill-directory>/scripts/codrive-task.mjs context <task-id>
 node <skill-directory>/scripts/codrive-task.mjs resolve --cwd <absolute-current-directory>
 ```
 
-读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities`、关联里程碑的当前目标与未决活动，以及仓库 `AGENTS.md`。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务正文、当前状态和已有证据恢复连续上下文。
+读取命令返回的 `projectDocument`、`productFacts`、`taskDocument`、完整 `activities`、关联里程碑的当前目标与未决活动，以及仓库 `AGENTS.md`。有 `source` 和 `replyTarget` 时，用它们理解原始请求与交付目的地；保留实际来源和回复位置，后续消息由服务按任务事实送达。`PROJECT.md` 是唯一当前产品事实；活动历史用于理解任务交付过程，不把历史产品决定重新拼成当前上下文。以 context 中的 `requestedAction` 决定当前工作。开始每个阶段前按时间通读活动历史，结合任务正文、当前状态和已有证据恢复连续上下文。
 
 每轮先读取 `taskDocument` 指向的任务 JSON：登记了 `taskDocumentPath` 时，按 `repositoryPath` 定位主项目目录中的原文档并读取当前内容，以整篇文档的背景、问题、目标、已确认做法及理由、验收和引用的决定性资料理解任务；任务 JSON 没有登记 `taskDocumentPath` 时，按旧任务读取 `description` 和 `acceptanceCriteria`。在进入任务工作树前完成这一步，审查、合入和恢复回合也重新读取。已登记路径指向的文件缺失或内容为空时，核对仓库与路径并报告明确阻塞。将任务正文、当前阶段、完整活动历史和仓库规则共同作为本轮任务语义。开始执行当前阶段前，对照当前可用 Skill 的 `description`，加载与当前阶段实际工作匹配的 Skill，并遵循对应工作流。没有其他匹配 Skill 的任务继续按照本 Skill 完成。
 
@@ -57,7 +57,7 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 ## 工作 `work`
 
-`work` 是任务内所有需要业务判断和执行的通用阶段，包括首次实现、处理 Review finding、发布、迁移、外部验证和合入后的后续工作。先从活动末尾确认本轮来源：存在最近的 `review_changes_requested` 或 `integration_work_required` 时，独立判断每条 finding 或后续工作依据；成立的问题完成修改，不适用的问题形成有证据的回复，需要新产品语义的问题汇报 `needs_input`。
+`work` 是任务内所有需要业务判断和执行的通用阶段，包括首次实现、处理 Review finding、发布、迁移、外部验证和合入后的后续工作。巡检来源只提供客观观察，根因由本阶段依据源码、契约与运行事实独立调查。既有行为下的明确 Bug 在当前授权内自主修复、验证并交付；只有预期结果存在业务分歧或需要新授权时才请求决定。先从活动末尾确认本轮来源：存在最近的 `review_changes_requested` 或 `integration_work_required` 时，独立判断每条 finding 或后续工作依据；成立的问题完成修改，不适用的问题形成有证据的回复，需要新产品语义的问题汇报 `needs_input`。
 
 - 需要修改仓库时，按“连续任务工作区”定位或创建隔离工作树，让 `.worktrees/` 进入仓库自己的 `.git/info/exclude`，理解并整理已有现场，完成实现、验证和提交。汇报 `completed` 时提供 `workspacePath`、`baseCommit`、`candidateCommit` 和测试摘要。
 - 不修改仓库的发布、迁移或验证工作直接在受支持的目标边界执行并收集证据。汇报 `completed` 时提供实际验证摘要，不提交空 SHA 或虚构工作树。
@@ -75,10 +75,12 @@ node <skill-directory>/scripts/codrive-task.mjs project-context <project-id>
 
 根据当前绑定 work 的 `context.delivery` 判断本轮是否包含代码候选，并结合任务契约判断本轮结果之后整个任务是否结束。
 
+任务要求人工看效果时，先完成自测与独立代码审查，推送当前候选并通过项目已有方式提供可查看预览，在合入前以 `needs_input` 等待确认；问题中指明候选、查看方式和要确认的效果。有效确认后继续原执行，候选发生实质改动时重新判断受影响的验证与验收。远程用户需要能实际查看结果，本机 `localhost` 地址本身不构成可用预览。
+
 - 有候选时，检查主分支和人工改动，安全同步候选并自主解决可以判断的冲突，运行受影响测试。同步未改变候选语义时完成合入并清理任务工作树和临时分支；用 `git worktree list` 与 `git branch --list` 确认清理结果。
 - 无候选时不执行 Git 合入或清理，只核实已经 Review 通过的业务结果。
 - 本轮结果已经满足整个任务时汇报 `completed`；有候选时同时提供 `mergedCommit`，无候选时提供实际核实证据。
-- 本轮已经合入或核实，但任务仍有发布、迁移、验证或代码工作时汇报 `work_required`，在 `summary` 中写清下一轮工作；本轮有候选时同时提供 `mergedCommit`。
+- 本轮已经合入或核实，但任务仍有发布、迁移、验证或代码工作时汇报 `work_required`，在 `summary` 中写清下一轮工作；本轮有候选时同时提供 `mergedCommit`。目标包含上线时，后续 `work` 使用项目既有发布 Skill、脚本或 CI，取得发布和线上业务核实证据后才完成整个任务。
 - 同步或冲突解决产生新的代码候选时，先不合入，汇报 `needs_review`，并提供 `workspacePath`、`baseCommit`、`candidateCommit` 和测试证据。该报告会形成新的 `work_completed` 活动并重新进入独立 Review。
 - 需要新的产品决策、外部凭据或权限时汇报 `needs_input`，保留所有现有内容。
 
@@ -162,4 +164,4 @@ node <skill-directory>/scripts/codrive-task.mjs project-report <project-id> --js
 }
 ```
 
-先完成仓库操作，再把汇报作为当前阶段的最后一个副作用。脚本拒绝报告时，根据返回的字段要求修正同一份报告并重新提交。发生无法继续的确定问题时使用 `blocked`。
+先完成仓库操作，再把汇报作为当前阶段的最后一个副作用。来源为 Slack 或原生巡检时，服务在报告持久保存后向原位置发送当前问题、失败或交付结果，执行者不在报告后另发 Slack 消息。脚本拒绝报告时，根据返回的字段要求修正同一份报告并重新提交。发生无法继续的确定问题时使用 `blocked`。

@@ -494,6 +494,19 @@ export const boardStyles = `
   .setting-field input:focus, .setting-field select:focus { outline: 3px solid rgba(244,91,53,.16); border-color: var(--signal); }
   .settings-actions { display: flex; gap: 14px; align-items: center; padding: 20px 28px; }
   .settings-actions span { color: #34735d; font-size: 11px; font-weight: 700; }
+  .slack-settings-panel { margin-bottom: 18px; }
+  .slack-settings-header { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 24px 28px; background: #f3f8f4; border-bottom: 1px solid var(--line); }
+  .slack-settings-kicker { color: #34735d; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+  .slack-settings-header h2 { margin: 5px 0 7px; font: 650 26px/1.1 var(--display); }
+  .slack-settings-header p, .slack-settings-note p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+  .slack-connection-status { flex: 0 0 auto; padding: 7px 11px; color: #59665f; background: #e8eeea; border-radius: 999px; font-size: 11px; font-weight: 800; }
+  .slack-connection-status[data-state="connected"] { color: #246849; background: #d9efdf; }
+  .slack-connection-status[data-state="pending"] { color: #8a6022; background: #fff0d2; }
+  .slack-connection-error { margin: 0; padding: 14px 28px; color: #a83d2f; background: #fff3ef; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+  .slack-enabled-control { display: flex; gap: 9px; align-items: center; font-size: 12px; font-weight: 700; }
+  .slack-enabled-control input[type="checkbox"] { width: 18px; min-height: 18px; height: 18px; padding: 0; accent-color: #34735d; }
+  .slack-settings-note { display: grid; gap: 6px; padding: 16px 28px 0; }
+  .slack-settings-panel .settings-actions { flex-wrap: wrap; }
 
   .product-hero { max-width: 1180px; }
   .product-hero-row { display: flex; gap: 20px; align-items: flex-end; justify-content: space-between; }
@@ -651,6 +664,9 @@ export const boardStyles = `
     .page-hero h1 { font-size: 38px; }
     .setting-field { grid-template-columns: 1fr; gap: 13px; padding: 20px; }
     .settings-actions { align-items: flex-start; flex-direction: column; padding: 18px 20px; }
+    .slack-settings-header { align-items: flex-start; padding: 20px; }
+    .slack-settings-note { padding: 16px 20px 0; }
+    .slack-connection-error { padding: 14px 20px; }
     .integration-card { grid-template-columns: 1fr; align-items: start; padding: 20px; }
     .integration-toggle span { text-align: left; }
     .product-hero-row { align-items: flex-start; flex-direction: column; }

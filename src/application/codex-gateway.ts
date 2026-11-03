@@ -25,6 +25,34 @@ export interface CodexTurnSnapshot {
   } | null;
 }
 
+export interface CodexTokenUsageBreakdown {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+export interface CodexThreadRuntimeStatus {
+  threadId: string;
+  status: string;
+  model: string | null;
+  reasoningEffort: ReasoningEffort | null;
+  cwd: string;
+  approvalPolicy: string | null;
+  sandboxPolicy: string | null;
+  tokenUsage: {
+    total: CodexTokenUsageBreakdown;
+    last: CodexTokenUsageBreakdown;
+    modelContextWindow: number | null;
+  } | null;
+}
+
+export interface CodexThreadStatusReader {
+  readThreadRuntime(threadId: string): Promise<CodexThreadRuntimeStatus>;
+}
+
 export interface CodexGateway {
   startThread(
     cwd: string,

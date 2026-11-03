@@ -29,6 +29,8 @@ import { createProjectDetailView } from "./project-detail-view.js";
 import { createTaskDetailView } from "./task-detail-view.js";
 import { projectTaskActivities } from "../../domain/task-activity.js";
 import { BoardRealtimeGateway } from "./board-realtime.js";
+import type { SlackIntegration } from "../../application/slack-integration.js";
+import { isSlackCommand, slackCommandSchema } from "./slack-commands.js";
 
 export interface HttpServerDependencies {
   store: ProjectStore;
@@ -50,6 +52,8 @@ export interface HttpServerDependencies {
   systemUpdateEvents?:
     | SystemStatusEventSource
     | readonly SystemStatusEventSource[];
+  // Slack 为可选集成，原本地看板和工作流可以独立装配。
+  slack?: Pick<SlackIntegration, "readStatus" | "listChannels" | "configure" | "bind" | "report" | "sendFile">;
   currentVersion?: string;
   accessToken: string;
   isReady?: () => boolean;
@@ -218,6 +222,8 @@ export function createHttpServer(
     return dependencies.systemUpdateService.read();
   });
   server.get("/api/system/settings", async () => dependencies.settingsService.read());
+  server.get("/api/slack", async () => requireSlack().readStatus());
+  server.get("/api/slack/channels", async () => requireSlack().listChannels());
 
   server.get<{ Params: { taskId: string } }>(
     "/api/contexts/tasks/:taskId",
@@ -360,6 +366,14 @@ export function createHttpServer(
         "Codrive is still recovering persisted executions",
       );
     }
+    if (isSlackCommand(request.body)) {
+      const command = slackCommandSchema.parse(request.body);
+      const slack = requireSlack();
+      if (command.type === "slack.configure") return slack.configure(command.payload);
+      if (command.type === "slack.bind") return slack.bind(command.payload);
+      if (command.type === "slack.send_file") return slack.sendFile(command.payload);
+      return slack.report(command.payload);
+    }
     const command = commandSchema.parse(request.body);
     if (command.type === "system.install_resources") {
       if (!dependencies.systemUpdateService) {
@@ -404,6 +418,11 @@ export function createHttpServer(
   });
 
   return server;
+
+  function requireSlack() {
+    if (!dependencies.slack) throw new ServiceNotReadyError("Slack integration is not available");
+    return dependencies.slack;
+  }
 }
 
 function isPagePath(path: string): boolean {
@@ -425,6 +444,8 @@ async function taskContext(
   const { delivery } = activity;
   return {
     taskId: task.id,
+    source: task.source ?? null,
+    replyTarget: task.replyTarget ?? null,
     milestone: milestoneOwner?.milestone ?? null,
     milestoneActivities,
     milestoneProjection: projectMilestoneActivities(milestoneActivities),

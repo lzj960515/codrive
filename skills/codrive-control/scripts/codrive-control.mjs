@@ -7,7 +7,33 @@ import { join } from "node:path";
 const [command, ...args] = process.argv.slice(2);
 let result;
 let isWrite = false;
-if (command === "board" && args.length === 0) {
+if (command === "slack-status" && args.length === 0) {
+  result = await request("/api/slack");
+} else if (command === "slack-channels" && args.length === 0) {
+  result = await request("/api/slack/channels");
+} else if (command === "slack-configure") {
+  const settings = await readJsonFileArgument(args, "slack-configure");
+  result = await sendCommand("slack.configure", settings);
+  isWrite = true;
+} else if (command === "slack-bind" && args[0]) {
+  const [projectId, ...inputArgs] = args;
+  const payload = parseJsonArgument(inputArgs, "slack-bind");
+  result = await sendCommand("slack.bind", { ...payload, projectId });
+  isWrite = true;
+} else if (command === "slack-report" && args[0]) {
+  const [projectId, ...inputArgs] = args;
+  const payload = parseJsonArgument(inputArgs, "slack-report");
+  result = await sendCommand("slack.report", { ...payload, projectId });
+  isWrite = true;
+} else if (command === "slack-send-file") {
+  const payload = parseJsonArgument(args, "slack-send-file");
+  result = await sendCommand("slack.send_file", payload);
+  isWrite = true;
+} else if (command === "reply-decision") {
+  const payload = parseJsonArgument(args, "reply-decision");
+  result = await sendCommand("decision.reply", payload);
+  isWrite = true;
+} else if (command === "board" && args.length === 0) {
   result = await request("/api/board");
 } else if (command === "archived" && args.length === 0) {
   result = await request("/api/board/archived");
@@ -73,7 +99,7 @@ if (command === "board" && args.length === 0) {
   isWrite = true;
 } else {
   fail(
-    "Usage: codrive-control <board|archived|project|task|milestone|milestone-update|settings|update-settings|project-control|task-control|task-update|product-document-changed> ...",
+    "Usage: codrive-control <board|archived|project|task|milestone|milestone-update|settings|update-settings|project-control|task-control|task-update|product-document-changed|slack-status|slack-channels|slack-configure|slack-bind|slack-report|slack-send-file|reply-decision> ...",
   );
 }
 print(isWrite ? { ok: true, result } : result);
@@ -115,6 +141,28 @@ function parseJsonArgument(args, commandName) {
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     fail("--json payload must be a JSON object");
+  }
+  return payload;
+}
+
+async function readJsonFileArgument(args, commandName) {
+  if (args.length !== 2 || args[0] !== "--json-file" || !args[1]) {
+    fail(`${commandName} requires --json-file <path>`);
+  }
+  let contents;
+  try {
+    contents = await readFile(args[1], "utf8");
+  } catch {
+    fail(`${commandName} could not read the JSON file`);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(contents);
+  } catch {
+    fail("Invalid JSON supplied in --json-file");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    fail("--json-file payload must be a JSON object");
   }
   return payload;
 }

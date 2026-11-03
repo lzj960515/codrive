@@ -1,3 +1,4 @@
+import type { WorkCommunication } from "./work-source.js";
 import type { DecisionReplyInput } from "./decision-reply.js";
 import type {
   Milestone,
@@ -317,7 +318,7 @@ export interface TaskActivity {
   evidence?: TaskActivityEvidence;
 }
 
-export interface Task {
+export interface Task extends WorkCommunication {
   id: string;
   projectId: string;
   milestoneId?: string;
@@ -382,7 +383,7 @@ export interface ProjectSnapshot {
   milestones: Milestone[];
 }
 
-export interface CreateTaskInput {
+export interface CreateTaskInput extends WorkCommunication {
   milestoneId?: string;
   title: string;
   taskDocumentPath?: string;

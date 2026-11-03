@@ -7,6 +7,7 @@ import type {
   CodexModelOption,
   CodexTurnSnapshot,
   CodexTurnStatus,
+  CodexThreadRuntimeStatus,
 } from "../application/codex-gateway.js";
 import type { InitializeResponse } from "./app-server-protocol/InitializeResponse.js";
 import type { ModelListResponse } from "./app-server-protocol/v2/ModelListResponse.js";
@@ -14,6 +15,9 @@ import type { HooksListResponse } from "./app-server-protocol/v2/HooksListRespon
 import type { SkillsListResponse } from "./app-server-protocol/v2/SkillsListResponse.js";
 import type { ThreadReadResponse } from "./app-server-protocol/v2/ThreadReadResponse.js";
 import type { ThreadStartResponse } from "./app-server-protocol/v2/ThreadStartResponse.js";
+import type { ThreadTokenUsageUpdatedNotification } from "./app-server-protocol/v2/ThreadTokenUsageUpdatedNotification.js";
+import type { ThreadTokenUsage } from "./app-server-protocol/v2/ThreadTokenUsage.js";
+import type { ThreadSettingsUpdatedNotification } from "./app-server-protocol/v2/ThreadSettingsUpdatedNotification.js";
 import { CodexThreadSession } from "./codex-thread-session.js";
 import {
   JsonRpcConnection,
@@ -36,6 +40,8 @@ export class CodexAppServerClient implements CodexGateway {
   private starting: Promise<void> | null = null;
   private stopping = false;
   private readonly sessions = new Map<string, CodexThreadSession>();
+  private readonly tokenUsage = new Map<string, ThreadTokenUsage>();
+  private readonly permissions = new Map<string, { approvalPolicy: string | null; sandboxPolicy: string | null }>();
 
   constructor(private readonly options: CodexAppServerOptions = {}) {}
 
@@ -109,6 +115,12 @@ export class CodexAppServerClient implements CodexGateway {
       sandbox: "danger-full-access",
       serviceName: "codrive",
     });
+    if (!this.permissions.has(response.thread.id)) {
+      this.permissions.set(response.thread.id, {
+        approvalPolicy: approvalDescription(response.approvalPolicy),
+        sandboxPolicy: response.sandbox?.type ?? null,
+      });
+    }
     this.sessions.set(response.thread.id, new CodexThreadSession(connection, response.thread.id, true));
     await this.setThreadName(response.thread.id, title);
     return response.thread.id;
@@ -267,6 +279,34 @@ export class CodexAppServerClient implements CodexGateway {
     };
   }
 
+  async readTurnText(threadId: string, turnId: string): Promise<string> {
+    await this.start();
+    const response = await this.requireConnection().request<ThreadReadResponse>(
+      "thread/read", { threadId, includeTurns: true },
+    );
+    const turn = response.thread.turns.find(({ id }) => id === turnId);
+    return (turn?.items ?? [])
+      .filter((item) => item.type === "agentMessage")
+      .map((item) => item.text)
+      .join("\n\n");
+  }
+
+  async readThreadRuntime(threadId: string): Promise<CodexThreadRuntimeStatus> {
+    await this.start();
+    const { thread } = await this.requireConnection().request<ThreadReadResponse>("thread/read", { threadId });
+    const permissions = this.permissions.get(threadId);
+    return {
+      threadId,
+      status: thread.status.type,
+      model: thread.model ?? null,
+      reasoningEffort: thread.reasoningEffort ?? null,
+      cwd: thread.cwd,
+      approvalPolicy: permissions?.approvalPolicy ?? null,
+      sandboxPolicy: permissions?.sandboxPolicy ?? null,
+      tokenUsage: this.tokenUsage.get(threadId) ?? null,
+    };
+  }
+
   onNotification(listener: (notification: JsonRpcNotification) => void): () => void {
     this.notifications.on("notification", listener);
     return () => this.notifications.off("notification", listener);
@@ -298,6 +338,17 @@ export class CodexAppServerClient implements CodexGateway {
   }
 
   private handleNotification(notification: JsonRpcNotification): void {
+    if (notification.method === "thread/tokenUsage/updated") {
+      const usage = notification.params as ThreadTokenUsageUpdatedNotification;
+      this.tokenUsage.set(usage.threadId, usage.tokenUsage);
+    }
+    if (notification.method === "thread/settings/updated") {
+      const { threadId, threadSettings } = notification.params as ThreadSettingsUpdatedNotification;
+      this.permissions.set(threadId, {
+        approvalPolicy: approvalDescription(threadSettings.approvalPolicy),
+        sandboxPolicy: threadSettings.sandboxPolicy.type,
+      });
+    }
     const params = notification.params as { threadId?: string; turn?: { id?: string; status?: string } } | undefined;
     const session = params?.threadId ? this.sessions.get(params.threadId) : undefined;
     if (notification.method === "thread/closed") session?.closed();
@@ -330,6 +381,8 @@ export class CodexAppServerClient implements CodexGateway {
   private disconnectSessions(error: Error): void {
     for (const session of this.sessions.values()) session.disconnected(error);
     this.sessions.clear();
+    this.tokenUsage.clear();
+    this.permissions.clear();
   }
 
   private requireConnection(): JsonRpcConnection {
@@ -338,6 +391,11 @@ export class CodexAppServerClient implements CodexGateway {
     }
     return this.connection;
   }
+}
+
+function approvalDescription(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  return isRecord(value) ? JSON.stringify(value) : null;
 }
 
 function safeItemStatus(item: unknown): string | null {

@@ -1,3 +1,4 @@
+import { assertWorkCommunication } from "../domain/work-source.js";
 import type { Milestone, MilestoneActivity, MilestoneResolution } from "../domain/milestone.js";
 
 import type {
@@ -78,6 +79,7 @@ export function assertCurrentProject(project: Project): Project {
 }
 
 export function assertCurrentTask(task: Task): Task {
+  assertWorkCommunication(task);
   if (task.taskDocumentPath !== undefined) {
     if (
       typeof task.taskDocumentPath !== "string" ||

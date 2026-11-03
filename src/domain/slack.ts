@@ -1,0 +1,120 @@
+import type { SlackReplyTarget } from "./work-source.js";
+
+export interface SlackProjectBinding {
+  projectId: string;
+  channelId: string;
+}
+
+export interface SlackConfig {
+  enabled: boolean;
+  teamId: string;
+  authorizedUserId: string;
+  botToken: string;
+  appToken: string;
+  projectBindings: SlackProjectBinding[];
+}
+
+export type SlackConfigureInput = Omit<SlackConfig, "projectBindings">;
+
+export interface SlackIncomingFile {
+  id: string;
+  name?: string;
+  mimetype?: string;
+  url_private?: string;
+  url_private_download?: string;
+}
+
+export interface SlackLocalFile {
+  id: string;
+  name: string;
+  mimetype?: string;
+  path: string;
+}
+
+export interface SlackIncomingMessage {
+  eventId: string;
+  teamId: string;
+  channelId: string;
+  channelType: "im" | "channel" | "group";
+  userId: string;
+  text: string;
+  messageTs: string;
+  threadTs?: string;
+  files?: SlackIncomingFile[];
+}
+
+export interface SlackChannel {
+  id: string;
+  name: string;
+  isMember: boolean;
+  isPrivate: boolean;
+}
+
+export interface SlackModelContext {
+  teamId: string;
+  userId: string;
+  channelId: string;
+}
+
+export interface SlackModelMenu {
+  scopeId: string;
+  scopeLabel: string;
+  primary: string;
+  fallback: string;
+  models: Array<{ id: string; displayName: string }>;
+}
+
+export interface SlackModelControls {
+  read(context: SlackModelContext): Promise<SlackModelMenu>;
+  select(context: SlackModelContext, modelId: string, expectedScopeId?: string): Promise<SlackModelMenu>;
+}
+
+export interface SlackStatusContext extends SlackModelContext {
+  threadTs?: string;
+  conversationId?: string;
+}
+
+export interface SlackStatusView {
+  text: string;
+  conversations: Array<{ id: string; label: string }>;
+}
+
+export interface SlackStatusControls {
+  read(context: SlackStatusContext): Promise<SlackStatusView>;
+}
+
+export interface SlackProgress {
+  id: string;
+  title: string;
+  status: "in_progress" | "complete" | "error";
+  details?: string;
+}
+
+export interface SlackReplyStream {
+  appendText(text: string): void;
+  progress(update: SlackProgress): void;
+  finish(): Promise<{ messageTs: string }>;
+}
+
+export interface SlackSendProgress {
+  messageTs: string;
+  nextMessageIndex: number;
+}
+
+export class SlackDeliveryError extends Error {
+  constructor(message: string, readonly progress?: SlackSendProgress, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "SlackDeliveryError";
+  }
+}
+
+export interface SlackTransport {
+  start(onMessage: (message: SlackIncomingMessage) => Promise<void>, modelControls: SlackModelControls, statusControls: SlackStatusControls): Promise<void>;
+  stop(): Promise<void>;
+  sendMessage(target: SlackReplyTarget, markdown: string, resume?: SlackSendProgress): Promise<{ messageTs: string }>;
+  getChannel(id: string): Promise<SlackChannel>;
+  listChannels(): Promise<SlackChannel[]>;
+  startReply(target: SlackReplyTarget, recipientUserId: string): Promise<SlackReplyStream>;
+  downloadFiles(teamId: string, files: SlackIncomingFile[]): Promise<SlackLocalFile[]>;
+  sendFile(target: SlackReplyTarget, input: { filePath: string; title?: string; comment?: string }): Promise<{ id: string; name: string; permalink?: string }>;
+}

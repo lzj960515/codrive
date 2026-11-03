@@ -1,6 +1,7 @@
 import { WorkflowConflictError } from "../domain/errors.js";
 import type { ModelRoutingSettings } from "../domain/types.js";
 import type { SemanticAtlasClient } from "../domain/semantic-atlas.js";
+import type { SlackConfigureInput, SlackProjectBinding } from "../domain/slack.js";
 import type { ConfigStore } from "../infrastructure/config-store.js";
 import type { CodexModelOption } from "./codex-gateway.js";
 import type { WorkflowEngine } from "./workflow-engine.js";
@@ -62,30 +63,30 @@ export class SystemSettingsService {
       this.semanticAtlas.readInstallation(),
     ]);
     validateSettings(input, availableModels);
-    const current = await this.configStore.read();
     const requestedAutomaticMaintenance = input.semanticAtlasAutomaticMaintenance;
-    const automaticMaintenance = requestedAutomaticMaintenance
-      ?? current.semanticAtlas?.automaticMaintenance
-      ?? false;
     if (requestedAutomaticMaintenance === true && !installation.installed) {
       throw new WorkflowConflictError(
         "Semantic Atlas must be installed before automatic maintenance can be enabled",
       );
     }
-    const wasEnabled = current.semanticAtlas?.automaticMaintenance ?? false;
-    const semanticAtlas = {
-      automaticMaintenance,
-      ...(!wasEnabled && automaticMaintenance
-        ? { enabledAt: this.now() }
-        : current.semanticAtlas?.enabledAt
-        ? { enabledAt: current.semanticAtlas.enabledAt }
-        : {}),
-    };
-    await this.configStore.save({
-      ...current,
-      maxConcurrentTasks: input.maxConcurrentTasks,
-      models: input.models,
-      semanticAtlas,
+    const updated = await this.configStore.update((current) => {
+      const automaticMaintenance = requestedAutomaticMaintenance
+        ?? current.semanticAtlas?.automaticMaintenance
+        ?? false;
+      const wasEnabled = current.semanticAtlas?.automaticMaintenance ?? false;
+      return {
+        ...current,
+        maxConcurrentTasks: input.maxConcurrentTasks,
+        models: input.models,
+        semanticAtlas: {
+          automaticMaintenance,
+          ...(!wasEnabled && automaticMaintenance
+            ? { enabledAt: this.now() }
+            : current.semanticAtlas?.enabledAt
+            ? { enabledAt: current.semanticAtlas.enabledAt }
+            : {}),
+        },
+      };
     });
     await this.workflow.updateRuntimeSettings(input);
     await this.maintenance.settingsChanged();
@@ -95,8 +96,85 @@ export class SystemSettingsService {
         models: input.models,
       },
       availableModels,
-      semanticAtlas: { installed: installation.installed, automaticMaintenance },
+      semanticAtlas: {
+        installed: installation.installed,
+        automaticMaintenance: updated.semanticAtlas!.automaticMaintenance,
+      },
     };
+  }
+
+  async readSlack() {
+    const { slack } = await this.configStore.read();
+    const configured = Boolean(
+      slack?.teamId && slack.authorizedUserId && slack.botToken && slack.appToken,
+    );
+    return {
+      enabled: slack?.enabled ?? false,
+      configured,
+      teamId: slack?.teamId || null,
+      authorizedUserId: slack?.authorizedUserId || null,
+      projectBindings: slack?.projectBindings ?? [],
+    };
+  }
+
+  async configureSlack(input: SlackConfigureInput): Promise<void> {
+    const settings = {
+      enabled: input.enabled,
+      teamId: input.teamId.trim(),
+      authorizedUserId: input.authorizedUserId.trim(),
+      botToken: input.botToken.trim(),
+      appToken: input.appToken.trim(),
+    };
+    await this.configStore.update((current) => {
+      const sameWorkspace = current.slack?.teamId === settings.teamId;
+      if (
+        current.slack?.teamId && settings.teamId && !sameWorkspace &&
+        (!settings.botToken || !settings.appToken)
+      ) {
+        throw new WorkflowConflictError("切换 Slack 工作区时，请填写新的 Bot Token 和 App Token。");
+      }
+      const connection = {
+        ...settings,
+        botToken: settings.botToken || (sameWorkspace ? current.slack?.botToken ?? "" : ""),
+        appToken: settings.appToken || (sameWorkspace ? current.slack?.appToken ?? "" : ""),
+      };
+      if (
+        connection.enabled &&
+        (!connection.teamId || !connection.authorizedUserId || !connection.botToken || !connection.appToken)
+      ) {
+        throw new WorkflowConflictError("Slack connection settings are incomplete");
+      }
+      return {
+        ...current,
+        slack: { ...connection, projectBindings: current.slack?.projectBindings ?? [] },
+      };
+    });
+  }
+
+  async bindSlackProject(input: SlackProjectBinding): Promise<void> {
+    const binding = {
+      projectId: input.projectId.trim(),
+      channelId: input.channelId.trim(),
+    };
+    if (!binding.projectId || !binding.channelId) {
+      throw new WorkflowConflictError("Project and Slack channel are required");
+    }
+    await this.configStore.update((current) => {
+      if (!current.slack) {
+        throw new WorkflowConflictError("Configure Slack before binding a project");
+      }
+      const retainedBindings = current.slack.projectBindings.filter(
+        (existing) => existing.projectId !== binding.projectId &&
+          existing.channelId !== binding.channelId,
+      );
+      return {
+        ...current,
+        slack: {
+          ...current.slack,
+          projectBindings: [...retainedBindings, binding],
+        },
+      };
+    });
   }
 
   async readProject(projectId: string) {

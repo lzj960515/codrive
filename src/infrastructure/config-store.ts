@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type { ModelRoutingSettings } from "../domain/types.js";
+import type { SlackConfig } from "../domain/slack.js";
 
 export interface CodriveConfig {
   schemaVersion: 2;
@@ -14,6 +15,7 @@ export interface CodriveConfig {
   accessToken: string;
   stateDirectory: string;
   codexExecutable?: string;
+  slack?: SlackConfig;
   semanticAtlas?: {
     automaticMaintenance: boolean;
     enabledAt?: string;
@@ -28,6 +30,7 @@ export function defaultStateDirectory(): string {
 
 export class ConfigStore {
   readonly configPath: string;
+  private updates: Promise<void> = Promise.resolve();
 
   constructor(readonly stateDirectory = defaultStateDirectory()) {
     this.configPath = join(stateDirectory, "config.json");
@@ -71,6 +74,20 @@ export class ConfigStore {
     });
     await rename(temporaryPath, this.configPath);
     await chmod(this.configPath, 0o600);
+  }
+
+  update(
+    mutate: (current: CodriveConfig) => CodriveConfig,
+  ): Promise<CodriveConfig> {
+    const operation = this.updates.then(async () => {
+      const current = await this.readPersisted();
+      const updated = mutate(current);
+      await this.save(updated);
+      return updated;
+    });
+    // 一次设置失败后仍允许后续独立设置从最新文件继续。
+    this.updates = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   private async readPersisted(): Promise<CodriveConfig> {

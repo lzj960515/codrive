@@ -1,6 +1,6 @@
 ---
 name: codrive-control
-description: 查询和控制本地 Codrive 项目、里程碑、任务与运行设置，包括产品详情、产品文档事实、已确认的未开始任务定义修改、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、要求执行已经确认的 backlog 任务修改、更新产品事实、恢复模型容量或干预自动流程时使用；新的任务需求和修改判断由 codrive-work 负责。
+description: 查询和控制本地 Codrive 项目、里程碑、任务与运行设置，包括产品详情、产品文档事实、已确认的未开始任务定义修改、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、执行已确认的 backlog 修改、更新产品事实、恢复模型容量或干预自动流程，以及配置 Slack、绑定频道、发送报告或本机文件、答复待决定问题时使用；新的任务需求和修改判断由 codrive-work 负责。
 compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
@@ -21,6 +21,67 @@ node <skill-directory>/scripts/codrive-control.mjs milestone <milestone-id>
 `board` 返回默认看板中的未归档项目；`archived` 返回已归档项目及其数量。`project` 返回注册信息、完整 `PROJECT.md`、产品事实同步状态、最小规划状态、归档时间、任务与当前执行信息。`task` 返回任务登记信息、归属、当前状态、完整进展记录和推导后的 Codex 对话链接；有 `taskDocumentPath` 时按项目仓库根目录读取原 Markdown 文件获得当前任务正文，没有路径的历史任务读取 `description` 和 `acceptanceCriteria`。`milestone` 返回目标、验收、当前结论、未决活动和负责人对话入口。当前任务数量不能代替里程碑完成判断。
 
 项目的 `attention` 只表达需要处理的异常状态：`decision_requested` 表示需要在对应 Codex App 对话中作出决定，`blocked` 表示项目存在确定阻塞。没有 `attention` 时，项目按当前任务和规划状态正常推进。
+
+## Slack 接入与报告
+
+机器人私信承担全局交流，已绑定频道使用对应项目；频道里的新根消息建立独立会话，机器人回复在原讨论串。普通查询直接使用适用工具办事，需要查询或控制 Codrive、发送报告或登记工程工作时再调用对应能力。
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs slack-status
+node <skill-directory>/scripts/codrive-control.mjs slack-channels
+node <skill-directory>/scripts/codrive-control.mjs slack-configure --json-file <private-settings-file>
+node <skill-directory>/scripts/codrive-control.mjs slack-bind <project-id> --json '{"channelId":"<channel-id>"}'
+```
+
+先用 `slack-status` 查看脱敏连接状态和已有绑定，用 `slack-channels` 取得机器人可访问的频道。绑定前核对项目与频道身份；有歧义时请用户选择。机器人需要加入项目频道，并取得普通消息事件的权限，才能免 `@` 接收文字。连接设置从本机私有 JSON 文件读取，包含 `enabled`、`teamId`、`authorizedUserId`、`botToken`、`appToken`；用文件传入凭据，结果只展示服务端脱敏设置。
+
+原生 Codex 定时报告或巡检结果使用同一发送入口：
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs slack-report <project-id> --json '<report-json>'
+```
+
+```json
+{
+  "requestId": "<stable-report-request-id>",
+  "markdown": "## 登录检查\n\n使用测试账号提交登录。预期进入首页，实际仍停留在登录页。",
+  "source": {
+    "kind": "codex_native",
+    "requestId": "<stable-report-request-id>"
+  }
+}
+```
+
+一次报告生成一个请求身份，在同次发送重试时复用。以进程退出码 `0`、`ok: true` 和 `result` 中的真实 `messageTs`、`source`、`replyTarget` 确认发送成功；再次请求同一报告时沿用返回的消息位置。
+
+巡检按本次要求执行检查，记录已观察到的操作、预期、实际结果与直接证据。发现异常后，先发送客观事实消息，拿到回执，再使用 `$codrive-work` 携带其中的 `source` 和 `replyTarget` 登记后续调查工作。原因调查、原因假设和修改代码属于开发阶段。普通报告发送后直接完成，不创建开发任务；发送失败时保留报告与请求身份，登记失败时复用已成功消息继续登记。
+
+用户发来的图片和文件会下载到本机，消息上下文给出文件名、类型与绝对路径。按任务需要用看图或文件工具读取。需要把生成的文件交给用户时，完成文件写入，再使用当前消息的 `replyTarget` 上传到原会话：
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs slack-send-file --json '<file-json>'
+```
+
+```json
+{
+  "replyTarget": { "kind": "slack", "teamId": "<当前工作区>", "channelId": "<原会话>", "threadTs": "<原讨论串根消息>" },
+  "filePath": "/absolute/path/report.csv",
+  "title": "数据报告",
+  "comment": "已整理本次查询结果。"
+}
+```
+
+直接私信的 `replyTarget` 可以没有 `threadTs`。以成功回执中的实际文件 `id` 和可用的 `permalink` 为交付依据。文件上传失败时报告失败，重试前核实已有回执，保持开发结果独立；该命令没有报告发送的持久自动补送语义。
+
+Slack 内置 `/models` 列出当前可切换的主模型及当前、备用模型；`/model` 提供当前作用范围的模型选择，私信修改全局默认、绑定频道修改项目，下一回合生效。`/state` 查看实际模型、推理强度、权限和用量；频道内选择明确会话，或从消息菜单执行「查看 Codrive 状态」。缺少实际用量时显示暂无，窗口余量有数据时注明估算。
+
+当前任务或项目确实存在待决定问题时，原样使用服务返回的 `scope`、对象 `id` 和 `reportOpportunityId`：
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs reply-decision --json '{"scope":"task","id":"<task-id>","reportOpportunityId":"<current-opportunity-id>","message":"<用户答复>"}'
+```
+
+问题身份由当前事实校验；普通补充消息继续原会话，旧问题的答复不能占用新问题。安装或配置 Slack 应用时读取 [Slack 接入与 Mac 运行](https://github.com/lzj960515/codrive/blob/main/docs/operations/slack.md)；同一说明随 Codrive 包保存在 `docs/operations/slack.md`。定时计划在 Codex 原生界面管理。
 
 ## 运行设置
 
@@ -173,7 +234,7 @@ node <skill-directory>/scripts/codrive-control.mjs product-document-changed <pro
 
 脚本读取当前磁盘文件并计算新哈希；Codrive 再次读取并验证非空文档、预期版本、预期哈希和新哈希，随后记录决定摘要、推进规划修订、终止失效的项目选择并重新调度。版本或哈希冲突时重新读取项目，不覆盖磁盘内容，并根据当前事实重新整理修改。文件内容没有变化时不创建新的产品事实版本。
 
-任务级问题直接在原开发或审查对话中回答。Codex 使用当前对话继续同一个执行阶段，并在完成后通过 `$codrive-task` 汇报，不把原始聊天内容复制到 Codrive。
+任务级问题可以在原开发或审查对话中回答，也可以通过当前 Slack 待决定消息答复。Codex 在对应原执行继续处理并通过 `$codrive-task` 汇报；原始聊天留在原生会话中。
 
 所有写命令只在 Codrive 返回成功响应后输出 `ok: true` 和 `result`，并以退出码 `0` 结束；HTTP 或 JSON 校验失败时以非零状态退出。读取命令继续直接输出查询结果。
 

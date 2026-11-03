@@ -82,6 +82,7 @@ export function renderBoardClient(accessToken: string): string {
     let taskDetail = null;
     let currentActivity = null;
     let systemSettings = null;
+    let slackSettings = null;
     let projectSettings = null;
     let updateActionError = null;
     let draggedProjectId = null;
@@ -276,13 +277,14 @@ export function renderBoardClient(accessToken: string): string {
           const projectPath = "/api/projects/"+encodeURIComponent(route.projectId);
           requests.push(api(projectPath), api(projectPath+"/settings"));
         }
-        if (route.type === "settings") requests.push(api("/api/system/settings"));
+        if (route.type === "settings") requests.push(api("/api/system/settings"), api("/api/slack"));
         const results = await Promise.all(requests);
         snapshots = results[0];
         archivedSnapshots = results[1].projects;
         productDetail = route.type === "project" ? results[2] : null;
         projectSettings = route.type === "project" ? results[3] : null;
         systemSettings = route.type === "settings" ? results[2] : null;
+        slackSettings = route.type === "settings" ? results[3] : null;
         document.getElementById("offline").style.display = "none";
         if (route.type === "project") selectedProjectId = route.projectId;
         if (route.type === "board" && (!selectedProjectId || ![...snapshots, ...archivedSnapshots].some(snapshot => snapshot.project.id === selectedProjectId))) {
@@ -623,6 +625,7 @@ export function renderBoardClient(accessToken: string): string {
     async function refreshRealtimeScopes() {
       await refreshProjectLists();
       const requests = [refreshSystem()];
+      if (route.type === "settings" && slackSettings) requests.push(refreshSlackConnectionStatus());
       if (route.type !== "settings" && selectedProjectId) {
         requests.push(refreshSelectedProject());
       }
@@ -995,6 +998,7 @@ export function renderBoardClient(accessToken: string): string {
       host.innerHTML =
         '<div class="page-screen settings-screen">'+
           '<header class="settings-header"><a class="eyebrow-link" href="/">← 返回工作区</a><div><h1>运行设置</h1><p>调整后续任务的并发数、模型路由和产品集成。</p></div></header>'+
+          '<div id="slack-settings"></div>'+
           '<section class="integration-card" data-installed="'+String(semanticAtlas.installed)+'">'+
             '<div><span class="integration-kicker">理解层</span><h2>Semantic Atlas</h2><p>在普通任务合入后检查当前可行动候选，并创建独立的业务地图维护任务。</p></div>'+
             (semanticAtlas.installed
@@ -1010,6 +1014,7 @@ export function renderBoardClient(accessToken: string): string {
             '<div class="settings-actions"><button class="primary-button" type="submit">保存并应用</button><span id="settings-status" role="status"></span></div>'+
           '</form>'+
         '</div>';
+      renderSlackSettings();
       const settingsForm = document.getElementById("settings-form");
       modelForm.bind(settingsForm);
       settingsForm.onsubmit = async event => {
@@ -1033,6 +1038,108 @@ export function renderBoardClient(accessToken: string): string {
           status.textContent = error.message;
         }
       };
+    }
+
+    function renderSlackSettings() {
+      const host = document.getElementById("slack-settings");
+      if (!host || !slackSettings) return;
+      const tokenPlaceholder = slackSettings.configured ? "已保存，留空保留" : "首次启用时填写";
+      host.innerHTML =
+        '<section class="settings-form slack-settings-panel" aria-labelledby="slack-settings-title">'+
+          '<header class="slack-settings-header"><div><span class="slack-settings-kicker">消息入口</span><h2 id="slack-settings-title">Slack</h2><p>连接机器人，在私信和项目频道与本机 Codex 交流。</p></div><span id="slack-connection-status" class="slack-connection-status" role="status"></span></header>'+
+          '<p id="slack-connection-error" class="slack-connection-error" role="status" hidden></p>'+
+          '<form id="slack-settings-form" autocomplete="off">'+
+            '<label class="setting-field" for="slack-enabled"><span><b>启用 Slack</b><small>保存会重新连接 Slack，既有开发任务继续按当前状态推进。</small></span><span class="slack-enabled-control"><input id="slack-enabled" name="enabled" type="checkbox" '+(slackSettings.enabled ? 'checked' : '')+'><span>启用机器人连接</span></span></label>'+
+            '<label class="setting-field" for="slack-team-id"><span><b>工作区 ID</b><small>Slack 工作区链接中的 T 开头标识。</small></span><input id="slack-team-id" name="teamId" type="text" autocomplete="off" spellcheck="false" placeholder="T…" value="'+escapeHtml(slackSettings.teamId || '')+'"></label>'+
+            '<label class="setting-field" for="slack-user-id"><span><b>授权用户 ID</b><small>仅处理这位成员的消息；在 Slack 个人档案菜单复制成员 ID。</small></span><input id="slack-user-id" name="authorizedUserId" type="text" autocomplete="off" spellcheck="false" placeholder="U…" value="'+escapeHtml(slackSettings.authorizedUserId || '')+'"></label>'+
+            '<label class="setting-field" for="slack-bot-token"><span><b>Bot Token</b><small>应用安装后的 Bot User OAuth Token，通常以 xoxb- 开头。</small></span><input id="slack-bot-token" name="botToken" type="password" autocomplete="new-password" spellcheck="false" placeholder="'+tokenPlaceholder+'"></label>'+
+            '<label class="setting-field" for="slack-app-token"><span><b>App Token</b><small>带 connections:write 权限的 App-level Token，通常以 xapp- 开头。</small></span><input id="slack-app-token" name="appToken" type="password" autocomplete="new-password" spellcheck="false" placeholder="'+tokenPlaceholder+'"></label>'+
+            '<div class="slack-settings-note"><p>凭据只保存在当前机器的私有配置中，页面始终不回显。同工作区留空保留已保存 Token；首次启用或切换工作区时填写两个 Token。</p><p id="slack-binding-summary"></p></div>'+
+            '<div class="settings-actions"><button class="primary-button" type="submit">保存 Slack 设置</button><button id="slack-refresh-status" class="action-button" type="button">刷新连接状态</button><span id="slack-settings-status" role="status" aria-live="polite"></span></div>'+
+          '</form>'+
+        '</section>';
+      renderSlackConnectionStatus();
+      const form = document.getElementById("slack-settings-form");
+      const enabled = form.elements.namedItem("enabled");
+      const teamId = form.elements.namedItem("teamId");
+      function updateSlackRequirements() {
+        const workspaceChanged = Boolean(slackSettings.teamId && teamId.value.trim() && teamId.value.trim() !== slackSettings.teamId);
+        const needsTokens = workspaceChanged || (enabled.checked && !slackSettings.configured);
+        teamId.required = enabled.checked;
+        form.elements.namedItem("authorizedUserId").required = enabled.checked;
+        form.elements.namedItem("botToken").required = needsTokens;
+        form.elements.namedItem("appToken").required = needsTokens;
+      }
+      enabled.onchange = updateSlackRequirements;
+      teamId.oninput = updateSlackRequirements;
+      updateSlackRequirements();
+      const submit = form.querySelector('button[type="submit"]');
+      const refreshButton = document.getElementById("slack-refresh-status");
+      refreshButton.onclick = async () => {
+        const status = document.getElementById("slack-settings-status");
+        refreshButton.disabled = true;
+        status.textContent = "正在刷新连接状态...";
+        try {
+          await refreshSlackConnectionStatus();
+          updateSlackRequirements();
+          status.textContent = "连接状态已刷新。";
+        } catch (error) {
+          status.textContent = error.message;
+        } finally {
+          refreshButton.disabled = false;
+        }
+      };
+      form.onsubmit = async event => {
+        event.preventDefault();
+        const status = document.getElementById("slack-settings-status");
+        const values = new FormData(form);
+        submit.disabled = true;
+        refreshButton.disabled = true;
+        status.textContent = "正在保存并连接 Slack...";
+        try {
+          slackSettings = await command("slack.configure", {
+            enabled: values.get("enabled") === "on",
+            teamId: String(values.get("teamId") || "").trim(),
+            authorizedUserId: String(values.get("authorizedUserId") || "").trim(),
+            botToken: String(values.get("botToken") || "").trim(),
+            appToken: String(values.get("appToken") || "").trim()
+          });
+          renderSlackSettings();
+          document.getElementById("slack-settings-status").textContent = "Slack 设置已保存。";
+        } catch (error) {
+          status.textContent = error.message === "Slack connection settings are incomplete"
+            ? "首次启用 Slack 时，请填写工作区、授权用户和两个 Token。"
+            : error.message;
+          try {
+            await refreshSlackConnectionStatus();
+            updateSlackRequirements();
+          } catch {
+            const badge = document.getElementById("slack-connection-status");
+            badge.textContent = "状态暂不可读";
+            badge.dataset.state = "pending";
+          }
+        } finally {
+          submit.disabled = false;
+          refreshButton.disabled = false;
+        }
+      };
+    }
+
+    async function refreshSlackConnectionStatus() {
+      slackSettings = await api("/api/slack");
+      renderSlackConnectionStatus();
+    }
+
+    function renderSlackConnectionStatus() {
+      const badge = document.getElementById("slack-connection-status");
+      if (!badge || !slackSettings) return;
+      badge.textContent = slackSettings.connected ? "已连接" : slackSettings.enabled ? "尚未连接" : "未启用";
+      badge.dataset.state = slackSettings.connected ? "connected" : slackSettings.enabled ? "pending" : "disabled";
+      const error = document.getElementById("slack-connection-error");
+      error.textContent = slackSettings.lastError || "";
+      error.hidden = !slackSettings.lastError;
+      const count = slackSettings.projectBindings.length;
+      document.getElementById("slack-binding-summary").textContent = "已绑定 "+count+" 个项目频道。可在机器人私信中说明要绑定的本机项目和频道。";
     }
 
     function renderProductDetail() {

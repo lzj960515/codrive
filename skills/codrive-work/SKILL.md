@@ -1,6 +1,6 @@
 ---
 name: codrive-work
-description: 为已有 Codrive 项目增加或修改里程碑、任务和后续工作，判断归属、授权与生命周期；仅在长期产品事实变化时更新产品文档。用户要求给现有产品加功能、修改任何状态的任务定义、追加工作或开启下一阶段时使用；包括判断 backlog 能否原地修改，以及为已经开始、审查中、完成或取消的任务选择安全后续路径。
+description: 为已有 Codrive 项目增加或修改里程碑、任务和后续工作，判断归属、授权与生命周期；仅在长期产品事实变化时更新产品文档。用户要求给现有产品加功能、修改任务定义、追加工作、登记待调查或修复的客观异常，或开启下一阶段时使用；包括判断 backlog 能否原地修改，以及为已经开始、审查中、完成或取消的任务选择安全后续路径。
 compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
@@ -46,6 +46,35 @@ node <skill-directory>/scripts/codrive-work.mjs show <project-id>
 ```text
 node <skill-directory>/scripts/codrive-work.mjs add <project-id> --json '<work-json>'
 ```
+
+## Slack 来源与巡检委派
+
+普通查询、报告和资料整理在当前会话直接完成。用户要求开发，或巡检按既定要求观察到需要工程处理的异常时，登记已有 Codrive 工作。
+
+从 Slack 会话收到的 `source`、`replyTarget`，或 `$codrive-control` 成功发送巡检事实报告返回的同名字段，原样带入任务；它们与任务在同次命令中保存，保存后才会调度。频道使用实际根消息位置，私信使用原私信位置；项目以后改绑不会改变已有任务的回报位置。
+
+```json
+{
+  "decisionSummary": "巡检观察到登录未达到预期，按既有登录行为委派调查和处理",
+  "tasks": [
+    {
+      "title": "调查登录失败并恢复既有登录能力",
+      "taskDocumentPath": "docs/tasks/调查登录失败.md",
+      "source": { "kind": "codex_native", "requestId": "<报告回执的请求身份>" },
+      "replyTarget": {
+        "kind": "slack",
+        "teamId": "<报告回执的工作区>",
+        "channelId": "<报告回执的频道>",
+        "threadTs": "<报告回执的根消息位置>"
+      }
+    }
+  ]
+}
+```
+
+任务文档如实保留检查操作、预期、实际结果和直接证据。巡检的发现可以直接作为“调查并恢复既有能力”的工作目标，原因未知不妨碍登记；根因核实和修复交给开发执行者。恢复既有明确行为沿项目已有授权推进；已授权自动上线的明确 Bug，将修复、验证、审查、合入、发布和线上核实写入同一任务的完成目标，需要用户看效果时写明合入前的候选预览与确认。新增业务结果仍按本 Skill 的授权边界处理。
+
+重试同次登记时复用 `source.requestId`、原任务文档和回复位置，以服务端回执确认实际接受的任务。已经发出的事实消息不重复发送，成功登记的任务不再另开一份。服务根据任务事实发送后续决定请求与交付结果，登记会话完成交接即可。
 
 ## 创建里程碑
 

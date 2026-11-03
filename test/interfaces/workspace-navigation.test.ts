@@ -26,6 +26,9 @@ class OutputElement {
   textContent = "";
   scrollTop = 0;
   hidden = false;
+  value = "";
+  checked = false;
+  dataset: Record<string, string> = {};
   style: Record<string, string> = {};
   attributes = new Map<string, string>();
   classes = new Set<string>();
@@ -38,6 +41,7 @@ class OutputElement {
   elements?: { namedItem(name: string): OutputElement };
   setAttribute(name: string, value: string) { this.attributes.set(name, value); }
   querySelector(selector: string): OutputElement | null {
+    if (selector === 'button[type="submit"]') return new OutputElement();
     return selector === "[data-project-info]" ? this : null;
   }
   querySelectorAll() { return []; }
@@ -52,9 +56,14 @@ function client(search: string, snapshot = archived, pathname = "/") {
     return elements.get(id)!;
   };
   element("settings-form").elements = { namedItem: element };
+  element("slack-settings-form").elements = { namedItem: element };
   const body = new OutputElement();
   let location = "/" + search;
   const responses: Record<string, unknown> = {
+    "/api/slack": {
+      enabled: false, configured: false, connected: false,
+      teamId: null, authorizedUserId: null, projectBindings: [], lastError: null,
+    },
     "/api/system/settings": {
       settings: { maxConcurrentTasks: 2, models: { primary: "primary", fallback: "fallback" } },
       availableModels: [],

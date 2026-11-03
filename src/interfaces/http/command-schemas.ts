@@ -2,11 +2,25 @@ import { z } from "zod";
 
 import { hasProductFacts } from "../../domain/product-facts.js";
 
+const workSourceSchema = z.object({
+  kind: z.enum(["slack", "codex_native"]),
+  requestId: z.string().trim().min(1),
+}).strict();
+
+const slackReplyTargetSchema = z.object({
+  kind: z.literal("slack"),
+  teamId: z.string().trim().min(1),
+  channelId: z.string().trim().min(1),
+  threadTs: z.string().trim().min(1).optional(),
+}).strict();
+
 const taskInputSchema = z.object({
   milestoneId: z.string().min(1).optional(),
   title: z.string().min(1),
   taskDocumentPath: z.string().trim().min(1),
   order: z.number().int().positive().optional(),
+  source: workSourceSchema.optional(),
+  replyTarget: slackReplyTargetSchema.optional(),
 }).strict();
 
 const milestoneDefinitionSchema = z.object({
@@ -28,8 +42,7 @@ const projectInputSchema = z.object({
     .refine(hasProductFacts, "PROJECT.md must contain product facts"),
   tasks: z.array(taskInputSchema),
   milestones: z.array(milestoneInputSchema).optional(),
-}).refine(({ tasks, milestones }) => tasks.length > 0 || (milestones?.length ?? 0) > 0,
-  "Provide initial tasks or a milestone");
+});
 
 const taskReportSchema = z.object({
   taskId: z.string().min(1),

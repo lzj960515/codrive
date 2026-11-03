@@ -46,7 +46,19 @@ codrive
 
 Continue in conversation to add work, adjust plans, check progress, or pause scheduling.
 
+**Installing on a Mac mini:** give the AI on that machine the [Mac mini installation and acceptance guide](./docs/operations/mac-mini-install.md). It covers Codex readiness, installation, startup, Slack configuration, and verification. Slack support requires Codrive **0.15.0+**. If setup reports pending Hook review, review `/hooks` in Codex and rerun `codrive doctor`.
+
 When a decision is needed, choose **Reply here** on the board to send your answer to the original conversation. The dialog closes after a successful send and execution continues. The adjacent conversation link remains available for the full context.
+
+## Slack
+
+Message the bot directly for general conversation, or bind a project channel and send ordinary messages without mentioning it. Each new channel message starts a conversation; replies stay in its thread. Ordinary requests are handled directly, while engineering work uses Codrive's existing development, independent review, and delivery workflow.
+
+[Slack setup and Mac operation](./docs/operations/slack.md) covers the app manifest, private token configuration, project binding, and Codex-native scheduled reports. Scheduled inspections report observed facts first and register follow-up work with that message as the reply destination.
+
+Open **Runtime settings → Slack** on the local board to enter the workspace ID, authorized member ID, Bot `xoxb-…` Token, and Socket Mode `xapp-…` Token. Enable Slack and save to connect. Tokens stay in the local `~/.codrive/config.json` with mode `0600`; they are never returned to the settings form or embedded in source. Blank token fields preserve saved values for the same workspace. The guide also provides private-file configuration for an AI installer.
+
+Use `/models` to discover models, `/model` to switch, and `/state` to inspect a conversation. Images and other files can be received and generated files sent back to the originating thread.
 
 ## Everyday commands
 
