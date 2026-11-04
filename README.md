@@ -58,7 +58,7 @@ Message the bot directly for general conversation, or bind a project channel and
 
 Open **Runtime settings → Slack** on the local board to enter the workspace ID, authorized member ID, Bot `xoxb-…` Token, and Socket Mode `xapp-…` Token. Enable Slack and save to connect. Tokens stay in the local `~/.codrive/config.json` with mode `0600`; they are never returned to the settings form or embedded in source. Blank token fields preserve saved values for the same workspace. The guide also provides private-file configuration for an AI installer.
 
-Use `/models` to discover models, `/model` to switch, and `/state` to inspect a conversation. Images and other files can be received and generated files sent back to the originating thread.
+Use `/new` to start a fresh direct-message conversation, `/models` to discover models, `/model` to switch, and `/state` to inspect a conversation. Direct messages use a dedicated working directory and receive separate local-workspace and Codrive-product catalogs. Project details show the bound Slack channel. Images and other files can be received and generated files sent back to the originating thread.
 
 Starting with **0.16.0**, ask the bot to create a project channel, invite you, and bind it through the Slack API. The manifest includes `channels:manage` for public channels and `groups:write` for private channels; reinstall existing apps after adding these scopes. Project discovery checks saved local workspace names and real directories, while `/state` shows the current working directory.
 

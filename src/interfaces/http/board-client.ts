@@ -1179,6 +1179,7 @@ export function renderBoardClient(accessToken: string): string {
             '</div>'+
             '<aside class="product-rail">'+
               (project.planningThreadId ? '<a class="planning-conversation-link" href="codex://threads/'+escapeHtml(project.planningThreadId)+'"><span>项目调度</span><b>打开调度对话 ↗</b></a>' : '')+
+              '<section class="product-panel compact"><div class="panel-heading"><span>Slack 频道</span></div><p id="project-slack-binding" class="project-slack-binding" role="status">正在读取频道绑定…</p></section>'+
               '<section class="product-panel compact project-model-panel"><div class="panel-heading"><span>项目模型</span><b>'+escapeHtml(inheritsGlobalModels ? "继承全局" : "项目专用")+'</b></div>'+
                 '<form id="project-model-form" class="project-model-form">'+
                   '<label class="project-model-inherit"><input name="inheritGlobal" type="checkbox" '+(inheritsGlobalModels ? 'checked' : '')+'><span><b>继承全局设置</b><small>'+escapeHtml(modelForm.describe(globalModels, "primary"))+' / '+escapeHtml(modelForm.describe(globalModels, "fallback"))+'</small></span></label>'+
@@ -1221,6 +1222,28 @@ export function renderBoardClient(accessToken: string): string {
           status.textContent = error.message;
         }
       };
+      void refreshProjectSlackBinding(project.id);
+    }
+
+    async function refreshProjectSlackBinding(projectId) {
+      const host = document.getElementById("project-slack-binding");
+      if (!host) return;
+      try {
+        const { binding, channel, teamId } = await api("/api/projects/"+encodeURIComponent(projectId)+"/slack");
+        if (!binding) {
+          host.textContent = "此项目尚未绑定 Slack 频道";
+          return;
+        }
+        const channelLabel = channel?.name ? "#"+channel.name : binding.channelId;
+        if (!teamId) {
+          host.textContent = channelLabel;
+          return;
+        }
+        const channelHref = "https://app.slack.com/client/"+encodeURIComponent(teamId)+"/"+encodeURIComponent(binding.channelId);
+        host.innerHTML = '<a href="'+escapeHtml(channelHref)+'" target="_blank" rel="noreferrer">'+escapeHtml(channelLabel)+' ↗</a>';
+      } catch {
+        host.textContent = "暂时无法读取 Slack 频道绑定。";
+      }
     }
 
     function renderMarkdown(markdown) {

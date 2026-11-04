@@ -516,6 +516,8 @@ export const boardStyles = `
   .product-main, .product-rail { display: grid; align-content: start; gap: 16px; }
   .product-panel { padding: 24px; background: rgba(255,255,255,.93); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 8px 28px rgba(18,31,26,.055); }
   .product-panel.compact { padding: 19px; }
+  .project-slack-binding { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+  .project-slack-binding a { color: var(--signal); font-weight: 700; }
   .panel-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 18px; font: 900 10px/1 var(--condensed); letter-spacing: .12em; text-transform: uppercase; }
   .panel-heading b { color: var(--muted); font-size: 9px; }
   .planning-panel { color: #674b22; background: linear-gradient(135deg, #fff8e9, #fffdf5); border-color: #ecd5a2; }

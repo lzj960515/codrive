@@ -5,6 +5,12 @@ export interface SlackProjectBinding {
   channelId: string;
 }
 
+export interface SlackProjectBindingStatus {
+  binding: SlackProjectBinding | null;
+  channel: SlackChannel | null;
+  teamId: string | null;
+}
+
 export interface SlackConfig {
   enabled: boolean;
   teamId: string;
@@ -115,6 +121,16 @@ export interface SlackStatusControls {
   read(context: SlackStatusContext): Promise<SlackStatusView>;
 }
 
+export interface SlackConversationContext {
+  teamId: string;
+  userId: string;
+  channelId: string;
+}
+
+export interface SlackConversationControls {
+  startNew(context: SlackConversationContext): Promise<void>;
+}
+
 export interface SlackProgress {
   id: string;
   title: string;
@@ -141,7 +157,7 @@ export class SlackDeliveryError extends Error {
 }
 
 export interface SlackTransport {
-  start(onMessage: (message: SlackIncomingMessage) => Promise<void>, modelControls: SlackModelControls, statusControls: SlackStatusControls): Promise<void>;
+  start(onMessage: (message: SlackIncomingMessage) => Promise<void>, modelControls: SlackModelControls, statusControls: SlackStatusControls, conversationControls: SlackConversationControls): Promise<void>;
   stop(): Promise<void>;
   sendMessage(target: SlackReplyTarget, markdown: string, resume?: SlackSendProgress): Promise<{ messageTs: string }>;
   getChannel(id: string): Promise<SlackChannel>;

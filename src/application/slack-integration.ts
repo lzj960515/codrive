@@ -9,6 +9,7 @@ import {
   type SlackCreateProjectChannelInput,
   type SlackIncomingMessage,
   type SlackProjectBinding,
+  type SlackProjectBindingStatus,
   type SlackProjectChannelFailure,
   type SlackProjectChannelResult,
   type SlackTransport,
@@ -25,6 +26,7 @@ import { SlackModelCommands } from "./slack-model-commands.js";
 import { SlackStatus } from "./slack-status.js";
 import type { CodexThreadStatusReader } from "./codex-gateway.js";
 import type { SystemSettingsService } from "./system-settings-service.js";
+import type { LocalProjectCatalog } from "../domain/local-projects.js";
 
 interface SlackIntegrationOptions {
   configStore: ConfigStore;
@@ -32,6 +34,7 @@ interface SlackIntegrationOptions {
   projects: ProjectStore;
   state: SlackStateStore;
   codex: SlackCodexGateway & CodexThreadStatusReader;
+  localProjects: LocalProjectCatalog;
   createTransport(config: SlackConfig): SlackTransport;
   onError(error: unknown): void;
 }
@@ -56,7 +59,7 @@ interface SlackReportInput {
 /** 统一拥有 Slack 连接、普通会话、业务通知与发送恢复的生命周期。 */
 export class SlackIntegration {
   private runtime: SlackRuntime | null = null;
-  private lastError: string | null = null;
+  private lastConnectionError: string | null = null;
   private lifecycle: Promise<void> = Promise.resolve();
   private retryTimer: ReturnType<typeof setInterval> | null = null;
   private flushing: Promise<void> | null = null;
@@ -87,7 +90,7 @@ export class SlackIntegration {
     return {
       ...await this.options.settings.readSlack(),
       connected: this.runtime?.connected ?? false,
-      lastError: this.lastError,
+      lastError: this.lastConnectionError,
     };
   }
 
@@ -95,7 +98,7 @@ export class SlackIntegration {
     return this.changeLifecycle(async () => {
       await this.options.settings.configureSlack(input);
       await this.disconnect();
-      this.lastError = null;
+      this.lastConnectionError = null;
       const { slack } = await this.options.configStore.read();
       // 显式配置请求必须得到真实连接结果，失败由 HTTP 调用方处理。
       if (slack?.enabled) await this.connect(slack);
@@ -179,6 +182,26 @@ export class SlackIntegration {
 
   async listChannels() {
     return this.requireConnection().transport.listChannels();
+  }
+
+  readLocalProjects() {
+    return this.options.localProjects.read();
+  }
+
+  async readProjectBinding(projectId: string): Promise<SlackProjectBindingStatus> {
+    const { slack } = await this.options.configStore.read();
+    const binding = slack?.projectBindings.find((entry) => entry.projectId === projectId) ?? null;
+    const runtime = this.runtime;
+    let channel: SlackChannel | null = null;
+    if (binding && runtime?.connected) {
+      try {
+        channel = await runtime.transport.getChannel(binding.channelId);
+      } catch (error) {
+        // 频道详情暂不可读时，仍展示已保存的绑定身份。
+        this.recordError(error, runtime.config);
+      }
+    }
+    return { binding, channel, teamId: slack?.teamId ?? null };
   }
 
   async sendFile(input: { replyTarget: SlackReplyTarget; filePath: string; title?: string; comment?: string }) {
@@ -307,6 +330,7 @@ export class SlackIntegration {
       const assistant = new SlackAssistant({
         configStore: this.options.configStore, projects: this.options.projects,
         state: this.options.state, codex: this.options.codex, transport, deliveries,
+        localProjects: this.options.localProjects,
         pendingDecisions: (target) => notifications.pendingDecisions(target), onError,
       });
       const runtime: SlackRuntime = {
@@ -325,11 +349,15 @@ export class SlackIntegration {
         select: (context, modelId, expectedScopeId) => this.receiveControl(runtime, ready, () => modelCommands.select(context, modelId, expectedScopeId)),
       }, {
         read: (context) => this.receiveControl(runtime, ready, () => status.read(context)),
+      }, {
+        startNew: (context) => this.receiveControl(runtime, ready, async () => {
+          await assistant.startNewConversation(context);
+        }),
       });
       await assistant.start();
       await notifications.start();
       runtime.connected = true;
-      this.lastError = null;
+      this.lastConnectionError = null;
       releaseMessages();
       await this.flushPending(runtime);
       this.retryTimer = setInterval(() => {
@@ -341,7 +369,9 @@ export class SlackIntegration {
       releaseMessages();
       if (this.runtime) await this.disconnect().catch((cleanupError: unknown) => this.recordError(cleanupError, config));
       else if (transport) await transport.stop().catch((cleanupError: unknown) => this.recordError(cleanupError, config));
-      throw this.recordError(error, config);
+      const failure = this.recordError(error, config);
+      this.lastConnectionError = failure.message;
+      throw failure;
     }
   }
 
@@ -450,7 +480,6 @@ export class SlackIntegration {
       if (secret) message = message.split(secret).join("[已隐藏]");
     }
     const safe = new Error(message);
-    this.lastError = message;
     this.options.onError(safe);
     return safe;
   }

@@ -1,9 +1,13 @@
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+
 import type { CodexGateway, CodexTurnSnapshot } from "./codex-gateway.js";
 import type { DecisionReplyTarget } from "../domain/decision-reply.js";
-import type { SlackIncomingMessage, SlackReplyStream, SlackTransport } from "../domain/slack.js";
+import type { SlackConversationContext, SlackIncomingMessage, SlackReplyStream, SlackTransport } from "../domain/slack.js";
 import type { SlackConversation, SlackInputReceipt, SlackDeliveryRecord } from "../domain/slack-state.js";
 import type { SlackReplyTarget } from "../domain/work-source.js";
 import type { Project } from "../domain/types.js";
+import type { LocalProjectCatalog, LocalProjectList } from "../domain/local-projects.js";
 import { SlackDeliveryError } from "../domain/slack.js";
 import { WorkflowConflictError } from "../domain/errors.js";
 import type { ConfigStore } from "../infrastructure/config-store.js";
@@ -30,6 +34,7 @@ export interface SlackPendingDecision extends DecisionReplyTarget {
 interface SlackAssistantOptions {
   configStore: ConfigStore;
   projects: ProjectStore;
+  localProjects: LocalProjectCatalog;
   state: SlackStateStore;
   codex: SlackCodexGateway;
   transport: SlackTransport;
@@ -84,9 +89,56 @@ export class SlackAssistant {
 
   receive(message: SlackIncomingMessage): Promise<void> {
     // 收件身份先串行确认，模型执行仍按各会话独立推进。
-    const accepted = this.receiving.catch(() => undefined).then(() => this.accept(message));
-    this.receiving = accepted;
-    return accepted;
+    return this.serializeInput(() => this.accept(message));
+  }
+
+  startNewConversation(context: SlackConversationContext): Promise<SlackConversation> {
+    return this.serializeInput(() => this.createNewConversation(context));
+  }
+
+  private serializeInput<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.receiving.then(operation);
+    this.receiving = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async createNewConversation(context: SlackConversationContext): Promise<SlackConversation> {
+    if (this.stopping) throw new WorkflowConflictError("Slack 助理正在停止，请稍后重试。");
+    const config = await this.options.configStore.read();
+    const slack = config.slack;
+    if (!slack?.enabled || slack.teamId !== context.teamId || slack.authorizedUserId !== context.userId) {
+      throw new WorkflowConflictError("当前 Slack 身份没有创建新会话的权限。");
+    }
+    if (!context.channelId.startsWith("D")) throw new WorkflowConflictError("请在机器人私信中创建新会话，项目频道的新根消息本身就是新会话。");
+    const id = `${context.teamId}:${context.channelId}:direct`;
+    const inputs = await this.options.state.listInputs();
+    if (this.queues.has(id) || inputs.some((input) => input.conversationId === id && ["pending", "running"].includes(input.status))) {
+      throw new WorkflowConflictError("当前私信仍有待处理或执行中的消息，请等本轮结束后再新建会话。");
+    }
+    const previous = await this.options.state.getConversation(id);
+    if (previous && await this.options.codex.isThreadActive(previous.codexThreadId)) {
+      throw new WorkflowConflictError("当前私信的原生会话仍在运行，请待其结束后再新建会话。");
+    }
+    const cwd = await this.assistantDirectory(config.stateDirectory);
+    const codexThreadId = await this.options.codex.startThread(cwd, "[Slack] 新的私信会话");
+    const now = new Date().toISOString();
+    const conversation: SlackConversation = {
+      id,
+      conversationType: "direct_message",
+      teamId: context.teamId,
+      channelId: context.channelId,
+      codexThreadId,
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now,
+    };
+    await this.options.state.saveConversation(conversation);
+    return conversation;
+  }
+
+  private async assistantDirectory(stateDirectory: string): Promise<string> {
+    const directory = join(stateDirectory, "assistant");
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    return directory;
   }
 
   private async accept(message: SlackIncomingMessage): Promise<void> {
@@ -100,7 +152,7 @@ export class SlackAssistant {
     if (message.channelType !== "im" && !binding && !conversation) return;
     if (await this.options.state.getInput(message.eventId)) return;
 
-    const projectId = conversation?.projectId ?? (message.channelType === "im" ? undefined : binding?.projectId);
+    const projectId = message.channelType === "im" ? undefined : conversation?.projectId ?? binding?.projectId;
     const { files, ...storedMessage } = message;
     const now = new Date().toISOString();
     const receipt: SlackInputReceipt = {
@@ -149,14 +201,14 @@ export class SlackAssistant {
     try {
       const config = await this.options.configStore.read();
       const frozenConversation = await this.options.state.getConversation(receipt.conversationId);
-      if (frozenConversation) {
+      if (frozenConversation || receipt.message.channelType === "im") {
         receipt = { ...receipt };
-        if (frozenConversation.projectId) receipt.projectId = frozenConversation.projectId;
+        if (receipt.message.channelType !== "im" && frozenConversation?.projectId) receipt.projectId = frozenConversation.projectId;
         else delete receipt.projectId;
       }
       const snapshot = receipt.projectId ? await this.options.projects.getProject(receipt.projectId) : null;
       if (receipt.projectId && !snapshot) throw new WorkflowConflictError("本次会话的项目已不可用，请检查项目登记。");
-      const cwd = snapshot?.project.repositoryPath ?? config.stateDirectory;
+      const cwd = snapshot?.project.repositoryPath ?? await this.assistantDirectory(config.stateDirectory);
       const conversation = await this.openConversation(receipt, cwd);
       threadId = conversation.codexThreadId;
       if (await this.options.codex.isThreadActive(threadId)) {
@@ -242,19 +294,34 @@ export class SlackAssistant {
   }
 
   private async messagePrompt(receipt: SlackInputReceipt, workingDirectory: string, project: Project | undefined): Promise<string> {
+    const globalProjects = project ? undefined : {
+      localProjects: await this.readLocalProjects(),
+      codriveProjects: await this.options.projects.listProjectIdentities(),
+    };
     const context = {
       projectId: receipt.projectId ?? null,
       projectName: project?.name ?? null,
       repositoryPath: project?.repositoryPath ?? null,
       workingDirectory,
+      ...globalProjects,
       source: { kind: "slack", requestId: receipt.id },
       replyTarget: receipt.target,
       pendingDecisions: await this.options.pendingDecisions(receipt.target),
     };
     return `${receipt.message.text}\n\n本条 Slack 输入的运行上下文：\n${JSON.stringify(context)}\n\n` +
-      "按用户请求正常办理。workingDirectory 是本轮执行目录；projectId 为空时属于全局私信，具体项目以用户指定的本机工作空间或目录为准。" +
-      "配置项目频道时使用 $codrive-control 核实目标身份并通过 Slack API 办理。需要登记工程工作时使用现有 $codrive-work，把这里的 source 和 replyTarget 原样附到本次任务。" +
+      "按用户请求正常办理。workingDirectory 是本轮执行目录；projectId 为空时属于全局私信。localProjects 是 Codex 保存的本机工作空间目录线索，codriveProjects 是产品登记；同一目录可以承载不同产品。" +
+      "按用户指定名称和目录核实目标；确定工作空间后读取其中 AGENTS.md、README 和所需本地 Skills，以当前目录文档确认身份和本地能力，再选择对应的产品登记。" +
+      "查询或操作 Codrive 项目、状态和频道绑定时使用 $codrive-control 的命令，创建频道通过 Slack API 办理。需要登记工程工作时使用现有 $codrive-work，把这里的 source 和 replyTarget 原样附到本次任务。" +
       "用户明确回答当前待决定问题时，使用 $codrive-control 的 reply-decision 提交对应身份；其他输入继续普通交流。";
+  }
+
+  private async readLocalProjects(): Promise<LocalProjectList> {
+    try {
+      return await this.options.localProjects.read();
+    } catch (error) {
+      this.options.onError(error);
+      return { available: false, projects: [], reason: "本机保存目录暂不可用，按用户提供的目录继续核实。" };
+    }
   }
 
   private async openReply(receipt: SlackInputReceipt): Promise<SlackReplyStream> {

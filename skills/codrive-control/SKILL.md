@@ -23,7 +23,7 @@ node <skill-directory>/scripts/codrive-control.mjs milestone <milestone-id>
 
 项目的 `attention` 只表达需要处理的异常状态：`decision_requested` 表示需要在对应 Codex App 对话中作出决定，`blocked` 表示项目存在确定阻塞。没有 `attention` 时，项目按当前任务和规划状态正常推进。
 
-`local-projects` 只读当前机器 Codex 桌面端保存的工作空间名称和根目录，使用 `CODEX_HOME` 或默认 Codex 目录。它与 `board` 中的产品登记分别核实：一个工作空间可以包含多个产品，同一个目录也可以对应不同的 Codrive 产品。记录不可用时返回 `available: false`，继续核实用户给定的真实目录；桌面保存数据只提供定位线索，目标目录中的 README、AGENTS 和用户意图决定实际身份。
+`local-projects` 通过本机 Codrive 服务只读 Codex 桌面端保存的工作空间名称和根目录，与普通私信使用同一目录来源。它与 `board` 中的产品登记分别核实：一个工作空间可以包含多个产品，同一个目录也可以对应不同的 Codrive 产品。记录不可用时返回 `available: false`，继续核实用户给定的真实目录；桌面保存数据只提供定位线索，目标目录中的 README、AGENTS 和用户意图决定实际身份。
 
 ## Slack 接入与报告
 
@@ -84,7 +84,7 @@ node <skill-directory>/scripts/codrive-control.mjs slack-send-file --json '<file
 
 直接私信的 `replyTarget` 可以没有 `threadTs`。以成功回执中的实际文件 `id` 和可用的 `permalink` 为交付依据。文件上传失败时报告失败，重试前核实已有回执，保持开发结果独立；该命令没有报告发送的持久自动补送语义。
 
-Slack 内置 `/models` 列出当前可切换的主模型及当前、备用模型；`/model` 提供当前作用范围的模型选择，私信修改全局默认、绑定频道修改项目，下一回合生效。`/state` 查看作用范围、实际工作目录、模型、推理强度、权限和用量；频道内选择明确会话，或从消息菜单执行「查看 Codrive 状态」。缺少实际用量时显示暂无，窗口余量有数据时注明估算。
+Slack 内置 `/new` 在私信中开启新会话；频道的新根消息自然使用新会话。`/models` 列出当前可切换的主模型及当前、备用模型；`/model` 提供当前作用范围的模型选择，私信修改全局默认、绑定频道修改项目，下一回合生效。`/state` 查看作用范围、实际工作目录、模型、推理强度、权限和用量；频道内选择明确会话，或从消息菜单执行「查看 Codrive 状态」。缺少实际用量时显示暂无，窗口余量有数据时注明估算。
 
 当前任务或项目确实存在待决定问题时，原样使用服务返回的 `scope`、对象 `id` 和 `reportOpportunityId`：
 

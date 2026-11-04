@@ -9,7 +9,7 @@ import type { CodexThreadStatusReader } from "../../src/application/codex-gatewa
 import { SlackIntegration } from "../../src/application/slack-integration.js";
 import { SystemSettingsService } from "../../src/application/system-settings-service.js";
 import { WorkflowEngine } from "../../src/application/workflow-engine.js";
-import type { SlackChannel, SlackConfigureInput, SlackIncomingMessage, SlackReplyStream, SlackTransport } from "../../src/domain/slack.js";
+import type { SlackChannel, SlackConfigureInput, SlackIncomingMessage, SlackReplyStream, SlackTransport, SlackModelControls } from "../../src/domain/slack.js";
 import type { SlackReplyTarget, WorkSource } from "../../src/domain/work-source.js";
 import { ConfigStore } from "../../src/infrastructure/config-store.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
@@ -38,9 +38,11 @@ class TestSlack implements SlackTransport {
   sendError: Error | null = null;
   sendCompletion: Promise<void> | null = null;
   stopped = false;
+  models!: SlackModelControls;
 
-  async start(_onMessage: (message: SlackIncomingMessage) => Promise<void>): Promise<void> {
+  async start(_onMessage: (message: SlackIncomingMessage) => Promise<void>, models: SlackModelControls): Promise<void> {
     if (this.connectionError) throw this.connectionError;
+    this.models = models;
   }
 
   async stop(): Promise<void> { this.stopped = true; }
@@ -136,6 +138,7 @@ describe("SlackIntegration", () => {
   function createIntegration() {
     return new SlackIntegration({
       configStore, projects, settings, state, codex,
+      localProjects: { read: async () => ({ available: true, projects: [] }) },
       createTransport: () => slack,
       onError: (error) => errors.push(error),
     });
@@ -196,6 +199,23 @@ describe("SlackIntegration", () => {
     ]) await expect(integration.bind(input)).rejects.toThrow();
     expect((await integration.readStatus()).projectBindings).toEqual([binding]);
     expect((await projects.getProject(projectId))?.tasks).toEqual([]);
+  });
+
+  it("keeps an unbound-channel command failure separate from the connection status", async () => {
+    await integration.configure(credentials);
+    await expect(slack.models.read({ teamId: credentials.teamId, userId: credentials.authorizedUserId, channelId: "C_unbound" })).rejects.toThrow("尚未绑定");
+    expect(await integration.readStatus()).toMatchObject({ connected: true, lastError: null });
+  });
+
+  it("reads each project's own binding and preserves it when channel metadata is unavailable", async () => {
+    await connectAndBind();
+    expect(await integration.readProjectBinding(otherProjectId)).toEqual({ binding: null, channel: null, teamId: credentials.teamId });
+    expect(await integration.readProjectBinding(projectId)).toEqual({ binding: { projectId, channelId: "C_original" }, channel: slack.channels.get("C_original"), teamId: credentials.teamId });
+    slack.channels.delete("C_original");
+    expect(await integration.readProjectBinding(projectId)).toEqual({ binding: { projectId, channelId: "C_original" }, channel: null, teamId: credentials.teamId });
+    expect(await integration.readStatus()).toMatchObject({ connected: true, lastError: null });
+    await integration.stop();
+    expect(await integration.readProjectBinding(projectId)).toEqual({ binding: { projectId, channelId: "C_original" }, channel: null, teamId: credentials.teamId });
   });
 
   it("creates the project channel, invites the configured owner and saves the actual binding", async () => {

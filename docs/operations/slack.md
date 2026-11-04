@@ -48,6 +48,9 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   slash_commands:
+    - command: /new
+      description: 在私信中开启一个全新的会话
+      should_escape: false
     - command: /model
       description: 查看或切换当前项目使用的模型
       usage_hint: '[model-id]'
@@ -140,7 +143,9 @@ node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" slack-st
 
 已有 Codrive 项目可以直接绑定。仅准备查询数据或接收报告的新项目，可以先用 `codrive-forge` 登记产品事实、仓库目录和默认分支，传入 `tasks: []` 并省略 `milestones`；它不会因此生成开发目标。需要工程工作时再用 `codrive-work` 追加任务。
 
-私信是全局会话，执行目录为本机 Codrive 状态目录；它不会自动继承桌面当前打开的工作空间。`/state` 显示真实工作目录和作用范围。定位具体项目时，机器人读取 Codex 已保存的工作空间名称与根目录，并核实目标目录中的 README、AGENTS，再对照 Codrive 产品登记。同目录里的不同产品分别保留身份，例如工作空间 `pietra-ai-workspace` 与产品 `Pietra Social / Pulse`。只有对应工作空间尚未登记时，才为它登记空任务项目。
+私信是全局会话，使用独立的 `~/.codrive/assistant` 作为工作目录；自定义 `CODEDRIVE_HOME` 时使用该目录下的 `assistant/`。每轮获得分开的本机工作空间目录与 Codrive 产品登记，定位目标后再读取对应 README、AGENTS 和本地 Skills；涉及 Codrive 项目管理时使用现有控制命令。同目录里的不同产品分别保留身份，例如工作空间 `pietra-ai-workspace` 与产品 `Pietra Social / Pulse`。只有对应工作空间尚未登记时，才为它登记空任务项目。
+
+项目资料中的 **Slack 频道** 显示该项目实际保存的绑定和频道链接；未绑定时显示“此项目尚未绑定 Slack 频道”。运行设置只展示连接生命周期的错误，单次频道命令被拒绝时在原命令中说明。
 
 可以直接私信机器人：
 
@@ -165,6 +170,8 @@ node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" slack-cr
 绑定后，在项目频道直接发一条文字消息。机器人在这条消息下面的讨论串回复；在串内追问会继续同一会话，频道内另一条新的根消息建立另一个会话。私信保持全局交流，你可以在其中查询整体情况、管理绑定或明确指定项目办事。
 
 ## Slack 命令与文件传输
+
+`/new` 在机器人私信中开启新的原生会话，后续消息从新上下文开始，旧原生会话仍保留。当前私信有待处理或运行中的消息时先等其结束。频道里每条新的根消息已经是独立会话，直接发新消息即可。
 
 `/models` 列出本机 Codex 当前目录中可切换的主模型，给出模型名称和 ID，标明当前模型与备用模型。列表仅本人可见；私信按全局默认、绑定频道按项目显示。
 

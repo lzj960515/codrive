@@ -15,6 +15,11 @@
     },
     "slash_commands": [
       {
+        "command": "/new",
+        "description": "在私信中开启一个全新的会话",
+        "should_escape": false
+      },
+      {
         "command": "/model",
         "description": "查看或切换当前项目使用的模型",
         "usage_hint": "[model-id]",

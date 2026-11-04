@@ -1,4 +1,5 @@
 import { createContext, runInContext } from "node:vm";
+import { setImmediate as settleRequests } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { renderBoardClient } from "../../src/interfaces/http/board-client.js";
 
@@ -38,7 +39,7 @@ class OutputElement {
     contains: (name: string) => this.classes.has(name),
   };
   onclick: (() => void) | null = null;
-  elements?: { namedItem(name: string): OutputElement };
+  elements?: { namedItem(name: string): OutputElement; inheritGlobal?: OutputElement };
   setAttribute(name: string, value: string) { this.attributes.set(name, value); }
   querySelector(selector: string): OutputElement | null {
     if (selector === 'button[type="submit"]') return new OutputElement();
@@ -57,6 +58,7 @@ function client(search: string, snapshot = archived, pathname = "/") {
   };
   element("settings-form").elements = { namedItem: element };
   element("slack-settings-form").elements = { namedItem: element };
+  element("project-model-form").elements = { namedItem: element, inheritGlobal: element("inheritGlobal") };
   const body = new OutputElement();
   let location = "/" + search;
   const responses: Record<string, unknown> = {
@@ -72,6 +74,18 @@ function client(search: string, snapshot = archived, pathname = "/") {
     "/api/board": [],
     "/api/board/archived": { projects: [snapshot] },
     "/api/board/projects/archived": snapshot,
+    "/api/projects/archived": {
+      project: {
+        ...snapshot.project, repositoryPath: "/projects/greeting", defaultBranch: "main",
+        productFacts: { status: "current", revision: 1 },
+      },
+      productDocument: "# 问候产品\n显示问候页面。", attention: null,
+    },
+    "/api/projects/archived/settings": {
+      settings: { source: "global", modelConfig: null, effectiveModels: { primary: "primary", fallback: "fallback" } },
+      globalModels: { primary: "primary", fallback: "fallback" }, availableModels: [],
+    },
+    "/api/projects/archived/slack": { binding: null, channel: null, teamId: "T_WORKSPACE" },
     "/api/tasks/task": { task, activities: [], currentDecisionRequest: null },
   };
   const context = createContext({
@@ -89,13 +103,14 @@ function client(search: string, snapshot = archived, pathname = "/") {
     io: () => ({ connected: false, on() {} }),
     fetch: async (path: string) => {
       if (!(path in responses)) throw new Error("Unexpected request: " + path);
+      if (responses[path] instanceof Error) throw responses[path];
       return { ok: true, json: async () => responses[path] };
     },
   });
   const script = renderBoardClient("test").slice("<script>".length).replace(/<\/script>$/, "");
   const startup = script.lastIndexOf("    void (async () => {");
   runInContext(script.slice(0, startup), context);
-  return { element, body, location: () => location, run: (code: string) => runInContext(code, context) };
+  return { element, body, responses, location: () => location, run: (code: string) => runInContext(code, context) };
 }
 
 describe("workspace navigation", () => {
@@ -175,6 +190,61 @@ describe("workspace navigation", () => {
     expect(content).toContain('name="maxConcurrentTasks"');
     expect(content).toContain('name="primary"');
     expect(content).toContain('name="fallback"');
+    expect(page.element("offline").style.display).toBe("none");
+  });
+
+  it("shows the project document before its Slack channel loads and links the named channel", async () => {
+    const page = client("", archived, "/projects/archived");
+    let deliverChannel!: (value: unknown) => void;
+    page.responses["/api/projects/archived/slack"] = new Promise(resolve => { deliverChannel = resolve; });
+
+    await page.run("refresh()");
+    expect(page.element("project").innerHTML).toContain("<h1>问候产品</h1>");
+    expect(page.element("offline").style.display).toBe("none");
+    deliverChannel({
+      binding: { projectId: "archived", channelId: "C_GREETING" },
+      channel: { id: "C_GREETING", name: "greeting", isPrivate: true, isMember: true },
+      teamId: "T_WORKSPACE",
+    });
+    await settleRequests();
+
+    const channel = page.element("project-slack-binding").innerHTML;
+    expect(channel).toContain("#greeting");
+    expect(channel).toContain('href="https://app.slack.com/client/T_WORKSPACE/C_GREETING"');
+    expect(page.element("project").innerHTML).toContain("<h1>问候产品</h1>");
+  });
+
+  it("states when a project has no Slack channel binding", async () => {
+    const page = client("", archived, "/projects/archived");
+    await page.run("refresh()");
+    await settleRequests();
+
+    expect(page.element("project-slack-binding").textContent).toBe("此项目尚未绑定 Slack 频道");
+    expect(page.element("project").innerHTML).toContain("<h1>问候产品</h1>");
+  });
+
+  it("keeps the saved channel ID and link when Slack channel details are unavailable", async () => {
+    const page = client("", archived, "/projects/archived");
+    page.responses["/api/projects/archived/slack"] = {
+      binding: { projectId: "archived", channelId: "C_GREETING" }, channel: null, teamId: "T_WORKSPACE",
+    };
+    await page.run("refresh()");
+    await settleRequests();
+
+    const channel = page.element("project-slack-binding").innerHTML;
+    expect(channel).toContain("C_GREETING");
+    expect(channel).toContain('href="https://app.slack.com/client/T_WORKSPACE/C_GREETING"');
+    expect(channel).not.toContain("尚未绑定");
+  });
+
+  it("keeps the project readable when its Slack binding cannot be loaded", async () => {
+    const page = client("", archived, "/projects/archived");
+    page.responses["/api/projects/archived/slack"] = new Error("Slack binding unavailable");
+    await page.run("refresh()");
+    await settleRequests();
+
+    expect(page.element("project").innerHTML).toContain("<h1>问候产品</h1>");
+    expect(page.element("project-slack-binding").textContent).toBe("暂时无法读取 Slack 频道绑定。");
     expect(page.element("offline").style.display).toBe("none");
   });
 

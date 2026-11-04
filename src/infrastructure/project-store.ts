@@ -12,6 +12,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { WorkflowConflictError } from "../domain/errors.js";
 import { assertWorkCommunication } from "../domain/work-source.js";
 import type { Milestone, MilestoneActivity } from "../domain/milestone.js";
+import type { CodriveProjectIdentity } from "../domain/local-projects.js";
 import type {
   CodriveEvent,
   CreateProjectInput,
@@ -169,6 +170,32 @@ export class ProjectStore {
         .map((entry) => this.getProject(entry.name)),
     );
     return projects.filter((project): project is ProjectSnapshot => Boolean(project));
+  }
+
+  async listProjectIdentities(): Promise<CodriveProjectIdentity[]> {
+    await this.initialize();
+    const entries = await readdir(this.projectsDirectory, { withFileTypes: true });
+    const projects = await Promise.all(entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => this.readProjectIdentity(entry.name)));
+    return projects.filter((project): project is CodriveProjectIdentity => project !== null);
+  }
+
+  private async readProjectIdentity(projectId: string): Promise<CodriveProjectIdentity | null> {
+    try {
+      const project = assertCurrentProject(await this.readJson<Project>(this.projectPath(projectId)));
+      return {
+        id: project.id,
+        name: project.name,
+        repositoryPath: project.repositoryPath,
+        status: project.status,
+        scheduling: project.scheduling,
+        archivedAt: project.archivedAt ?? null,
+      };
+    } catch (error) {
+      if (isMissingFile(error)) return null;
+      throw error;
+    }
   }
 
   async getProject(projectId: string): Promise<ProjectSnapshot | null> {

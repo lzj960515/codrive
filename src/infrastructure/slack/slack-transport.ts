@@ -4,6 +4,7 @@ import { WebClient } from "@slack/web-api";
 
 import type {
   SlackChannel,
+  SlackConversationControls,
   SlackIncomingMessage,
   SlackIncomingFile,
   SlackLocalFile,
@@ -35,6 +36,7 @@ export class BoltSlackTransport implements SlackTransport {
   private onMessage: ((message: SlackIncomingMessage) => Promise<void>) | undefined;
   private modelControls: SlackModelControls | undefined;
   private statusControls: SlackStatusControls | undefined;
+  private conversationControls: SlackConversationControls | undefined;
   private readonly files: SlackFiles;
 
   constructor(private readonly options: BoltSlackTransportOptions) {
@@ -49,6 +51,18 @@ export class BoltSlackTransport implements SlackTransport {
     this.app.event("message", async ({ event, body, context }) => {
       const incoming = incomingMessage(event, body.event_id, body.team_id ?? context.teamId);
       if (incoming) await this.onMessage?.(incoming);
+    });
+    this.app.command("/new", async ({ command, ack, respond }) => {
+      await ack();
+      try {
+        await this.requireConversationControls().startNew({
+          teamId: command.team_id, userId: command.user_id, channelId: command.channel_id,
+        });
+      } catch (error) {
+        await respond({ response_type: "ephemeral", text: `新会话未开启：${error instanceof Error ? error.message : String(error)}` });
+        return;
+      }
+      await respond({ response_type: "ephemeral", text: "新会话已开启，接下来的私信会从新的上下文开始。" });
     });
     this.app.command("/model", async ({ command, ack, respond }) => {
       await ack();
@@ -139,10 +153,11 @@ export class BoltSlackTransport implements SlackTransport {
     this.app.error(async (error) => { this.options.onError(error); });
   }
 
-  async start(onMessage: (message: SlackIncomingMessage) => Promise<void>, modelControls: SlackModelControls, statusControls: SlackStatusControls): Promise<void> {
+  async start(onMessage: (message: SlackIncomingMessage) => Promise<void>, modelControls: SlackModelControls, statusControls: SlackStatusControls, conversationControls: SlackConversationControls): Promise<void> {
     this.onMessage = onMessage;
     this.modelControls = modelControls;
     this.statusControls = statusControls;
+    this.conversationControls = conversationControls;
     await this.app.start();
   }
 
@@ -150,6 +165,7 @@ export class BoltSlackTransport implements SlackTransport {
     this.onMessage = undefined;
     this.modelControls = undefined;
     this.statusControls = undefined;
+    this.conversationControls = undefined;
     const results = await Promise.allSettled([...this.replies].map((reply) => reply.close()));
     for (const result of results) {
       if (result.status === "rejected") this.options.onError(result.reason);
@@ -229,6 +245,11 @@ export class BoltSlackTransport implements SlackTransport {
   private requireStatusControls(): SlackStatusControls {
     if (!this.statusControls) throw new Error("会话状态尚未就绪，请稍后重试。");
     return this.statusControls;
+  }
+
+  private requireConversationControls(): SlackConversationControls {
+    if (!this.conversationControls) throw new Error("新会话入口尚未就绪，请稍后重试。");
+    return this.conversationControls;
   }
 }
 

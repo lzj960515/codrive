@@ -36,6 +36,7 @@ import { UpgradeStateStore } from "./infrastructure/upgrade-state-store.js";
 import { SlackStateStore } from "./infrastructure/slack-state-store.js";
 import { BoltSlackTransport } from "./infrastructure/slack/slack-transport.js";
 import { createHttpServer } from "./interfaces/http/server.js";
+import { CodexLocalProjects } from "./infrastructure/codex-local-projects.js";
 
 export class CodriveServer {
   private readonly configStore: ConfigStore;
@@ -149,6 +150,7 @@ export class CodriveServer {
         projects: store,
         state: new SlackStateStore(this.config.stateDirectory),
         codex: this.codex,
+        localProjects: new CodexLocalProjects(),
         createTransport: (config) => new BoltSlackTransport({
           stateDirectory: this.configStore.stateDirectory,
           botToken: config.botToken,
