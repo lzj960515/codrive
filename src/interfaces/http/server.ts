@@ -54,7 +54,7 @@ export interface HttpServerDependencies {
     | SystemStatusEventSource
     | readonly SystemStatusEventSource[];
   // Slack 为可选集成，原本地看板和工作流可以独立装配。
-  slack?: Pick<SlackIntegration, "readStatus" | "listChannels" | "readLocalProjects" | "readProjectBinding" | "configure" | "bind" | "createProjectChannel" | "report" | "sendFile">;
+  slack?: Pick<SlackIntegration, "readStatus" | "listChannels" | "readLocalProjects" | "readContext" | "readProjectBinding" | "configure" | "bind" | "createProjectChannel" | "report" | "sendFile">;
   currentVersion?: string;
   accessToken: string;
   isReady?: () => boolean;
@@ -229,6 +229,7 @@ export function createHttpServer(
   server.get("/api/slack", async () => requireSlack().readStatus());
   server.get("/api/slack/channels", async () => requireSlack().listChannels());
   server.get("/api/local-projects", async () => requireSlack().readLocalProjects());
+  server.get<{ Params: { threadId: string } }>("/api/slack/context/:threadId", async (request) => requireSlack().readContext(request.params.threadId));
   server.get<{ Params: { projectId: string } }>("/api/projects/:projectId/slack", async (request, reply) => {
     if (!(await dependencies.store.getProject(request.params.projectId))) {
       return reply.code(404).send({ error: "Project not found" });

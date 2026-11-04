@@ -1,4 +1,19 @@
-import type { SlackReplyTarget } from "./work-source.js";
+import type { DecisionReplyTarget } from "./decision-reply.js";
+import type { SlackReplyTarget, WorkSource } from "./work-source.js";
+
+export interface SlackPendingDecision extends DecisionReplyTarget {
+  question: string;
+}
+
+export interface SlackInputContext {
+  codexThreadId: string;
+  conversationType: "direct_message" | "channel_thread";
+  projectId: string | null;
+  projectName: string | null;
+  repositoryPath: string | null;
+  source: WorkSource;
+  replyTarget: SlackReplyTarget;
+}
 
 export interface SlackProjectBinding {
   projectId: string;

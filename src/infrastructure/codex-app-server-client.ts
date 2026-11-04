@@ -19,6 +19,7 @@ import type { ThreadTokenUsageUpdatedNotification } from "./app-server-protocol/
 import type { ThreadTokenUsage } from "./app-server-protocol/v2/ThreadTokenUsage.js";
 import type { ThreadSettingsUpdatedNotification } from "./app-server-protocol/v2/ThreadSettingsUpdatedNotification.js";
 import { CodexThreadSession } from "./codex-thread-session.js";
+import { finalAnswerText } from "../application/codex-final-answer.js";
 import {
   JsonRpcConnection,
   type JsonRpcNotification,
@@ -285,10 +286,8 @@ export class CodexAppServerClient implements CodexGateway {
       "thread/read", { threadId, includeTurns: true },
     );
     const turn = response.thread.turns.find(({ id }) => id === turnId);
-    return (turn?.items ?? [])
-      .filter((item) => item.type === "agentMessage")
-      .map((item) => item.text)
-      .join("\n\n");
+    const messages = (turn?.items ?? []).filter((item) => item.type === "agentMessage");
+    return finalAnswerText(messages);
   }
 
   async readThreadRuntime(threadId: string): Promise<CodexThreadRuntimeStatus> {

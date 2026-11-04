@@ -6,9 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { SlackAssistant, type SlackCodexGateway } from "../../src/application/slack-assistant.js";
 import { SlackDeliveryService } from "../../src/application/slack-delivery.js";
-import type { SlackIncomingMessage, SlackReplyStream, SlackTransport } from "../../src/domain/slack.js";
+import type { SlackIncomingMessage, SlackProgress, SlackReplyStream, SlackTransport } from "../../src/domain/slack.js";
 import type { SlackReplyTarget } from "../../src/domain/work-source.js";
-import type { LocalProjectCatalog } from "../../src/domain/local-projects.js";
 import { ConfigStore } from "../../src/infrastructure/config-store.js";
 import { ProjectStore } from "../../src/infrastructure/project-store.js";
 import { SlackStateStore } from "../../src/infrastructure/slack-state-store.js";
@@ -53,6 +52,7 @@ class TestCodex implements SlackCodexGateway {
 
 class TestSlack implements SlackTransport {
   readonly sent: Array<{ target: SlackReplyTarget; markdown: string }> = [];
+  readonly progressUpdates: SlackProgress[] = [];
   readonly downloads: Array<{ teamId: string; ids: string[] }> = [];
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
@@ -73,7 +73,7 @@ class TestSlack implements SlackTransport {
     let text = "";
     return {
       appendText: (delta) => { text += delta; },
-      progress: () => {},
+      progress: (update) => { this.progressUpdates.push(update); },
       finish: () => this.sendMessage(target, text),
     };
   }
@@ -95,10 +95,9 @@ async function fixture() {
   const codex = new TestCodex();
   const transport = new TestSlack();
   const errors: unknown[] = [];
-  const localProjects: LocalProjectCatalog = { read: async () => ({ available: true, projects: [{ name: "本机工作空间", rootPaths: [repositoryPath] }] }) };
-  const assistant = new SlackAssistant({ configStore, projects, state, codex, transport, localProjects, deliveries: new SlackDeliveryService(state, transport, "T1"), pendingDecisions: async () => [], onError: (error) => errors.push(error) });
+  const assistant = new SlackAssistant({ configStore, projects, state, codex, transport, deliveries: new SlackDeliveryService(state, transport, "T1"), onError: (error) => errors.push(error) });
   await assistant.start();
-  return { directory, configStore, project, projects, state, codex, transport, assistant, errors, localProjects };
+  return { directory, configStore, project, projects, state, codex, transport, assistant, errors };
 }
 
 function message(eventId: string, overrides: Partial<SlackIncomingMessage> = {}): SlackIncomingMessage {
@@ -156,8 +155,7 @@ describe("Slack 普通会话", () => {
       expect(f.codex.turns[2]?.threadId).not.toBe(f.codex.turns[0]?.threadId);
       expect(f.transport.sent.map(({ target }) => target.threadTs)).toEqual(["1.000", "1.000", "3.000"]);
       expect(f.codex.turns.every(({ cwd }) => cwd === f.project.repositoryPath)).toBe(true);
-      expect(f.codex.turns[0]?.prompt).toContain(`"projectName":"${f.project.name}"`);
-      expect(f.codex.turns[0]?.prompt).toContain(`"repositoryPath":"${f.project.repositoryPath}"`);
+      expect(f.codex.turns.map(({ prompt }) => prompt)).toEqual(["查看昨天的数据", "再解释一下", "查看昨天的数据"]);
       expect((await f.projects.getProject(f.project.id))?.tasks).toEqual([]);
       expect(f.errors).toEqual([]);
     } finally { await f.assistant.stop(); }
@@ -179,44 +177,20 @@ describe("Slack 普通会话", () => {
       const assistantDirectory = join(f.directory, "assistant");
       expect(f.codex.turns.every(({ cwd }) => cwd === assistantDirectory)).toBe(true);
       expect((await stat(assistantDirectory)).mode & 0o777).toBe(0o700);
-      expect(f.codex.turns[0]?.prompt).toContain(`"workingDirectory":"${assistantDirectory}"`);
-      expect(f.codex.turns[0]?.prompt).toContain('"repositoryPath":null');
-      expect(f.codex.turns[0]?.prompt).toContain('"projectName":null');
+      expect(f.codex.turns.map(({ prompt }) => prompt)).toEqual(["列出项目", "绑定这个项目"]);
       expect(f.transport.sent.every(({ target }) => target.channelId === "D1" && target.threadTs === undefined)).toBe(true);
       expect(f.errors).toEqual([]);
     } finally { await f.assistant.stop(); }
   });
 
-  it("每轮全局私信分开提供本机工作空间与产品身份，不传任务或里程碑正文", async () => {
+  it("私信原样转发用户正文，查询项目时也由 Codex 自行选择工具", async () => {
     const f = await fixture();
-    const secret = "不应进入目录上下文的产品长正文";
-    await f.projects.createProject({ name: "同目录业务产品", repositoryPath: f.project.repositoryPath, defaultBranch: "main", productDocument: `# 业务产品\n${secret}`, tasks: [], milestones: [{ title: "内部目标", description: secret, acceptanceCriteria: [secret] }] });
     try {
-      await f.assistant.receive(message("catalog-1", { channelId: "D1", channelType: "im", text: "有哪些项目？" }));
+      const text = "有哪些项目？\n请保留这个换行。";
+      await f.assistant.receive(message("plain-text", { channelId: "D1", channelType: "im", text }));
       await expect.poll(() => f.transport.sent.length).toBe(1);
-      expect(f.codex.turns[0]?.prompt).toContain('"localProjects":{"available":true');
-      expect(f.codex.turns[0]?.prompt).toContain('"name":"本机工作空间"');
-      expect(f.codex.turns[0]?.prompt).toContain('"codriveProjects":[');
-      expect(f.codex.turns[0]?.prompt).toContain('"name":"同目录业务产品"');
-      expect(f.codex.turns[0]?.prompt).not.toContain(secret);
-      expect(f.codex.turns[0]?.prompt).toContain("AGENTS.md");
-      f.localProjects.read = async () => ({ available: true, projects: [{ name: "新保存的工作空间", rootPaths: [f.project.repositoryPath] }] });
-      await f.assistant.receive(message("catalog-2", { channelId: "D1", channelType: "im" }));
-      await expect.poll(() => f.transport.sent.length).toBe(2);
-      expect(f.codex.turns[1]?.prompt).toContain("新保存的工作空间");
-      expect(f.codex.turns[1]?.prompt).not.toContain('"name":"本机工作空间"');
-    } finally { await f.assistant.stop(); }
-  });
-
-  it("本机保存目录不可用时说明缺口并继续普通聊天", async () => {
-    const f = await fixture();
-    f.localProjects.read = async () => { throw new Error("桌面目录不可读"); };
-    try {
-      await f.assistant.receive(message("catalog-unavailable", { channelId: "D1", channelType: "im", text: "你好" }));
-      await expect.poll(() => f.transport.sent.length).toBe(1);
-      expect(f.codex.turns[0]?.prompt).toContain('"available":false');
-      expect(f.transport.sent[0]?.markdown).toBe("昨天访问量为 120。");
-      expect((await f.state.getInput("catalog-unavailable"))?.status).toBe("completed");
+      expect(f.codex.turns[0]?.prompt).toBe(text);
+      expect((await f.state.getInput("plain-text"))?.message.text).toBe(text);
     } finally { await f.assistant.stop(); }
   });
 
@@ -287,6 +261,7 @@ describe("Slack 普通会话", () => {
         f.codex.events.emit("event", { method: "item/agentMessage/delta", params: { threadId, turnId: "old-turn", itemId: "old", delta: "旧答案" } });
         f.codex.events.emit("event", { method: "turn/completed", params: { threadId, turn: { id: "old-turn", status: "completed" } } });
         f.codex.events.emit("event", { method: "item/agentMessage/delta", params: { threadId, turnId: "new-turn", itemId: "new", delta: "当前答案" } });
+        f.codex.events.emit("event", { method: "item/completed", params: { threadId, turnId: "new-turn", item: { id: "new", type: "agentMessage", phase: "final_answer", text: "当前答案" } } });
         f.codex.events.emit("event", { method: "turn/completed", params: { threadId, turn: { id: "new-turn", status: "completed" } } });
       });
       return "new-turn";
@@ -299,13 +274,17 @@ describe("Slack 普通会话", () => {
     } finally { await f.assistant.stop(); }
   });
 
-  it("已有进展文字时仍保留没有增量事件的完整最终答案", async () => {
+  it("最终正文排除过程说明，保留完整多段答复和命令进度卡片", async () => {
     const f = await fixture();
+    const finalAnswer = "昨天费用为 162.51 美元。\n\n主要费用为 RDS 77.00 美元。";
     f.codex.startTurn = async (threadId, cwd, prompt) => {
       f.codex.turns.push({ threadId, cwd, prompt });
       queueMicrotask(() => {
         f.codex.events.emit("event", { method: "item/agentMessage/delta", params: { threadId, turnId: "turn-1", itemId: "comment", delta: "正在查询。" } });
-        f.codex.events.emit("event", { method: "item/completed", params: { threadId, turnId: "turn-1", item: { id: "final", type: "agentMessage", text: "最终报告：访问量为120。" } } });
+        f.codex.events.emit("event", { method: "item/completed", params: { threadId, turnId: "turn-1", item: { id: "comment", type: "agentMessage", phase: "commentary", text: "正在查询。" } } });
+        f.codex.events.emit("event", { method: "item/started", params: { threadId, turnId: "turn-1", item: { id: "command", type: "commandExecution" } } });
+        f.codex.events.emit("event", { method: "item/completed", params: { threadId, turnId: "turn-1", item: { id: "command", type: "commandExecution" } } });
+        f.codex.events.emit("event", { method: "item/completed", params: { threadId, turnId: "turn-1", item: { id: "final", type: "agentMessage", phase: "final_answer", text: finalAnswer } } });
         f.codex.events.emit("event", { method: "turn/completed", params: { threadId, turn: { id: "turn-1", status: "completed" } } });
       });
       return "turn-1";
@@ -313,7 +292,47 @@ describe("Slack 普通会话", () => {
     try {
       await f.assistant.receive(message("multipart"));
       await expect.poll(() => f.transport.sent.length).toBe(1);
-      expect(f.transport.sent[0]?.markdown).toBe("正在查询。\n\n最终报告：访问量为120。");
+      expect(f.transport.sent[0]?.markdown).toBe(finalAnswer);
+      expect(f.transport.progressUpdates).toEqual([
+        { id: "command", title: "执行命令", status: "in_progress" },
+        { id: "command", title: "执行命令", status: "complete" },
+      ]);
+      await expect.poll(async () => (await f.state.getInput("multipart"))?.replyText).toBe(finalAnswer);
+    } finally { await f.assistant.stop(); }
+  });
+
+  it("模型未提供阶段时，仅交付最后一条完整回复", async () => {
+    const f = await fixture();
+    f.codex.startTurn = async (threadId) => {
+      queueMicrotask(() => {
+        for (const [id, text] of [["comment", "正在查询。"], ["answer", "费用 162.51 美元。\n\n详见服务明细。"]]) {
+          f.codex.events.emit("event", { method: "item/completed", params: { threadId, turnId: "turn-1", item: { id, type: "agentMessage", phase: null, text } } });
+        }
+        f.codex.events.emit("event", { method: "turn/completed", params: { threadId, turn: { id: "turn-1", status: "completed" } } });
+      });
+      return "turn-1";
+    };
+    try {
+      await f.assistant.receive(message("unknown-phase"));
+      await expect.poll(() => f.transport.sent.length).toBe(1);
+      expect(f.transport.sent[0]?.markdown).toBe("费用 162.51 美元。\n\n详见服务明细。");
+    } finally { await f.assistant.stop(); }
+  });
+
+  it("只有过程或未完成增量时，从原生回合读取最终答复", async () => {
+    const f = await fixture();
+    f.codex.startTurn = async (threadId) => {
+      queueMicrotask(() => {
+        f.codex.events.emit("event", { method: "item/completed", params: { threadId, turnId: "turn-1", item: { id: "comment", type: "agentMessage", phase: "commentary", text: "正在查询。" } } });
+        f.codex.events.emit("event", { method: "item/agentMessage/delta", params: { threadId, turnId: "turn-1", itemId: "answer", delta: "最终报" } });
+        f.codex.events.emit("event", { method: "turn/completed", params: { threadId, turn: { id: "turn-1", status: "completed" } } });
+      });
+      return "turn-1";
+    };
+    try {
+      await f.assistant.receive(message("missed-answer"));
+      await expect.poll(() => f.transport.sent.length).toBe(1);
+      expect(f.transport.sent[0]?.markdown).toBe("昨天访问量为 120。");
     } finally { await f.assistant.stop(); }
   });
 

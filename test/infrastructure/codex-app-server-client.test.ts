@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,41 @@ import { describe, expect, it } from "vitest";
 import { CodexAppServerClient } from "../../src/infrastructure/codex-app-server-client.js";
 
 describe("CodexAppServerClient", () => {
+  it.each([
+    {
+      scenario: "使用原生阶段保留完整最终答复",
+      messages: [
+        { phase: "commentary", text: "我先核实账号。" },
+        { phase: null, text: "查询已完成。" },
+        { phase: "final_answer", text: "费用为 162.51 美元。\n\n主要费用是 RDS。" },
+      ],
+      expected: "费用为 162.51 美元。\n\n主要费用是 RDS。",
+    },
+    {
+      scenario: "未知阶段沿用最后一条完整消息",
+      messages: [{ phase: null, text: "查询中。" }, { phase: null, text: "费用为 162.51 美元。" }],
+      expected: "费用为 162.51 美元。",
+    },
+    {
+      scenario: "只有过程说明时保持正文为空",
+      messages: [{ phase: "commentary", text: "查询中。" }],
+      expected: "",
+    },
+  ])("恢复读取最终答复：$scenario", async ({ messages, expected }) => {
+    const directory = await mkdtemp(join(tmpdir(), "codrive-final-answer-"));
+    const executable = join(directory, "fake-codex.mjs");
+    const items = messages.map((message, index) => ({ type: "agentMessage", id: `message-${index}`, ...message }));
+    await writeFile(executable, fakeAppServer(join(directory, "requests.ndjson"), items), "utf8");
+    await chmod(executable, 0o755);
+    const client = new CodexAppServerClient({ executable });
+    try {
+      expect(await client.readTurnText("thread_1", "turn_completed")).toBe(expected);
+    } finally {
+      await client.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("reports actual thread settings and usage, while a restarted client leaves unknown metrics empty", async () => {
     const directory = await mkdtemp(join(tmpdir(), "codrive-status-client-"));
     const executable = join(directory, "fake-status-codex.mjs");
@@ -248,7 +283,7 @@ lines.on('line', (line) => {
   });
 });
 
-function fakeAppServer(tracePath: string): string {
+function fakeAppServer(tracePath: string, completedItems: Array<Record<string, unknown>> = []): string {
   return `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -288,7 +323,7 @@ lines.on("line", (line) => {
       ] } }
     : { thread: { status: { type: "active", activeFlags: [] }, turns: [
         { id: "turn_1", status: "inProgress", startedAt: 1786842000, completedAt: null, items: [{ type: "fileChange", id: "item_1", changes: [{ path: "SECRET_PATH" }], status: "inProgress" }] },
-        { id: "turn_completed", status: "completed", startedAt: 1786841900, completedAt: 1786841950, items: [] },
+        { id: "turn_completed", status: "completed", startedAt: 1786841900, completedAt: 1786841950, items: ${JSON.stringify(completedItems)} },
         { id: "turn_interrupted", status: "interrupted", startedAt: 1786841800, completedAt: 1786841850, items: [] },
         { id: "turn_failed", status: "failed", startedAt: 1786841700, completedAt: 1786841750, items: [] }
       ] } };

@@ -188,6 +188,12 @@ export class SlackIntegration {
     return this.options.localProjects.read();
   }
 
+  async readContext(codexThreadId: string) {
+    const runtime = this.requireConnection();
+    const context = await runtime.assistant.readContext(codexThreadId);
+    return { ...context, pendingDecisions: await runtime.notifications.pendingDecisions(context.replyTarget) };
+  }
+
   async readProjectBinding(projectId: string): Promise<SlackProjectBindingStatus> {
     const { slack } = await this.options.configStore.read();
     const binding = slack?.projectBindings.find((entry) => entry.projectId === projectId) ?? null;
@@ -330,8 +336,7 @@ export class SlackIntegration {
       const assistant = new SlackAssistant({
         configStore: this.options.configStore, projects: this.options.projects,
         state: this.options.state, codex: this.options.codex, transport, deliveries,
-        localProjects: this.options.localProjects,
-        pendingDecisions: (target) => notifications.pendingDecisions(target), onError,
+        onError,
       });
       const runtime: SlackRuntime = {
         config, transport, deliveries, notifications, assistant, connected: false, accepting: true,

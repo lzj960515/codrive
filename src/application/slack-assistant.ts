@@ -1,13 +1,11 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { CodexGateway, CodexTurnSnapshot } from "./codex-gateway.js";
-import type { DecisionReplyTarget } from "../domain/decision-reply.js";
-import type { SlackConversationContext, SlackIncomingMessage, SlackReplyStream, SlackTransport } from "../domain/slack.js";
+import type { CodexAgentMessage, CodexGateway, CodexTurnSnapshot } from "./codex-gateway.js";
+import { finalAnswerText } from "./codex-final-answer.js";
+import type { SlackConversationContext, SlackIncomingMessage, SlackInputContext, SlackReplyStream, SlackTransport } from "../domain/slack.js";
 import type { SlackConversation, SlackInputReceipt, SlackDeliveryRecord } from "../domain/slack-state.js";
 import type { SlackReplyTarget } from "../domain/work-source.js";
-import type { Project } from "../domain/types.js";
-import type { LocalProjectCatalog, LocalProjectList } from "../domain/local-projects.js";
 import { SlackDeliveryError } from "../domain/slack.js";
 import { WorkflowConflictError } from "../domain/errors.js";
 import type { ConfigStore } from "../infrastructure/config-store.js";
@@ -27,19 +25,13 @@ export interface SlackCodexGateway extends Pick<CodexGateway,
   readTurnText(threadId: string, turnId: string): Promise<string>;
 }
 
-export interface SlackPendingDecision extends DecisionReplyTarget {
-  question: string;
-}
-
 interface SlackAssistantOptions {
   configStore: ConfigStore;
   projects: ProjectStore;
-  localProjects: LocalProjectCatalog;
   state: SlackStateStore;
   codex: SlackCodexGateway;
   transport: SlackTransport;
   deliveries: SlackDeliveryService;
-  pendingDecisions(target: SlackReplyTarget): Promise<SlackPendingDecision[]>;
   onError(error: unknown): void;
 }
 
@@ -50,7 +42,7 @@ interface TurnResult {
 
 interface ActiveReply {
   stream: SlackReplyStream;
-  messages: Map<string, string>;
+  messages: Map<string, CodexAgentMessage>;
   earlyEvents: SlackCodexNotification[];
   turnId?: string;
   complete(result: TurnResult): void;
@@ -94,6 +86,34 @@ export class SlackAssistant {
 
   startNewConversation(context: SlackConversationContext): Promise<SlackConversation> {
     return this.serializeInput(() => this.createNewConversation(context));
+  }
+
+  async readContext(codexThreadId: string): Promise<SlackInputContext> {
+    const active = this.active.get(codexThreadId);
+    if (!active) throw new WorkflowConflictError("该 Codex 会话没有正在处理的 Slack 输入。");
+    const conversations = await this.options.state.listConversations();
+    const conversation = conversations.find((entry) => entry.codexThreadId === codexThreadId);
+    if (!conversation) throw new WorkflowConflictError("该 Codex 会话未关联当前 Slack 会话。");
+    const receipts = (await this.options.state.listInputs()).filter((receipt) =>
+      receipt.conversationId === conversation.id && receipt.status === "running" &&
+      (!active.turnId || receipt.turnId === active.turnId),
+    );
+    if (receipts.length !== 1) throw new WorkflowConflictError("无法确定该会话正在执行中的 Slack 输入。");
+    const receipt = receipts[0]!;
+    const { slack } = await this.options.configStore.read();
+    if (!slack?.enabled || receipt.message.teamId !== slack.teamId || receipt.message.userId !== slack.authorizedUserId) {
+      throw new WorkflowConflictError("当前 Slack 输入的工作区或授权用户已变化。");
+    }
+    const snapshot = receipt.projectId ? await this.options.projects.getProject(receipt.projectId) : null;
+    return {
+      codexThreadId,
+      conversationType: conversation.conversationType,
+      projectId: receipt.projectId ?? null,
+      projectName: snapshot?.project.name ?? null,
+      repositoryPath: snapshot?.project.repositoryPath ?? null,
+      source: { kind: "slack", requestId: receipt.id },
+      replyTarget: receipt.target,
+    };
   }
 
   private serializeInput<T>(operation: () => Promise<T>): Promise<T> {
@@ -222,9 +242,8 @@ export class SlackAssistant {
       receipt = { ...receipt, status: "running", updatedAt: new Date().toISOString() };
       await this.options.state.saveInput(receipt);
       const models = snapshot?.project.modelConfig ?? config.models;
-      const prompt = await this.messagePrompt(receipt, cwd, snapshot?.project);
       const turnId = await this.options.codex.startTurn(
-        threadId, cwd, prompt, models.primary, models.primaryReasoningEffort,
+        threadId, cwd, receipt.message.text, models.primary, models.primaryReasoningEffort,
       );
       active.turnId = turnId;
       // RPC 返回前可先收到通知；已知回合身份后才消费，旧回合迟到事件随之丢弃。
@@ -232,7 +251,7 @@ export class SlackAssistant {
       receipt = { ...receipt, turnId, updatedAt: new Date().toISOString() };
       await this.options.state.saveInput(receipt);
       const result = await completion;
-      let text = [...active.messages.values()].filter((part) => part.trim()).join("\n\n");
+      let text = finalAnswerText([...active.messages.values()]);
       if (!text.trim()) text = await this.options.codex.readTurnText(threadId, turnId) || "本次处理已结束，请查看关联工作记录。";
       if (result.status !== "completed") {
         const explanation = result.message ?? "本次 Codex 执行未完成，请查看会话或稍后重试。";
@@ -293,37 +312,6 @@ export class SlackAssistant {
     return conversation;
   }
 
-  private async messagePrompt(receipt: SlackInputReceipt, workingDirectory: string, project: Project | undefined): Promise<string> {
-    const globalProjects = project ? undefined : {
-      localProjects: await this.readLocalProjects(),
-      codriveProjects: await this.options.projects.listProjectIdentities(),
-    };
-    const context = {
-      projectId: receipt.projectId ?? null,
-      projectName: project?.name ?? null,
-      repositoryPath: project?.repositoryPath ?? null,
-      workingDirectory,
-      ...globalProjects,
-      source: { kind: "slack", requestId: receipt.id },
-      replyTarget: receipt.target,
-      pendingDecisions: await this.options.pendingDecisions(receipt.target),
-    };
-    return `${receipt.message.text}\n\n本条 Slack 输入的运行上下文：\n${JSON.stringify(context)}\n\n` +
-      "按用户请求正常办理。workingDirectory 是本轮执行目录；projectId 为空时属于全局私信。localProjects 是 Codex 保存的本机工作空间目录线索，codriveProjects 是产品登记；同一目录可以承载不同产品。" +
-      "按用户指定名称和目录核实目标；确定工作空间后读取其中 AGENTS.md、README 和所需本地 Skills，以当前目录文档确认身份和本地能力，再选择对应的产品登记。" +
-      "查询或操作 Codrive 项目、状态和频道绑定时使用 $codrive-control 的命令，创建频道通过 Slack API 办理。需要登记工程工作时使用现有 $codrive-work，把这里的 source 和 replyTarget 原样附到本次任务。" +
-      "用户明确回答当前待决定问题时，使用 $codrive-control 的 reply-decision 提交对应身份；其他输入继续普通交流。";
-  }
-
-  private async readLocalProjects(): Promise<LocalProjectList> {
-    try {
-      return await this.options.localProjects.read();
-    } catch (error) {
-      this.options.onError(error);
-      return { available: false, projects: [], reason: "本机保存目录暂不可用，按用户提供的目录继续核实。" };
-    }
-  }
-
   private async openReply(receipt: SlackInputReceipt): Promise<SlackReplyStream> {
     try {
       return await this.options.transport.startReply(receipt.target, receipt.message.userId);
@@ -359,17 +347,14 @@ export class SlackAssistant {
     }
     const eventTurnId = params.turnId ?? record(params.turn).id;
     if (eventTurnId !== active.turnId) return;
-    if (event.method === "item/agentMessage/delta" && typeof params.delta === "string") {
-      const itemId = typeof params.itemId === "string" ? params.itemId : "message";
-      active.messages.set(itemId, (active.messages.get(itemId) ?? "") + params.delta);
-    }
     if (event.method === "item/started" || event.method === "item/completed") {
       const item = record(params.item);
       const title = progressTitle(item);
       if (title && typeof item.id === "string") active.stream.progress({ id: item.id, title, status: event.method === "item/started" ? "in_progress" : "complete" });
       if (event.method === "item/completed" && item.type === "agentMessage" && typeof item.text === "string") {
         const itemId = typeof item.id === "string" ? item.id : "message";
-        active.messages.set(itemId, item.text);
+        const phase = item.phase === "commentary" || item.phase === "final_answer" ? item.phase : null;
+        active.messages.set(itemId, { text: item.text, phase });
       }
     }
     if (event.method === "turn/completed") {

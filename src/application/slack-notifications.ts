@@ -12,7 +12,7 @@ import type { SlackReplyTarget } from "../domain/work-source.js";
 import type { ConfigStore } from "../infrastructure/config-store.js";
 import type { ProjectStore } from "../infrastructure/project-store.js";
 import type { SlackStateStore } from "../infrastructure/slack-state-store.js";
-import type { SlackPendingDecision } from "./slack-assistant.js";
+import type { SlackPendingDecision } from "../domain/slack.js";
 import type { SlackDeliveryService } from "./slack-delivery.js";
 
 interface SlackNotificationsOptions {

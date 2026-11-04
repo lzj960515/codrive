@@ -143,7 +143,7 @@ node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" slack-st
 
 已有 Codrive 项目可以直接绑定。仅准备查询数据或接收报告的新项目，可以先用 `codrive-forge` 登记产品事实、仓库目录和默认分支，传入 `tasks: []` 并省略 `milestones`；它不会因此生成开发目标。需要工程工作时再用 `codrive-work` 追加任务。
 
-私信是全局会话，使用独立的 `~/.codrive/assistant` 作为工作目录；自定义 `CODEDRIVE_HOME` 时使用该目录下的 `assistant/`。每轮获得分开的本机工作空间目录与 Codrive 产品登记，定位目标后再读取对应 README、AGENTS 和本地 Skills；涉及 Codrive 项目管理时使用现有控制命令。同目录里的不同产品分别保留身份，例如工作空间 `pietra-ai-workspace` 与产品 `Pietra Social / Pulse`。只有对应工作空间尚未登记时，才为它登记空任务项目。
+私信是全局会话，使用独立的 `~/.codrive/assistant` 作为工作目录；自定义 `CODEDRIVE_HOME` 时使用该目录下的 `assistant/`。普通文字消息原样交给 Codex；需要定位项目时，由 AI 使用现有控制命令按需查询本机工作空间与 Codrive 产品登记，再读取目标 README、AGENTS 和适用的本地 Skills。同目录里的不同产品分别保留身份，例如工作空间 `pietra-ai-workspace` 与产品 `Pietra Social / Pulse`。只有对应工作空间尚未登记时，才为它登记空任务项目。
 
 项目资料中的 **Slack 频道** 显示该项目实际保存的绑定和频道链接；未绑定时显示“此项目尚未绑定 Slack 频道”。运行设置只展示连接生命周期的错误，单次频道命令被拒绝时在原命令中说明。
 
@@ -168,6 +168,16 @@ node "$HOME/.agents/skills/codrive-control/scripts/codrive-control.mjs" slack-cr
 创建命令先核实 Codrive 项目，再创建频道、邀请已配置的授权用户，最后保存绑定。回执返回实际频道和绑定；重复执行已成功的同名绑定会复用原频道。重名时先核实可访问频道，避免误绑其他项目。若频道已创建但后续邀请或绑定失败，保留错误回执中的 `channelId`，在同一命令 JSON 中附上它继续办理。
 
 绑定后，在项目频道直接发一条文字消息。机器人在这条消息下面的讨论串回复；在串内追问会继续同一会话，频道内另一条新的根消息建立另一个会话。私信保持全局交流，你可以在其中查询整体情况、管理绑定或明确指定项目办事。
+
+普通回复正文显示完整的最终答复，保留其中的多段说明和列表。“本轮回复”卡片继续显示命令执行进度；Codex 标为 `commentary` 的过程说明留在原生会话中。最终正文按 `final_answer` 取得；模型未提供阶段时使用最后一条完整消息，缺少完成事件时从原生回合读取。
+
+需要登记工程任务、回传文件或答复决定时，AI 先复用已核实的来源与回复位置；来源尚未明确时，通过现有 Control 命令按当前原生会话核实：
+
+```text
+node <codrive-control-skill>/scripts/codrive-control.mjs slack-context
+```
+
+命令使用当前 Codex 工具环境中的 `CODEX_THREAD_ID` 精确关联正在执行的 Slack 输入，也支持显式传入原生会话 ID。回执包含项目身份、`source`、`replyTarget` 和当前有效的 `pendingDecisions`；全局私信项目为 `null`。服务明确返回没有执行中的 Slack 输入或未关联时，沿原有普通来源办理；连接、鉴权和其他查询失败按实际错误处理，保留尚未核实的来源。普通消息保持原文，项目清单和来源信息只在实际需要时查询；附件的文件名、类型与本机路径继续随接收消息提供。
 
 ## Slack 命令与文件传输
 
@@ -196,7 +206,7 @@ node <codrive-control-skill>/scripts/codrive-control.mjs slack-send-file --json 
 }
 ```
 
-`replyTarget` 取自当前输入；一对一私信可没有 `threadTs`。成功回执提供真实文件 `id` 和可用的链接。文件上传为显式操作，失败后核实回执再重试；它不沿用文字报告的持久自动补送，失败不会重新运行开发工作。
+`replyTarget` 取自 `slack-context` 回执；一对一私信可没有 `threadTs`。成功回执提供真实文件 `id` 和可用的链接。文件上传为显式操作，失败后核实回执再重试；它不沿用文字报告的持久自动补送，失败不会重新运行开发工作。
 
 ## 用 Codex 原生定时任务检查和报告
 

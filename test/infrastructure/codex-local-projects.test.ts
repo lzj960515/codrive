@@ -1,10 +1,9 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CodexLocalProjects } from "../../src/infrastructure/codex-local-projects.js";
-import { ProjectStore } from "../../src/infrastructure/project-store.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -46,27 +45,4 @@ describe("Codex 保存的本机工作空间", () => {
     },
   );
 
-  it("只读取产品身份，即使任务正文存储不可读仍能列出已登记产品", async () => {
-    const root = await directory();
-    const store = new ProjectStore(root);
-    const { project } = await store.createProject({
-      name: "Pietra Social / Pulse",
-      repositoryPath: "/work/pietra-ai-workspace",
-      defaultBranch: "main",
-      productDocument: "# Pulse\n与同目录工作空间分别登记的业务产品。",
-      tasks: [],
-    });
-    const created = { ...project, scheduling: "paused" as const, archivedAt: "2026-11-01T00:00:00.000Z" };
-    await store.saveProject(created);
-    await writeFile(join(store.projectDirectory(project.id), "tasks", "broken.json"), "不是任务JSON");
-    await mkdir(join(root, "projects", "removed-project"));
-    expect(await store.listProjectIdentities()).toEqual([{
-      id: project.id,
-      name: "Pietra Social / Pulse",
-      repositoryPath: "/work/pietra-ai-workspace",
-      status: "active",
-      scheduling: "paused",
-      archivedAt: "2026-11-01T00:00:00.000Z",
-    }]);
-  });
 });

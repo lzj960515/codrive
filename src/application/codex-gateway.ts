@@ -6,6 +6,11 @@ export type CodexTurnStatus =
   | "failed"
   | "inProgress";
 
+export interface CodexAgentMessage {
+  text: string;
+  phase?: "commentary" | "final_answer" | null;
+}
+
 export interface CodexModelOption {
   id: string;
   displayName: string;

@@ -9,6 +9,10 @@ let result;
 let isWrite = false;
 if (command === "local-projects" && args.length === 0) {
   result = await request("/api/local-projects");
+} else if (command === "slack-context" && args.length <= 1) {
+  const threadId = (args[0] ?? process.env.CODEX_THREAD_ID)?.trim();
+  if (!threadId) fail("slack-context requires a Codex thread ID or CODEX_THREAD_ID");
+  result = await request(`/api/slack/context/${encodeURIComponent(threadId)}`);
 } else if (command === "slack-status" && args.length === 0) {
   result = await request("/api/slack");
 } else if (command === "slack-channels" && args.length === 0) {
@@ -106,7 +110,7 @@ if (command === "local-projects" && args.length === 0) {
   isWrite = true;
 } else {
   fail(
-    "Usage: codrive-control <local-projects|board|archived|project|task|milestone|milestone-update|settings|update-settings|project-control|task-control|task-update|product-document-changed|slack-status|slack-channels|slack-configure|slack-bind|slack-create-channel|slack-report|slack-send-file|reply-decision> ...",
+    "Usage: codrive-control <local-projects|board|archived|project|task|milestone|milestone-update|settings|update-settings|project-control|task-control|task-update|product-document-changed|slack-context|slack-status|slack-channels|slack-configure|slack-bind|slack-create-channel|slack-report|slack-send-file|reply-decision> ...",
   );
 }
 print(isWrite ? { ok: true, result } : result);

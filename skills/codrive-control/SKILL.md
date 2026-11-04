@@ -1,6 +1,6 @@
 ---
 name: codrive-control
-description: 查询和控制本地 Codrive 项目、里程碑、任务与运行设置，包括产品详情、产品文档事实、已确认的未开始任务定义修改、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、执行已确认的 backlog 修改、更新产品事实、恢复模型容量或干预自动流程，以及定位本机项目、配置 Slack、创建或绑定频道、发送报告或本机文件、答复待决定问题时使用；新的任务需求和修改判断由 codrive-work 负责。
+description: 查询和控制本地 Codrive 项目、里程碑、任务与运行设置，包括产品详情、产品文档事实、已确认的未开始任务定义修改、看板状态、归档、恢复、暂停、取消、重试、重新规划和模型路由。用户询问 Codrive 进度、阻塞原因、执行已确认的 backlog 修改、更新产品事实、恢复模型容量或干预自动流程，以及定位本机项目、配置 Slack、创建或绑定频道、查询当前 Slack 来源与回复位置、发送报告或本机文件、答复待决定问题时使用；新的任务需求和修改判断由 codrive-work 负责。
 compatibility: Requires Node.js 24+ and a running local Codrive service.
 ---
 
@@ -23,7 +23,7 @@ node <skill-directory>/scripts/codrive-control.mjs milestone <milestone-id>
 
 项目的 `attention` 只表达需要处理的异常状态：`decision_requested` 表示需要在对应 Codex App 对话中作出决定，`blocked` 表示项目存在确定阻塞。没有 `attention` 时，项目按当前任务和规划状态正常推进。
 
-`local-projects` 通过本机 Codrive 服务只读 Codex 桌面端保存的工作空间名称和根目录，与普通私信使用同一目录来源。它与 `board` 中的产品登记分别核实：一个工作空间可以包含多个产品，同一个目录也可以对应不同的 Codrive 产品。记录不可用时返回 `available: false`，继续核实用户给定的真实目录；桌面保存数据只提供定位线索，目标目录中的 README、AGENTS 和用户意图决定实际身份。
+`local-projects` 通过本机 Codrive 服务只读 Codex 桌面端保存的工作空间名称和根目录。它与 `board` 中的产品登记分别核实：一个工作空间可以包含多个产品，同一个目录也可以对应不同的 Codrive 产品。记录不可用时返回 `available: false`，继续核实用户给定的真实目录；桌面保存数据只提供定位线索，目标目录中的 README、AGENTS 和用户意图决定实际身份。
 
 ## Slack 接入与报告
 
@@ -36,6 +36,15 @@ node <skill-directory>/scripts/codrive-control.mjs slack-configure --json-file <
 node <skill-directory>/scripts/codrive-control.mjs slack-bind <project-id> --json '{"channelId":"<channel-id>"}'
 node <skill-directory>/scripts/codrive-control.mjs slack-create-channel <project-id> --json '{"name":"<channel-name>","isPrivate":true}'
 ```
+
+登记工程工作、发送生成的文件或答复待决定问题时，先复用本次事实报告或已经核实的 `source`、`replyTarget`。来源尚未明确时，按当前原生会话查询：
+
+```text
+node <skill-directory>/scripts/codrive-control.mjs slack-context
+node <skill-directory>/scripts/codrive-control.mjs slack-context <codex-thread-id>
+```
+
+默认使用当前 Codex 工具环境的 `CODEX_THREAD_ID`，显式参数供核实指定会话。命中时，结果只对应这个原生会话正在执行的 Slack 输入，包含当前项目身份、`source`、`replyTarget` 和仍有效的 `pendingDecisions`；全局私信的项目字段为 `null`。工程登记和文件发送原样使用返回的身份；答复决定时从有效问题中核对所答对象。服务明确返回“未关联当前 Slack 会话”或“没有正在处理的 Slack 输入”时，沿原有普通来源办理；连接、鉴权和其他查询失败仍表示来源尚待核实，先处理实际错误。项目目录用 `local-projects`、`board` 按需读取。
 
 创建或绑定项目频道时，按以下顺序办理：
 
@@ -67,7 +76,7 @@ node <skill-directory>/scripts/codrive-control.mjs slack-report <project-id> --j
 
 巡检按本次要求执行检查，记录已观察到的操作、预期、实际结果与直接证据。发现异常后，先发送客观事实消息，拿到回执，再使用 `$codrive-work` 携带其中的 `source` 和 `replyTarget` 登记后续调查工作。原因调查、原因假设和修改代码属于开发阶段。普通报告发送后直接完成，不创建开发任务；发送失败时保留报告与请求身份，登记失败时复用已成功消息继续登记。
 
-用户发来的图片和文件会下载到本机，消息上下文给出文件名、类型与绝对路径。按任务需要用看图或文件工具读取。需要把生成的文件交给用户时，完成文件写入，再使用当前消息的 `replyTarget` 上传到原会话：
+用户发来的图片和文件会下载到本机，消息上下文给出文件名、类型与绝对路径。按任务需要用看图或文件工具读取。需要把生成的文件交给用户时，完成文件写入，再按上面的来源查询取得实际 `replyTarget`，将文件上传到原会话：
 
 ```text
 node <skill-directory>/scripts/codrive-control.mjs slack-send-file --json '<file-json>'
